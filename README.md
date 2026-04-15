@@ -10,7 +10,7 @@ harness.
 
 - TCP and UDP Host Link transport
 - full low-level Host Link command surface from the `.NET` reference
-- queued high-level helper API for typed reads/writes, named snapshots, and polling
+- queued high-level helper API for typed reads/writes, comment reads, named snapshots, and polling
 - `hostlink_verify_client` wrapper binary for cross-language verification
 
 ## Installation
@@ -35,11 +35,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let dm0 = client.read_typed("DM0", "U").await?;
     client.write_typed("DM10", "U", dm0).await?;
+    let comment = client.read_comments("DM20", true).await?;
 
     let snapshot = client
-        .read_named(&["DM0", "DM1:S", "DM2:D", "DM4:F", "DM10.0"])
+        .read_named(&["DM0", "DM1:S", "DM2:D", "DM4:F", "DM10.0", "DM20:COMMENT"])
         .await?;
 
+    println!("{comment}");
     println!("{snapshot:?}");
     Ok(())
 }
@@ -50,6 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `HostLinkConnectionOptions`
 - `open_and_connect`
 - `read_typed` / `write_typed`
+- `read_comments`
 - `write_bit_in_word`
 - `read_named`
 - `poll`
@@ -57,6 +60,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `read_words_chunked` / `read_dwords_chunked`
 - `write_words_single_request` / `write_dwords_single_request`
 - `write_words_chunked` / `write_dwords_chunked`
+
+Comment reads also accept XYM aliases such as `D10`, `E20`, `F30`, `M100`, `L200`, `X100`, and `Y100`.
 
 ## Verification
 

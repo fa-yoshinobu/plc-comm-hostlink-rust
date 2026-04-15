@@ -12,7 +12,8 @@ const MWS_DEVICE_TYPES: &[&str] = &[
     "CM", "VM",
 ];
 const RDC_DEVICE_TYPES: &[&str] = &[
-    "R", "B", "MR", "LR", "CR", "DM", "EM", "FM", "ZF", "W", "TM", "Z", "T", "C", "CM",
+    "R", "B", "MR", "LR", "CR", "DM", "EM", "FM", "ZF", "W", "TM", "Z", "T", "C", "CM", "X",
+    "Y", "M", "L", "D", "E", "F",
 ];
 const WS_DEVICE_TYPES: &[&str] = &["T", "C"];
 
@@ -455,6 +456,7 @@ fn normalize_dtype(text: &str) -> Result<String, HostLinkError> {
         "D" => Ok("D".to_owned()),
         "L" => Ok("L".to_owned()),
         "F" => Ok("F".to_owned()),
+        "COMMENT" => Ok("COMMENT".to_owned()),
         _ => Err(HostLinkError::protocol(format!(
             "Unsupported logical data type '{text}'."
         ))),
@@ -618,5 +620,12 @@ mod tests {
     #[test]
     fn normalize_plain_address_keeps_default_r_omission_rule() {
         assert_eq!(HostLinkAddress::normalize("100").unwrap(), "R100");
+    }
+
+    #[test]
+    fn parse_logical_comment_address_round_trips() {
+        let logical = parse_logical_address("dm100:comment").unwrap();
+        assert_eq!(logical.to_text().unwrap(), "DM100:COMMENT");
+        assert_eq!(logical.data_type, "COMMENT");
     }
 }

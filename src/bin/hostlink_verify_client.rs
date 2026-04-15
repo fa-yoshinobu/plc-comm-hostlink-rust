@@ -1,7 +1,7 @@
 use futures_util::{StreamExt, pin_mut};
 use plc_comm_hostlink::{
-    HostLinkConnectionOptions, HostLinkValue, open_and_connect, read_dwords, read_named,
-    read_words, write_bit_in_word,
+    HostLinkConnectionOptions, HostLinkValue, open_and_connect, read_comments, read_dwords,
+    read_named, read_words, write_bit_in_word,
 };
 use serde_json::{Value, json};
 
@@ -78,6 +78,10 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                 let value = client.read_typed(&address, &dtype).await?;
                 json!({"status": "success", "value": normalize_value(&value)})
             }
+        }
+        "read-comments" => {
+            let value = read_comments(client.inner_client(), &address, true).await?;
+            json!({"status": "success", "value": value})
         }
         "write-bit-in-word" => {
             if extra.len() < 2 {
@@ -173,6 +177,7 @@ fn normalize_value(value: &HostLinkValue) -> Value {
                 .trim_end_matches('0')
                 .trim_end_matches('.')
         ),
+        HostLinkValue::Text(value) => json!(value),
         HostLinkValue::U16(value) => json!(value.to_string()),
         HostLinkValue::I16(value) => json!(value.to_string()),
         HostLinkValue::U32(value) => json!(value.to_string()),

@@ -1,6 +1,6 @@
 use futures_util::{StreamExt, pin_mut};
 use plc_comm_hostlink::{
-    HostLinkClient, HostLinkConnectionOptions, HostLinkValue, open_and_connect,
+    HostLinkClient, HostLinkConnectionOptions, HostLinkValue, open_and_connect, read_comments,
     read_dwords_chunked, read_typed, write_dwords_chunked,
 };
 use std::sync::{Arc, Mutex};
@@ -64,6 +64,35 @@ async fn read_typed_and_write_typed_support_float_suffix() {
 }
 
 #[tokio::test]
+async fn read_comments_helper_and_named_snapshot_support_comment_values() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RDC DM150" => "MAIN COMMENT                    ".to_owned(),
+        "RD DM100.U" => "321".to_owned(),
+        "RDC DM101" => "ALARM COMMENT                   ".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let comment = read_comments(&client, "DM150", true).await.unwrap();
+    assert_eq!(comment, "MAIN COMMENT");
+
+    let result = client.read_named(&["DM100", "DM101:COMMENT"]).await.unwrap();
+    assert_eq!(result["DM100"], HostLinkValue::U16(321));
+    assert_eq!(
+        result["DM101:COMMENT"],
+        HostLinkValue::Text("ALARM COMMENT".to_owned())
+    );
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RDC DM150", "RD DM100.U", "RDC DM101"]
+    );
+}
+
+#[tokio::test]
 async fn open_and_connect_returns_queued_client_that_uses_helper_api() {
     let (port, received) = start_scripted_server(|command| match command.as_str() {
         "RD DM10.U" => "123".to_owned(),
@@ -81,6 +110,49 @@ async fn open_and_connect_returns_queued_client_that_uses_helper_api() {
     assert_eq!(
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
         vec!["RD DM10.U"]
+    );
+}
+
+#[tokio::test]
+async fn queued_client_supports_read_comments() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RDC DM10" => "ALARM TEXT                      ".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = open_and_connect(options).await.unwrap();
+    let comment = client.read_comments("DM10", true).await.unwrap();
+
+    assert_eq!(comment, "ALARM TEXT");
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RDC DM10"]
+    );
+}
+
+#[tokio::test]
+async fn read_comments_accepts_xym_alias_device_types() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RDC D10" => "DM COMMENT                      ".to_owned(),
+        "RDC M20" => "MR COMMENT                      ".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+    let data_memory_comment = client.read_comments("D10", true).await.unwrap();
+    let auxiliary_relay_comment = client.read_comments("M20", true).await.unwrap();
+
+    assert_eq!(data_memory_comment, "DM COMMENT");
+    assert_eq!(auxiliary_relay_comment, "MR COMMENT");
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RDC D10", "RDC M20"]
     );
 }
 

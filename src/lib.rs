@@ -21,7 +21,7 @@ pub use client::{
 };
 pub use error::{HostLinkError, decode_error_code};
 pub use helpers::{
-    HostLinkValue, NamedSnapshot, poll, read_dwords, read_dwords_chunked,
+    HostLinkValue, NamedSnapshot, poll, read_comments, read_dwords, read_dwords_chunked,
     read_dwords_single_request, read_named, read_typed, read_words, read_words_chunked,
     read_words_single_request, write_bit_in_word, write_dwords_chunked,
     write_dwords_single_request, write_typed, write_words_chunked, write_words_single_request,

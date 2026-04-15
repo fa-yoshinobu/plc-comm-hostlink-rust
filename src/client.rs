@@ -808,6 +808,15 @@ impl QueuedHostLinkClient {
         self.client.send_raw(body).await
     }
 
+    pub async fn read_comments(
+        &self,
+        device: &str,
+        strip_padding: bool,
+    ) -> Result<String, HostLinkError> {
+        let _guard = self.gate.lock().await;
+        self.client.read_comments(device, strip_padding).await
+    }
+
     pub async fn read_typed(
         &self,
         device: &str,

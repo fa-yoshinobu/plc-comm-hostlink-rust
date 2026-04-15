@@ -16,6 +16,7 @@ pub enum HostLinkValue {
     I32(i32),
     F32(f32),
     Bool(bool),
+    Text(String),
 }
 
 pub type NamedSnapshot = IndexMap<String, HostLinkValue>;
@@ -71,8 +72,17 @@ impl HostLinkPayloadValue for HostLinkValue {
             HostLinkValue::I32(value) => value.format_for_suffix(data_format),
             HostLinkValue::F32(value) => value.format_for_suffix(data_format),
             HostLinkValue::Bool(value) => value.format_for_suffix(data_format),
+            HostLinkValue::Text(value) => value.clone(),
         }
     }
+}
+
+pub async fn read_comments(
+    client: &HostLinkClient,
+    device: &str,
+    strip_padding: bool,
+) -> Result<String, HostLinkError> {
+    client.read_comments(device, strip_padding).await
 }
 
 pub async fn read_typed(
@@ -212,6 +222,11 @@ pub(crate) async fn read_named_sequential(
             result.insert(
                 address.clone(),
                 HostLinkValue::Bool(((word >> bit_index) & 1) != 0),
+            );
+        } else if dtype == "COMMENT" {
+            result.insert(
+                address.clone(),
+                HostLinkValue::Text(read_comments(client, &base_address, true).await?),
             );
         } else {
             result.insert(
