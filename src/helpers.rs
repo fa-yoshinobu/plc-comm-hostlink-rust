@@ -1,6 +1,6 @@
 use crate::address::{
-    KvDeviceAddress, is_optimizable_read_named_device_type, offset_device, parse_device,
-    parse_named_address_parts,
+    KvDeviceAddress, is_direct_bit_device_type, is_optimizable_read_named_device_type,
+    offset_device, parse_device, parse_logical_address, parse_named_address_parts,
 };
 use crate::client::{HostLinkClient, HostLinkPayloadValue};
 use crate::error::HostLinkError;
@@ -29,6 +29,13 @@ enum ReadPlanValueKind {
     Signed32,
     Float32,
     BitInWord,
+    DirectBit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadPlanSegmentMode {
+    Words,
+    DirectBits,
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +52,7 @@ struct ReadPlanSegment {
     start_address: KvDeviceAddress,
     start_number: u32,
     count: usize,
+    mode: ReadPlanSegmentMode,
     requests: Vec<ReadPlanRequest>,
 }
 
@@ -90,14 +98,24 @@ pub async fn read_typed(
     device: &str,
     dtype: &str,
 ) -> Result<HostLinkValue, HostLinkError> {
-    match dtype.trim_start_matches('.').to_ascii_uppercase().as_str() {
+    let (device, dtype) = if dtype.trim().is_empty() {
+        let logical = parse_logical_address(device)?;
+        (logical.base_address.to_text()?, logical.data_type)
+    } else {
+        (
+            device.trim().to_ascii_uppercase(),
+            dtype.trim_start_matches('.').to_ascii_uppercase(),
+        )
+    };
+
+    match dtype.as_str() {
         "F" => {
-            let words = read_words(client, device, 2).await?;
+            let words = read_words(client, &device, 2).await?;
             let bits = (words[0] as u32) | ((words[1] as u32) << 16);
             Ok(HostLinkValue::F32(f32::from_bits(bits)))
         }
         "S" => {
-            let tokens = client.read(device, Some("S")).await?;
+            let tokens = client.read(&device, Some("S")).await?;
             let value = tokens
                 .first()
                 .ok_or_else(|| HostLinkError::protocol("Missing response token"))?
@@ -106,7 +124,7 @@ pub async fn read_typed(
             Ok(HostLinkValue::I16(value))
         }
         "D" => {
-            let tokens = client.read(device, Some("D")).await?;
+            let tokens = client.read(&device, Some("D")).await?;
             let value = tokens
                 .first()
                 .ok_or_else(|| HostLinkError::protocol("Missing response token"))?
@@ -115,7 +133,7 @@ pub async fn read_typed(
             Ok(HostLinkValue::U32(value))
         }
         "L" => {
-            let tokens = client.read(device, Some("L")).await?;
+            let tokens = client.read(&device, Some("L")).await?;
             let value = tokens
                 .first()
                 .ok_or_else(|| HostLinkError::protocol("Missing response token"))?
@@ -123,14 +141,23 @@ pub async fn read_typed(
                 .map_err(|_| HostLinkError::protocol("Invalid signed 32-bit response"))?;
             Ok(HostLinkValue::I32(value))
         }
-        "U" | "" => {
-            let tokens = client.read(device, Some("U")).await?;
+        "U" => {
+            let tokens = client.read(&device, Some("U")).await?;
             let value = tokens
                 .first()
                 .ok_or_else(|| HostLinkError::protocol("Missing response token"))?
                 .parse::<u16>()
                 .map_err(|_| HostLinkError::protocol("Invalid unsigned 16-bit response"))?;
             Ok(HostLinkValue::U16(value))
+        }
+        "" => {
+            let token = client
+                .read(&device, None)
+                .await?
+                .first()
+                .cloned()
+                .ok_or_else(|| HostLinkError::protocol("Missing response token"))?;
+            Ok(HostLinkValue::Bool(parse_bool_token(&token)?))
         }
         other => Err(HostLinkError::protocol(format!(
             "Unsupported logical data type '{other}'."
@@ -154,9 +181,20 @@ pub async fn write_typed<T: HostLinkPayloadValue>(
             let words = [(bits & 0xFFFF) as u16, (bits >> 16) as u16];
             client.write_consecutive(device, &words, Some("U")).await
         }
-        "S" | "D" | "L" | "U" | "" => client.write(device, value, Some(dtype)).await,
+        "" => client.write(device, value, None).await,
+        "S" | "D" | "L" | "U" => client.write(device, value, Some(dtype)).await,
         other => Err(HostLinkError::protocol(format!(
             "Unsupported logical data type '{other}'."
+        ))),
+    }
+}
+
+fn parse_bool_token(token: &str) -> Result<bool, HostLinkError> {
+    match token.trim().to_ascii_uppercase().as_str() {
+        "1" | "ON" | "TRUE" => Ok(true),
+        "0" | "OFF" | "FALSE" => Ok(false),
+        _ => Err(HostLinkError::protocol(format!(
+            "Invalid direct bit response token: {token}"
         ))),
     }
 }
@@ -265,16 +303,22 @@ pub(crate) fn compile_read_named_plan(addresses: &[String]) -> Option<CompiledRe
         let mut current_start: Option<KvDeviceAddress> = None;
         let mut current_start_number = 0u32;
         let mut current_end_exclusive = 0u32;
+        let mut current_mode: Option<ReadPlanSegmentMode> = None;
 
         for request in sorted {
             let request_start = request.base_address.number;
             let request_end_exclusive = request_start + get_word_width(request.kind) as u32;
-            if current_start.is_none() || request_start > current_end_exclusive {
+            let request_mode = segment_mode_for_kind(request.kind);
+            if current_start.is_none()
+                || request_start > current_end_exclusive
+                || current_mode != Some(request_mode)
+            {
                 if let Some(start_address) = current_start.take() {
                     segments.push(ReadPlanSegment {
                         start_address,
                         start_number: current_start_number,
                         count: (current_end_exclusive - current_start_number) as usize,
+                        mode: current_mode.unwrap_or(ReadPlanSegmentMode::Words),
                         requests: pending.clone(),
                     });
                     pending.clear();
@@ -286,6 +330,7 @@ pub(crate) fn compile_read_named_plan(addresses: &[String]) -> Option<CompiledRe
                 });
                 current_start_number = request_start;
                 current_end_exclusive = request_end_exclusive;
+                current_mode = Some(request_mode);
             } else if request_end_exclusive > current_end_exclusive {
                 current_end_exclusive = request_end_exclusive;
             }
@@ -297,6 +342,7 @@ pub(crate) fn compile_read_named_plan(addresses: &[String]) -> Option<CompiledRe
                 start_address,
                 start_number: current_start_number,
                 count: (current_end_exclusive - current_start_number) as usize,
+                mode: current_mode.unwrap_or(ReadPlanSegmentMode::Words),
                 requests: pending,
             });
         }
@@ -314,11 +360,25 @@ pub(crate) async fn execute_read_named_plan(
 ) -> Result<NamedSnapshot, HostLinkError> {
     let mut resolved = vec![HostLinkValue::U16(0); plan.requests_in_input_order.len()];
     for segment in &plan.segments {
-        let words = read_words(client, &segment.start_address.to_text()?, segment.count).await?;
-        for request in &segment.requests {
-            let offset = (request.base_address.number - segment.start_number) as usize;
-            resolved[request.index] =
-                resolve_planned_value(&words, offset, request.kind, request.bit_index)?;
+        match segment.mode {
+            ReadPlanSegmentMode::Words => {
+                let words =
+                    read_words(client, &segment.start_address.to_text()?, segment.count).await?;
+                for request in &segment.requests {
+                    let offset = (request.base_address.number - segment.start_number) as usize;
+                    resolved[request.index] =
+                        resolve_planned_value(&words, offset, request.kind, request.bit_index)?;
+                }
+            }
+            ReadPlanSegmentMode::DirectBits => {
+                let tokens = client
+                    .read_consecutive(&segment.start_address.to_text()?, segment.count, None)
+                    .await?;
+                for request in &segment.requests {
+                    let offset = (request.base_address.number - segment.start_number) as usize;
+                    resolved[request.index] = resolve_direct_bit_value(&tokens, offset)?;
+                }
+            }
         }
     }
 
@@ -529,16 +589,21 @@ fn try_parse_optimizable_read_named_request(
 ) -> Option<ReadPlanRequest> {
     let (base_address, dtype, bit_index) = parse_named_address_parts(address).ok()?;
     let mut base_address = parse_device(&base_address).ok()?;
-    if !is_optimizable_read_named_device_type(&base_address.device_type) {
+    if !is_optimizable_read_named_device_type(&base_address.device_type)
+        && !is_direct_bit_device_type(&base_address.device_type)
+    {
         return None;
     }
     base_address.suffix.clear();
 
-    let (kind, bit_index) = if dtype == "BIT_IN_WORD" {
-        (ReadPlanValueKind::BitInWord, bit_index.unwrap_or(0))
-    } else {
-        (try_map_read_plan_value_kind(&dtype)?, 0)
-    };
+    let (kind, bit_index) =
+        if dtype.is_empty() && is_direct_bit_device_type(&base_address.device_type) {
+            (ReadPlanValueKind::DirectBit, 0)
+        } else if dtype == "BIT_IN_WORD" {
+            (ReadPlanValueKind::BitInWord, bit_index.unwrap_or(0))
+        } else {
+            (try_map_read_plan_value_kind(&dtype)?, 0)
+        };
 
     Some(ReadPlanRequest {
         index,
@@ -557,6 +622,21 @@ fn try_map_read_plan_value_kind(dtype: &str) -> Option<ReadPlanValueKind> {
         "L" => Some(ReadPlanValueKind::Signed32),
         "F" => Some(ReadPlanValueKind::Float32),
         _ => None,
+    }
+}
+
+fn segment_mode_for_kind(kind: ReadPlanValueKind) -> ReadPlanSegmentMode {
+    when_direct_bit(
+        kind,
+        ReadPlanSegmentMode::DirectBits,
+        ReadPlanSegmentMode::Words,
+    )
+}
+
+fn when_direct_bit<T>(kind: ReadPlanValueKind, direct: T, other: T) -> T {
+    match kind {
+        ReadPlanValueKind::DirectBit => direct,
+        _ => other,
     }
 }
 
@@ -601,7 +681,22 @@ fn resolve_planned_value(
             HostLinkValue::F32(f32::from_bits((word as u32) | (hi << 16)))
         }
         ReadPlanValueKind::BitInWord => HostLinkValue::Bool(((word >> bit_index) & 1) != 0),
+        ReadPlanValueKind::DirectBit => {
+            return Err(HostLinkError::protocol(
+                "Direct bit values must be resolved from bit tokens.",
+            ));
+        }
     })
+}
+
+fn resolve_direct_bit_value(
+    tokens: &[String],
+    offset: usize,
+) -> Result<HostLinkValue, HostLinkError> {
+    let token = tokens
+        .get(offset)
+        .ok_or_else(|| HostLinkError::protocol("Batched direct bit response was too short"))?;
+    Ok(HostLinkValue::Bool(parse_bool_token(token)?))
 }
 
 fn validate_chunk_arguments(
