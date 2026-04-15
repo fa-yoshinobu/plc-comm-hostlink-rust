@@ -10,7 +10,9 @@ use crate::model::{
     HostLinkClock, HostLinkConnectionOptions, HostLinkTraceDirection, HostLinkTraceFrame,
     HostLinkTransportMode, KvModelInfo, KvPlcMode, TraceHook,
 };
-use crate::protocol::{build_frame, decode_response, ensure_success, split_data_tokens};
+use crate::protocol::{
+    build_frame, decode_comment_response, decode_response, ensure_success, split_data_tokens,
+};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -606,7 +608,10 @@ impl HostLinkClient {
         validate_device_type("RDC", &address.device_type, rdc_device_types())?;
         address.suffix.clear();
         let response = self
-            .send_raw(&format!("RDC {}", address.to_text()?))
+            .inner
+            .lock()
+            .await
+            .send_raw_decoded(&format!("RDC {}", address.to_text()?), decode_comment_response)
             .await?;
         if strip_padding {
             Ok(response.trim_end_matches(' ').to_owned())
@@ -702,6 +707,13 @@ impl ClientInner {
     }
 
     async fn send_raw(&mut self, body: &str) -> Result<String, HostLinkError> {
+        self.send_raw_decoded(body, decode_response).await
+    }
+
+    async fn send_raw_decoded<F>(&mut self, body: &str, decoder: F) -> Result<String, HostLinkError>
+    where
+        F: Fn(&[u8]) -> Result<String, HostLinkError>,
+    {
         self.open().await?;
         let frame = build_frame(body, self.options.append_lf_on_send);
         self.fire_trace(HostLinkTraceDirection::Send, &frame);
@@ -727,7 +739,7 @@ impl ClientInner {
         };
 
         self.fire_trace(HostLinkTraceDirection::Receive, &raw);
-        let response = decode_response(&raw)?;
+        let response = decoder(&raw)?;
         ensure_success(&response)
     }
 

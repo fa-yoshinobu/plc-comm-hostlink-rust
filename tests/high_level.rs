@@ -1,3 +1,4 @@
+use encoding_rs::SHIFT_JIS;
 use futures_util::{StreamExt, pin_mut};
 use plc_comm_hostlink::{
     HostLinkClient, HostLinkConnectionOptions, HostLinkValue, open_and_connect, read_comments,
@@ -64,6 +65,87 @@ async fn read_typed_and_write_typed_support_float_suffix() {
 }
 
 #[tokio::test]
+async fn read_named_direct_bits_use_unsuffixed_rd_commands() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RDS R0 1" => "1".to_owned(),
+        "RDS CR0 1" => "0".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let result = client.read_named(&["R0", "CR0"]).await.unwrap();
+    assert_eq!(result["R0"], HostLinkValue::Bool(true));
+    assert_eq!(result["CR0"], HostLinkValue::Bool(false));
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RDS R0 1", "RDS CR0 1"]
+    );
+}
+
+#[tokio::test]
+async fn read_named_batches_contiguous_direct_bit_reads() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RDS R0 4" => "1 0 1 0".to_owned(),
+        "RDS CR0 4" => "0 1 0 1".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let result = client
+        .read_named(&["R0", "R1", "R2", "R3", "CR0", "CR1", "CR2", "CR3"])
+        .await
+        .unwrap();
+
+    assert_eq!(result["R0"], HostLinkValue::Bool(true));
+    assert_eq!(result["R1"], HostLinkValue::Bool(false));
+    assert_eq!(result["R2"], HostLinkValue::Bool(true));
+    assert_eq!(result["R3"], HostLinkValue::Bool(false));
+    assert_eq!(result["CR0"], HostLinkValue::Bool(false));
+    assert_eq!(result["CR1"], HostLinkValue::Bool(true));
+    assert_eq!(result["CR2"], HostLinkValue::Bool(false));
+    assert_eq!(result["CR3"], HostLinkValue::Bool(true));
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RDS R0 4", "RDS CR0 4"]
+    );
+}
+
+#[tokio::test]
+async fn read_typed_empty_dtype_uses_device_default_format() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RD CR0" => "1".to_owned(),
+        "RD DM200.S" => "-12".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    assert_eq!(
+        read_typed(&client, "CR0", "").await.unwrap(),
+        HostLinkValue::Bool(true)
+    );
+    assert_eq!(
+        read_typed(&client, "DM200.S", "").await.unwrap(),
+        HostLinkValue::I16(-12)
+    );
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RD CR0", "RD DM200.S"]
+    );
+}
+
+#[tokio::test]
 async fn read_comments_helper_and_named_snapshot_support_comment_values() {
     let (port, received) = start_scripted_server(|command| match command.as_str() {
         "RDC DM150" => "MAIN COMMENT                    ".to_owned(),
@@ -80,7 +162,10 @@ async fn read_comments_helper_and_named_snapshot_support_comment_values() {
     let comment = read_comments(&client, "DM150", true).await.unwrap();
     assert_eq!(comment, "MAIN COMMENT");
 
-    let result = client.read_named(&["DM100", "DM101:COMMENT"]).await.unwrap();
+    let result = client
+        .read_named(&["DM100", "DM101:COMMENT"])
+        .await
+        .unwrap();
     assert_eq!(result["DM100"], HostLinkValue::U16(321));
     assert_eq!(
         result["DM101:COMMENT"],
@@ -89,6 +174,32 @@ async fn read_comments_helper_and_named_snapshot_support_comment_values() {
     assert_eq!(
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
         vec!["RDC DM150", "RD DM100.U", "RDC DM101"]
+    );
+}
+
+#[tokio::test]
+async fn read_comments_decodes_shift_jis_payloads() {
+    let (port, received) = start_scripted_server_bytes(|command| match command.as_str() {
+        "RDC DM20" => {
+            let (encoded, _, _) = SHIFT_JIS.encode("運転許可");
+            let mut bytes = encoded.into_owned();
+            bytes.extend_from_slice(b"                    ");
+            bytes
+        }
+        _ => b"E1".to_vec(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let comment = read_comments(&client, "DM20", true).await.unwrap();
+
+    assert_eq!(comment, "運転許可");
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RDC DM20"]
     );
 }
 
@@ -284,6 +395,13 @@ async fn start_scripted_server<F>(response_factory: F) -> (u16, Arc<Mutex<Vec<St
 where
     F: Fn(String) -> String + Send + Sync + 'static,
 {
+    start_scripted_server_bytes(move |command| response_factory(command).into_bytes()).await
+}
+
+async fn start_scripted_server_bytes<F>(response_factory: F) -> (u16, Arc<Mutex<Vec<String>>>)
+where
+    F: Fn(String) -> Vec<u8> + Send + Sync + 'static,
+{
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let received = Arc::new(Mutex::new(Vec::new()));
@@ -307,10 +425,9 @@ where
                     let command = String::from_utf8(std::mem::take(&mut partial)).unwrap();
                     queue.lock().unwrap().push(command.clone());
                     let response = response_factory(command);
-                    stream
-                        .write_all(format!("{response}\r\n").as_bytes())
-                        .await
-                        .unwrap();
+                    let mut frame = response;
+                    frame.extend_from_slice(b"\r\n");
+                    stream.write_all(&frame).await.unwrap();
                 } else {
                     partial.push(*byte);
                 }

@@ -12,8 +12,8 @@ const MWS_DEVICE_TYPES: &[&str] = &[
     "CM", "VM",
 ];
 const RDC_DEVICE_TYPES: &[&str] = &[
-    "R", "B", "MR", "LR", "CR", "DM", "EM", "FM", "ZF", "W", "TM", "Z", "T", "C", "CM", "X",
-    "Y", "M", "L", "D", "E", "F",
+    "R", "B", "MR", "LR", "CR", "DM", "EM", "FM", "ZF", "W", "TM", "Z", "T", "C", "CM", "X", "Y",
+    "M", "L", "D", "E", "F",
 ];
 const WS_DEVICE_TYPES: &[&str] = &["T", "C"];
 
@@ -74,7 +74,7 @@ impl KvLogicalAddress {
             return Ok(format!("{base_text}.{bit_index:X}"));
         }
 
-        if self.data_type == "U" {
+        if self.data_type == logical_default_dtype_by_device_type(&self.base_address.device_type) {
             Ok(base_text)
         } else {
             Ok(format!("{base_text}:{}", self.data_type))
@@ -170,6 +170,17 @@ pub(crate) fn default_format_by_device_type(device_type: &str) -> &'static str {
         "T" | "TC" | "TS" | "C" | "CC" | "CS" => ".D",
         _ => "",
     }
+}
+
+pub(crate) fn logical_default_dtype_by_device_type(device_type: &str) -> &'static str {
+    default_format_by_device_type(device_type).trim_start_matches('.')
+}
+
+pub(crate) fn is_direct_bit_device_type(device_type: &str) -> bool {
+    matches!(
+        device_type,
+        "R" | "B" | "MR" | "LR" | "CR" | "VB" | "X" | "Y" | "M" | "L"
+    )
 }
 
 pub(crate) fn is_optimizable_read_named_device_type(device_type: &str) -> bool {
@@ -309,10 +320,15 @@ pub fn parse_logical_address(text: &str) -> Result<KvLogicalAddress, HostLinkErr
     }
 
     let mut base = parse_device(raw)?;
+    let data_type = if base.suffix.is_empty() {
+        logical_default_dtype_by_device_type(&base.device_type).to_owned()
+    } else {
+        normalize_dtype(&base.suffix)?
+    };
     base.suffix.clear();
     Ok(KvLogicalAddress {
         base_address: base,
-        data_type: "U".to_owned(),
+        data_type,
         bit_index: None,
     })
 }
@@ -627,5 +643,26 @@ mod tests {
         let logical = parse_logical_address("dm100:comment").unwrap();
         assert_eq!(logical.to_text().unwrap(), "DM100:COMMENT");
         assert_eq!(logical.data_type, "COMMENT");
+    }
+
+    #[test]
+    fn parse_logical_direct_bit_defaults_to_bool_read() {
+        let logical = parse_logical_address("cr0").unwrap();
+        assert_eq!(logical.to_text().unwrap(), "CR0");
+        assert_eq!(logical.data_type, "");
+    }
+
+    #[test]
+    fn parse_logical_suffix_preserves_explicit_type() {
+        let logical = parse_logical_address("dm100.s").unwrap();
+        assert_eq!(logical.to_text().unwrap(), "DM100:S");
+        assert_eq!(logical.data_type, "S");
+    }
+
+    #[test]
+    fn parse_logical_counter_defaults_to_dword_read() {
+        let logical = parse_logical_address("t0").unwrap();
+        assert_eq!(logical.to_text().unwrap(), "T0");
+        assert_eq!(logical.data_type, "D");
     }
 }
