@@ -1,0 +1,39 @@
+[package]
+name = "plc-comm-hostlink-rust"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Async Rust Host Link client based on plc-comm-hostlink-dotnet"
+license = "MIT"
+readme = "README.md"
+keywords = ["plc", "keyence", "hostlink", "async", "tokio"]
+categories = ["network-programming", "asynchronous"]
+include = [
+    "Cargo.toml",
+    "README.md",
+    "src/**",
+    "examples/**",
+    "tests/**",
+]
+
+[lib]
+name = "plc_comm_hostlink"
+
+[[bin]]
+name = "hostlink_verify_client"
+path = "src/bin/hostlink_verify_client.rs"
+
+[dependencies]
+async-stream = "0.3"
+futures-core = "0.3"
+futures-util = "0.3"
+indexmap = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+time = { version = "0.3", features = ["local-offset"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+
+[dev-dependencies]
+serde_json = "1"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }

@@ -1,0 +1,249 @@
+use futures_util::{StreamExt, pin_mut};
+use plc_comm_hostlink::{
+    HostLinkClient, HostLinkConnectionOptions, HostLinkValue, open_and_connect,
+    read_dwords_chunked, read_typed, write_dwords_chunked,
+};
+use std::sync::{Arc, Mutex};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+
+#[tokio::test]
+async fn read_named_batches_contiguous_word_reads() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RDS DM100.U 8" => "1025 65535 2 1 57920 1 0 16712".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let result = client
+        .read_named(&[
+            "DM100", "DM100.0", "DM100.A", "DM101:S", "DM102:D", "DM104:L", "DM106:F",
+        ])
+        .await
+        .unwrap();
+
+    assert_eq!(result["DM100"], HostLinkValue::U16(1025));
+    assert_eq!(result["DM100.0"], HostLinkValue::Bool(true));
+    assert_eq!(result["DM100.A"], HostLinkValue::Bool(true));
+    assert_eq!(result["DM101:S"], HostLinkValue::I16(-1));
+    assert_eq!(result["DM102:D"], HostLinkValue::U32(65_538));
+    assert_eq!(result["DM104:L"], HostLinkValue::I32(123_456));
+    assert_eq!(result["DM106:F"], HostLinkValue::F32(12.5));
+
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RDS DM100.U 8"]
+    );
+}
+
+#[tokio::test]
+async fn read_typed_and_write_typed_support_float_suffix() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RDS DM200.U 2" => "0 16712".to_owned(),
+        "WRS DM200.U 2 0 16712" => "OK".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let value = read_typed(&client, "DM200", "F").await.unwrap();
+    client.write_typed("DM200", "F", 12.5f32).await.unwrap();
+
+    assert_eq!(value, HostLinkValue::F32(12.5));
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RDS DM200.U 2", "WRS DM200.U 2 0 16712"]
+    );
+}
+
+#[tokio::test]
+async fn open_and_connect_returns_queued_client_that_uses_helper_api() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RD DM10.U" => "123".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = open_and_connect(options).await.unwrap();
+    let value = client.read_typed("DM10", "U").await.unwrap();
+
+    assert!(client.is_open().await);
+    assert_eq!(value, HostLinkValue::U16(123));
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RD DM10.U"]
+    );
+}
+
+#[tokio::test]
+async fn poll_reuses_compiled_plan_for_each_cycle() {
+    let responses = Arc::new(Mutex::new(0usize));
+    let state = Arc::clone(&responses);
+    let (port, received) = start_scripted_server(move |command| {
+        assert_eq!(command, "RDS DM100.U 3");
+        let mut counter = state.lock().unwrap();
+        let response = if *counter == 0 {
+            "1 0 16320"
+        } else {
+            "3 0 16416"
+        };
+        *counter += 1;
+        response.to_owned()
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let stream = plc_comm_hostlink::poll(
+        &client,
+        &["DM100", "DM100.0", "DM101:F"],
+        std::time::Duration::from_millis(1),
+    );
+    pin_mut!(stream);
+    let first = stream.next().await.unwrap().unwrap();
+    let second = stream.next().await.unwrap().unwrap();
+
+    assert_eq!(first["DM100"], HostLinkValue::U16(1));
+    assert_eq!(first["DM100.0"], HostLinkValue::Bool(true));
+    assert_eq!(first["DM101:F"], HostLinkValue::F32(1.5));
+    assert_eq!(second["DM100"], HostLinkValue::U16(3));
+    assert_eq!(second["DM100.0"], HostLinkValue::Bool(true));
+    assert_eq!(second["DM101:F"], HostLinkValue::F32(2.5));
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RDS DM100.U 3", "RDS DM100.U 3"]
+    );
+}
+
+#[tokio::test]
+async fn read_dwords_chunked_advances_by_whole_dword_boundaries() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RDS DM200.U 2" => "1 1".to_owned(),
+        "RDS DM202.U 2" => "2 2".to_owned(),
+        "RDS DM204.U 2" => "3 3".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+    let values = read_dwords_chunked(&client, "DM200", 3, 1).await.unwrap();
+
+    assert_eq!(values, vec![65_537, 131_074, 196_611]);
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RDS DM200.U 2", "RDS DM202.U 2", "RDS DM204.U 2"]
+    );
+}
+
+#[tokio::test]
+async fn write_dwords_chunked_advances_by_whole_dword_boundaries() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "WRS DM200.U 2 1 1" => "OK".to_owned(),
+        "WRS DM202.U 2 2 2" => "OK".to_owned(),
+        "WRS DM204.U 2 3 3" => "OK".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+    write_dwords_chunked(&client, "DM200", &[65_537, 131_074, 196_611], 1)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec![
+            "WRS DM200.U 2 1 1",
+            "WRS DM202.U 2 2 2",
+            "WRS DM204.U 2 3 3"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn read_rejects_32_bit_device_end_crossing_before_send() {
+    let (port, received) = start_scripted_server(|_| "OK".to_owned()).await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+    let error = read_typed(&client, "DM65534", "D").await.unwrap_err();
+
+    assert!(error.to_string().contains("Device span out of range"));
+    assert!(received.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn read_expansion_unit_buffer_rejects_32_bit_buffer_end_crossing_before_send() {
+    let (port, received) = start_scripted_server(|_| "OK".to_owned()).await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+    let error = client
+        .read_expansion_unit_buffer(1, 59_999, 1, Some("D"))
+        .await
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("Expansion buffer span out of range")
+    );
+    assert!(received.lock().unwrap().is_empty());
+}
+
+async fn start_scripted_server<F>(response_factory: F) -> (u16, Arc<Mutex<Vec<String>>>)
+where
+    F: Fn(String) -> String + Send + Sync + 'static,
+{
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let queue = Arc::clone(&received);
+    let response_factory = Arc::new(response_factory);
+
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut buffer = [0u8; 4096];
+        let mut partial = Vec::new();
+        loop {
+            let read = stream.read(&mut buffer).await.unwrap();
+            if read == 0 {
+                break;
+            }
+            for byte in &buffer[..read] {
+                if matches!(byte, b'\r' | b'\n') {
+                    if partial.is_empty() {
+                        continue;
+                    }
+                    let command = String::from_utf8(std::mem::take(&mut partial)).unwrap();
+                    queue.lock().unwrap().push(command.clone());
+                    let response = response_factory(command);
+                    stream
+                        .write_all(format!("{response}\r\n").as_bytes())
+                        .await
+                        .unwrap();
+                } else {
+                    partial.push(*byte);
+                }
+            }
+        }
+    });
+    (port, received)
+}
