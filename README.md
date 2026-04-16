@@ -22,6 +22,8 @@ cargo add plc-comm-hostlink-rust
 The package name is `plc-comm-hostlink-rust` and the library import path is
 `plc_comm_hostlink`.
 
+Examples and the verification wrapper require `--features cli`.
+
 ## Quick Start
 
 ```rust
@@ -74,7 +76,7 @@ cargo test
 Run the shared cross-verify harness after building the Rust wrapper:
 
 ```bash
-cargo build --bin hostlink_verify_client
+cargo build --features cli --bin hostlink_verify_client
 cd ../plc-comm-hostlink-cross-verify
 python verify.py
 ```

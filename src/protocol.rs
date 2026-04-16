@@ -2,7 +2,9 @@ use crate::error::HostLinkError;
 use encoding_rs::SHIFT_JIS;
 
 pub fn build_frame(body: &str, append_lf: bool) -> Vec<u8> {
-    let mut result = body.trim().as_bytes().to_vec();
+    let body = body.trim().as_bytes();
+    let mut result = Vec::with_capacity(body.len() + 1 + usize::from(append_lf));
+    result.extend_from_slice(body);
     result.push(b'\r');
     if append_lf {
         result.push(b'\n');
@@ -52,15 +54,16 @@ pub fn decode_comment_response(raw: &[u8]) -> Result<String, HostLinkError> {
     Ok(text.into_owned())
 }
 
-pub fn ensure_success(response_text: &str) -> Result<String, HostLinkError> {
+pub fn ensure_success(response_text: String) -> Result<String, HostLinkError> {
     if response_text.len() == 2
         && response_text.starts_with('E')
         && response_text.as_bytes()[1].is_ascii_digit()
     {
-        return Err(HostLinkError::plc(response_text, response_text));
+        let code = response_text.clone();
+        return Err(HostLinkError::plc(code, response_text));
     }
 
-    Ok(response_text.to_owned())
+    Ok(response_text)
 }
 
 pub fn split_data_tokens(response_text: &str) -> Vec<String> {
