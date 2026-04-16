@@ -13,6 +13,7 @@ use crate::model::{
 use crate::protocol::{
     build_frame, decode_comment_response, decode_response, ensure_success, split_data_tokens,
 };
+use std::fmt::Write as _;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -23,6 +24,10 @@ use tokio::time::timeout;
 
 pub trait HostLinkPayloadValue {
     fn format_for_suffix(&self, data_format: &str) -> String;
+
+    fn append_to_payload(&self, data_format: &str, output: &mut String) {
+        output.push_str(&self.format_for_suffix(data_format));
+    }
 }
 
 macro_rules! impl_payload_for_ints {
@@ -30,10 +35,16 @@ macro_rules! impl_payload_for_ints {
         $(
             impl HostLinkPayloadValue for $ty {
                 fn format_for_suffix(&self, data_format: &str) -> String {
+                    let mut value = String::new();
+                    self.append_to_payload(data_format, &mut value);
+                    value
+                }
+
+                fn append_to_payload(&self, data_format: &str, output: &mut String) {
                     if data_format == ".H" {
-                        format!("{:X}", ((*self as i128) & 0xFFFF))
+                        let _ = write!(output, "{:X}", ((*self as i128) & 0xFFFF));
                     } else {
-                        self.to_string()
+                        let _ = write!(output, "{}", self);
                     }
                 }
             }
@@ -45,23 +56,37 @@ impl_payload_for_ints!(u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
 
 impl HostLinkPayloadValue for f32 {
     fn format_for_suffix(&self, _data_format: &str) -> String {
-        self.to_string()
+        let mut value = String::new();
+        self.append_to_payload("", &mut value);
+        value
+    }
+
+    fn append_to_payload(&self, _data_format: &str, output: &mut String) {
+        let _ = write!(output, "{}", self);
     }
 }
 
 impl HostLinkPayloadValue for f64 {
     fn format_for_suffix(&self, _data_format: &str) -> String {
-        self.to_string()
+        let mut value = String::new();
+        self.append_to_payload("", &mut value);
+        value
+    }
+
+    fn append_to_payload(&self, _data_format: &str, output: &mut String) {
+        let _ = write!(output, "{}", self);
     }
 }
 
 impl HostLinkPayloadValue for bool {
     fn format_for_suffix(&self, _data_format: &str) -> String {
-        if *self {
-            "1".to_owned()
-        } else {
-            "0".to_owned()
-        }
+        let mut value = String::new();
+        self.append_to_payload("", &mut value);
+        value
+    }
+
+    fn append_to_payload(&self, _data_format: &str, output: &mut String) {
+        output.push(if *self { '1' } else { '0' });
     }
 }
 
@@ -69,17 +94,29 @@ impl HostLinkPayloadValue for String {
     fn format_for_suffix(&self, _data_format: &str) -> String {
         self.trim().to_owned()
     }
+
+    fn append_to_payload(&self, _data_format: &str, output: &mut String) {
+        output.push_str(self.trim());
+    }
 }
 
 impl HostLinkPayloadValue for &str {
     fn format_for_suffix(&self, _data_format: &str) -> String {
         self.trim().to_owned()
     }
+
+    fn append_to_payload(&self, _data_format: &str, output: &mut String) {
+        output.push_str(self.trim());
+    }
 }
 
 impl<T: HostLinkPayloadValue + ?Sized> HostLinkPayloadValue for &T {
     fn format_for_suffix(&self, data_format: &str) -> String {
         (*self).format_for_suffix(data_format)
+    }
+
+    fn append_to_payload(&self, data_format: &str, output: &mut String) {
+        (*self).append_to_payload(data_format, output);
     }
 }
 
@@ -109,6 +146,7 @@ struct ClientInner {
     rx_start: usize,
     rx_count: usize,
     tcp_read_buf: Vec<u8>,
+    udp_read_buf: Vec<u8>,
 }
 
 impl HostLinkClient {
@@ -122,6 +160,7 @@ impl HostLinkClient {
                 rx_start: 0,
                 rx_count: 0,
                 tcp_read_buf: vec![0u8; 8192],
+                udp_read_buf: vec![0u8; 4096],
             })),
         }
     }
@@ -289,12 +328,11 @@ impl HostLinkClient {
         let suffix = resolve_effective_format(&address.device_type, &suffix);
         validate_device_span(&address.device_type, address.number, &suffix, 1)?;
         address.suffix = suffix.clone();
-        self.expect_ok(&format!(
-            "WR {} {}",
-            address.to_text()?,
-            value.format_for_suffix(&suffix)
-        ))
-        .await
+        let mut command = String::from("WR ");
+        command.push_str(&address.to_text()?);
+        command.push(' ');
+        value.append_to_payload(&suffix, &mut command);
+        self.expect_ok(&command).await
     }
 
     pub async fn write_consecutive<T: HostLinkPayloadValue>(
@@ -317,11 +355,7 @@ impl HostLinkClient {
         validate_device_count(&address.device_type, &suffix, values.len())?;
         validate_device_span(&address.device_type, address.number, &suffix, values.len())?;
         address.suffix = suffix.clone();
-        let payload = values
-            .iter()
-            .map(|value| value.format_for_suffix(&suffix))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let payload = build_joined_payload(values, &suffix);
         self.expect_ok(&format!(
             "WRS {} {} {}",
             address.to_text()?,
@@ -462,11 +496,7 @@ impl HostLinkClient {
         validate_device_count(&address.device_type, &suffix, values.len())?;
         validate_device_span(&address.device_type, address.number, &suffix, values.len())?;
         address.suffix = suffix.clone();
-        let payload = values
-            .iter()
-            .map(|value| value.format_for_suffix(&suffix))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let payload = build_joined_payload(values, &suffix);
         self.expect_ok(&format!(
             "WRE {} {} {}",
             address.to_text()?,
@@ -491,12 +521,11 @@ impl HostLinkClient {
         };
         validate_device_span(&address.device_type, address.number, &suffix, 1)?;
         address.suffix = suffix.clone();
-        self.expect_ok(&format!(
-            "WS {} {}",
-            address.to_text()?,
-            value.format_for_suffix(&suffix)
-        ))
-        .await
+        let mut command = String::from("WS ");
+        command.push_str(&address.to_text()?);
+        command.push(' ');
+        value.append_to_payload(&suffix, &mut command);
+        self.expect_ok(&command).await
     }
 
     pub async fn write_set_value_consecutive<T: HostLinkPayloadValue>(
@@ -517,11 +546,7 @@ impl HostLinkClient {
         };
         validate_device_span(&address.device_type, address.number, &suffix, values.len())?;
         address.suffix = suffix.clone();
-        let payload = values
-            .iter()
-            .map(|value| value.format_for_suffix(&suffix))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let payload = build_joined_payload(values, &suffix);
         self.expect_ok(&format!(
             "WSS {} {} {}",
             address.to_text()?,
@@ -587,11 +612,7 @@ impl HostLinkClient {
         };
         validate_expansion_buffer_count(&suffix, values.len())?;
         validate_expansion_buffer_span(address, &suffix, values.len())?;
-        let payload = values
-            .iter()
-            .map(|value| value.format_for_suffix(&suffix))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let payload = build_joined_payload(values, &suffix);
         self.expect_ok(&format!(
             "UWR {unit_no:02} {address} {suffix} {} {payload}",
             values.len()
@@ -611,7 +632,10 @@ impl HostLinkClient {
             .inner
             .lock()
             .await
-            .send_raw_decoded(&format!("RDC {}", address.to_text()?), decode_comment_response)
+            .send_raw_decoded(
+                &format!("RDC {}", address.to_text()?),
+                decode_comment_response,
+            )
             .await?;
         if strip_padding {
             Ok(response.trim_end_matches(' ').to_owned())
@@ -718,10 +742,10 @@ impl ClientInner {
         let frame = build_frame(body, self.options.append_lf_on_send);
         self.fire_trace(HostLinkTraceDirection::Send, &frame);
 
-        let raw = match self.transport.as_mut() {
+        match self.transport.as_mut() {
             Some(Transport::Tcp(stream)) => {
                 write_all_with_timeout(stream, &frame, self.options.timeout).await?;
-                recv_tcp_line(
+                let raw = recv_tcp_line(
                     stream,
                     &mut self.rx_buf,
                     &mut self.rx_start,
@@ -729,18 +753,19 @@ impl ClientInner {
                     &mut self.tcp_read_buf,
                     self.options.timeout,
                 )
-                .await?
+                .await?;
+                self.fire_trace(HostLinkTraceDirection::Receive, &raw);
+                ensure_success(decoder(&raw)?)
             }
             Some(Transport::Udp(socket)) => {
                 send_udp_with_timeout(socket, &frame, self.options.timeout).await?;
-                recv_udp_with_timeout(socket, self.options.timeout).await?
+                recv_udp_with_timeout(socket, &mut self.udp_read_buf, self.options.timeout).await?;
+                let raw = &self.udp_read_buf;
+                self.fire_trace(HostLinkTraceDirection::Receive, raw);
+                ensure_success(decoder(raw)?)
             }
-            None => return Err(HostLinkError::connection("transport was not opened")),
-        };
-
-        self.fire_trace(HostLinkTraceDirection::Receive, &raw);
-        let response = decoder(&raw)?;
-        ensure_success(&response)
+            None => Err(HostLinkError::connection("transport was not opened")),
+        }
     }
 
     fn fire_trace(&self, direction: HostLinkTraceDirection, data: &[u8]) {
@@ -924,14 +949,28 @@ async fn send_udp_with_timeout(
 
 async fn recv_udp_with_timeout(
     socket: &mut UdpSocket,
+    buffer: &mut Vec<u8>,
     duration: Duration,
-) -> Result<Vec<u8>, HostLinkError> {
-    let mut buffer = vec![0u8; 4096];
-    let read = timeout(duration, socket.recv(&mut buffer))
+) -> Result<(), HostLinkError> {
+    if buffer.len() != 4096 {
+        buffer.resize(4096, 0);
+    }
+    let read = timeout(duration, socket.recv(buffer.as_mut_slice()))
         .await
         .map_err(|_| HostLinkError::connection("read timed out"))??;
     buffer.truncate(read);
-    Ok(buffer)
+    Ok(())
+}
+
+fn build_joined_payload<T: HostLinkPayloadValue>(values: &[T], suffix: &str) -> String {
+    let mut payload = String::new();
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            payload.push(' ');
+        }
+        value.append_to_payload(suffix, &mut payload);
+    }
+    payload
 }
 
 async fn recv_tcp_line(

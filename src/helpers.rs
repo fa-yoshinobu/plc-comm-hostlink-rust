@@ -1,11 +1,13 @@
 use crate::address::{
     KvDeviceAddress, is_direct_bit_device_type, is_optimizable_read_named_device_type,
     offset_device, parse_device, parse_logical_address, parse_named_address_parts,
+    resolve_effective_format, validate_device_count, validate_device_span,
 };
 use crate::client::{HostLinkClient, HostLinkPayloadValue};
 use crate::error::HostLinkError;
 use futures_core::Stream;
 use indexmap::IndexMap;
+use std::str::FromStr;
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -73,14 +75,20 @@ impl From<HostLinkValue> for u16 {
 
 impl HostLinkPayloadValue for HostLinkValue {
     fn format_for_suffix(&self, data_format: &str) -> String {
+        let mut value = String::new();
+        self.append_to_payload(data_format, &mut value);
+        value
+    }
+
+    fn append_to_payload(&self, data_format: &str, output: &mut String) {
         match self {
-            HostLinkValue::U16(value) => value.format_for_suffix(data_format),
-            HostLinkValue::I16(value) => value.format_for_suffix(data_format),
-            HostLinkValue::U32(value) => value.format_for_suffix(data_format),
-            HostLinkValue::I32(value) => value.format_for_suffix(data_format),
-            HostLinkValue::F32(value) => value.format_for_suffix(data_format),
-            HostLinkValue::Bool(value) => value.format_for_suffix(data_format),
-            HostLinkValue::Text(value) => value.clone(),
+            HostLinkValue::U16(value) => value.append_to_payload(data_format, output),
+            HostLinkValue::I16(value) => value.append_to_payload(data_format, output),
+            HostLinkValue::U32(value) => value.append_to_payload(data_format, output),
+            HostLinkValue::I32(value) => value.append_to_payload(data_format, output),
+            HostLinkValue::F32(value) => value.append_to_payload(data_format, output),
+            HostLinkValue::Bool(value) => value.append_to_payload(data_format, output),
+            HostLinkValue::Text(value) => value.append_to_payload(data_format, output),
         }
     }
 }
@@ -114,51 +122,35 @@ pub async fn read_typed(
             let bits = (words[0] as u32) | ((words[1] as u32) << 16);
             Ok(HostLinkValue::F32(f32::from_bits(bits)))
         }
-        "S" => {
-            let tokens = client.read(&device, Some("S")).await?;
-            let value = tokens
-                .first()
-                .ok_or_else(|| HostLinkError::protocol("Missing response token"))?
-                .parse::<i16>()
-                .map_err(|_| HostLinkError::protocol("Invalid signed 16-bit response"))?;
-            Ok(HostLinkValue::I16(value))
-        }
-        "D" => {
-            let tokens = client.read(&device, Some("D")).await?;
-            let value = tokens
-                .first()
-                .ok_or_else(|| HostLinkError::protocol("Missing response token"))?
-                .parse::<u32>()
-                .map_err(|_| HostLinkError::protocol("Invalid unsigned 32-bit response"))?;
-            Ok(HostLinkValue::U32(value))
-        }
-        "L" => {
-            let tokens = client.read(&device, Some("L")).await?;
-            let value = tokens
-                .first()
-                .ok_or_else(|| HostLinkError::protocol("Missing response token"))?
-                .parse::<i32>()
-                .map_err(|_| HostLinkError::protocol("Invalid signed 32-bit response"))?;
-            Ok(HostLinkValue::I32(value))
-        }
-        "U" => {
-            let tokens = client.read(&device, Some("U")).await?;
-            let value = tokens
-                .first()
-                .ok_or_else(|| HostLinkError::protocol("Missing response token"))?
-                .parse::<u16>()
-                .map_err(|_| HostLinkError::protocol("Invalid unsigned 16-bit response"))?;
-            Ok(HostLinkValue::U16(value))
-        }
-        "" => {
-            let token = client
-                .read(&device, None)
-                .await?
-                .first()
-                .cloned()
-                .ok_or_else(|| HostLinkError::protocol("Missing response token"))?;
-            Ok(HostLinkValue::Bool(parse_bool_token(&token)?))
-        }
+        "S" => Ok(HostLinkValue::I16(
+            read_single_parsed(client, &device, Some("S"), "Invalid signed 16-bit response")
+                .await?,
+        )),
+        "D" => Ok(HostLinkValue::U32(
+            read_single_parsed::<u32>(
+                client,
+                &device,
+                Some("D"),
+                "Invalid unsigned 32-bit response",
+            )
+            .await?,
+        )),
+        "L" => Ok(HostLinkValue::I32(
+            read_single_parsed(client, &device, Some("L"), "Invalid signed 32-bit response")
+                .await?,
+        )),
+        "U" => Ok(HostLinkValue::U16(
+            read_single_parsed::<u16>(
+                client,
+                &device,
+                Some("U"),
+                "Invalid unsigned 16-bit response",
+            )
+            .await?,
+        )),
+        "" => Ok(HostLinkValue::Bool(
+            read_single_bool(client, &device, None).await?,
+        )),
         other => Err(HostLinkError::protocol(format!(
             "Unsupported logical data type '{other}'."
         ))),
@@ -190,13 +182,115 @@ pub async fn write_typed<T: HostLinkPayloadValue>(
 }
 
 fn parse_bool_token(token: &str) -> Result<bool, HostLinkError> {
-    match token.trim().to_ascii_uppercase().as_str() {
-        "1" | "ON" | "TRUE" => Ok(true),
-        "0" | "OFF" | "FALSE" => Ok(false),
-        _ => Err(HostLinkError::protocol(format!(
+    let token = token.trim();
+    if token == "1" || token.eq_ignore_ascii_case("ON") || token.eq_ignore_ascii_case("TRUE") {
+        Ok(true)
+    } else if token == "0"
+        || token.eq_ignore_ascii_case("OFF")
+        || token.eq_ignore_ascii_case("FALSE")
+    {
+        Ok(false)
+    } else {
+        Err(HostLinkError::protocol(format!(
             "Invalid direct bit response token: {token}"
-        ))),
+        )))
     }
+}
+
+fn first_response_token(response_text: &str) -> Result<&str, HostLinkError> {
+    response_text
+        .split(' ')
+        .find(|token| !token.is_empty())
+        .ok_or_else(|| HostLinkError::protocol("Missing response token"))
+}
+
+fn parse_first_token<T: FromStr>(
+    response_text: &str,
+    invalid_message: &'static str,
+) -> Result<T, HostLinkError> {
+    first_response_token(response_text)?
+        .parse::<T>()
+        .map_err(|_| HostLinkError::protocol(invalid_message))
+}
+
+fn parse_all_tokens<T: FromStr>(
+    response_text: &str,
+    invalid_message: &'static str,
+) -> Result<Vec<T>, HostLinkError> {
+    let mut values = Vec::new();
+    for token in response_text.split(' ').filter(|token| !token.is_empty()) {
+        values.push(
+            token
+                .parse::<T>()
+                .map_err(|_| HostLinkError::protocol(invalid_message))?,
+        );
+    }
+    if values.is_empty() {
+        return Err(HostLinkError::protocol("Missing response token"));
+    }
+    Ok(values)
+}
+
+fn prepare_read_address(
+    device: &str,
+    data_format: Option<&str>,
+    count: usize,
+) -> Result<KvDeviceAddress, HostLinkError> {
+    let mut address = parse_device(device)?;
+    let suffix = if let Some(data_format) = data_format {
+        crate::address::normalize_suffix(data_format)?
+    } else {
+        address.suffix.clone()
+    };
+    let suffix = resolve_effective_format(&address.device_type, &suffix);
+    if count > 1 {
+        validate_device_count(&address.device_type, &suffix, count)?;
+    }
+    validate_device_span(&address.device_type, address.number, &suffix, count)?;
+    address.suffix = suffix;
+    Ok(address)
+}
+
+async fn read_single_response(
+    client: &HostLinkClient,
+    device: &str,
+    data_format: Option<&str>,
+) -> Result<String, HostLinkError> {
+    let address = prepare_read_address(device, data_format, 1)?;
+    client.send_raw(&format!("RD {}", address.to_text()?)).await
+}
+
+async fn read_single_parsed<T: FromStr>(
+    client: &HostLinkClient,
+    device: &str,
+    data_format: Option<&str>,
+    invalid_message: &'static str,
+) -> Result<T, HostLinkError> {
+    let response = read_single_response(client, device, data_format).await?;
+    parse_first_token(&response, invalid_message)
+}
+
+async fn read_single_bool(
+    client: &HostLinkClient,
+    device: &str,
+    data_format: Option<&str>,
+) -> Result<bool, HostLinkError> {
+    let response = read_single_response(client, device, data_format).await?;
+    parse_bool_token(first_response_token(&response)?)
+}
+
+async fn read_consecutive_parsed<T: FromStr>(
+    client: &HostLinkClient,
+    device: &str,
+    count: usize,
+    data_format: Option<&str>,
+    invalid_message: &'static str,
+) -> Result<Vec<T>, HostLinkError> {
+    let address = prepare_read_address(device, data_format, count)?;
+    let response = client
+        .send_raw(&format!("RDS {} {}", address.to_text()?, count))
+        .await?;
+    parse_all_tokens(&response, invalid_message)
 }
 
 pub async fn write_bit_in_word(
@@ -209,12 +303,13 @@ pub async fn write_bit_in_word(
         return Err(HostLinkError::protocol("bitIndex must be 0-15."));
     }
 
-    let tokens = client.read(device, Some("U")).await?;
-    let mut current = tokens
-        .first()
-        .ok_or_else(|| HostLinkError::protocol("Missing response token"))?
-        .parse::<u16>()
-        .map_err(|_| HostLinkError::protocol("Invalid unsigned 16-bit response"))?;
+    let mut current = read_single_parsed::<u16>(
+        client,
+        device,
+        Some("U"),
+        "Invalid unsigned 16-bit response",
+    )
+    .await?;
     if value {
         current |= 1 << bit_index;
     } else {
@@ -250,12 +345,13 @@ pub(crate) async fn read_named_sequential(
     for address in addresses {
         let (base_address, dtype, bit_index) = parse_named_address_parts(address)?;
         if dtype == "BIT_IN_WORD" {
-            let tokens = client.read(&base_address, Some("U")).await?;
-            let word = tokens
-                .first()
-                .ok_or_else(|| HostLinkError::protocol("Missing response token"))?
-                .parse::<u16>()
-                .map_err(|_| HostLinkError::protocol("Invalid unsigned 16-bit response"))?;
+            let word = read_single_parsed::<u16>(
+                client,
+                &base_address,
+                Some("U"),
+                "Invalid unsigned 16-bit response",
+            )
+            .await?;
             let bit_index = bit_index.unwrap_or(0);
             result.insert(
                 address.clone(),
@@ -433,16 +529,14 @@ pub async fn read_words_single_request(
     if count == 0 {
         return Err(HostLinkError::protocol("count must be 1 or greater."));
     }
-    client
-        .read_consecutive(device, count, Some("U"))
-        .await?
-        .into_iter()
-        .map(|token| {
-            token
-                .parse::<u16>()
-                .map_err(|_| HostLinkError::protocol("Invalid unsigned 16-bit response"))
-        })
-        .collect()
+    read_consecutive_parsed::<u16>(
+        client,
+        device,
+        count,
+        Some("U"),
+        "Invalid unsigned 16-bit response",
+    )
+    .await
 }
 
 pub async fn read_dwords_single_request(
