@@ -5,6 +5,7 @@
 
 mod address;
 mod client;
+mod device_ranges;
 mod error;
 mod helpers;
 mod model;
@@ -18,6 +19,10 @@ pub use address::{
 pub use client::{
     HostLinkClient, HostLinkClientFactory, HostLinkPayloadValue, QueuedHostLinkClient,
     open_and_connect,
+};
+pub use device_ranges::{
+    KvDeviceRangeCatalog, KvDeviceRangeEntry, KvDeviceRangeNotation, KvDeviceRangeSegment,
+    available_device_range_models, device_range_catalog_for_model,
 };
 pub use error::{HostLinkError, decode_error_code};
 pub use helpers::{

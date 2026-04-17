@@ -391,6 +391,31 @@ async fn read_expansion_unit_buffer_rejects_32_bit_buffer_end_crossing_before_se
     assert!(received.lock().unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn read_device_range_catalog_resolves_query_model_into_range_catalog() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "?K" => "58".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+    let catalog = client.read_device_range_catalog().await.unwrap();
+
+    assert_eq!(catalog.requested_model, "KV-8000A");
+    assert_eq!(catalog.resolved_model, "KV-8000");
+    assert_eq!(
+        catalog.entry("DM").unwrap().address_range.as_deref(),
+        Some("DM00000-DM65534")
+    );
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["?K"]
+    );
+}
+
 async fn start_scripted_server<F>(response_factory: F) -> (u16, Arc<Mutex<Vec<String>>>)
 where
     F: Fn(String) -> String + Send + Sync + 'static,
