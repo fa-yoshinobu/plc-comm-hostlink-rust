@@ -6,8 +6,8 @@ This document describes the static device-range catalog used by:
 - `HostLinkClient::read_device_range_catalog()`
 - `QueuedHostLinkClient::read_device_range_catalog()`
 
-The current catalog is sourced from [`range.csv`](../range.csv). The library
-loads that file at compile time and returns:
+The current catalog is embedded directly in `src/device_ranges.rs`. The library
+returns:
 
 - `KvDeviceRangeCatalog`
 - `KvDeviceRangeEntry`
@@ -17,7 +17,7 @@ loads that file at compile time and returns:
 ## Behavior
 
 - `supported = false` means the source cell was `-`.
-- `address_range` preserves the original cell text from `range.csv`.
+- `address_range` preserves the original catalog text.
 - `segments` splits comma-separated alias ranges such as `X0-999F,Y0-999F`.
 - `notation` is derived from the `Base` column: `10` -> `Decimal`, `16` -> `Hexadecimal`.
 
@@ -56,9 +56,9 @@ Examples:
 
 ## Static Range Tables
 
-The following Markdown tables are copied verbatim from the current
-[`range.csv`](../range.csv) content. They are split into standard and `XYM`
-catalog columns to keep them readable in GitHub-style Markdown renderers.
+The following Markdown tables are copied from the embedded source catalog. They
+are split into standard and `XYM` catalog columns to keep them readable in
+GitHub-style Markdown renderers.
 
 ### Standard Catalog Columns
 
@@ -116,4 +116,4 @@ catalog columns to keep them readable in GitHub-style Markdown renderers.
   `D`, `E`, `F`, `M`, and `L`.
 - The crate keeps unsupported rows in the catalog and marks them with
   `supported = false`.
-- If the catalog changes, update both `range.csv` and this document together.
+- If the catalog changes, update both `src/device_ranges.rs` and this document together.

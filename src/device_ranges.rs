@@ -1,8 +1,28 @@
 use crate::error::HostLinkError;
-use encoding_rs::SHIFT_JIS;
 use std::sync::OnceLock;
 
-const RANGE_CSV_BYTES: &[u8] = include_bytes!("../range.csv");
+const RANGE_CSV_DATA: &str = r#"DeviceType,Base,KV-NANO,KV-NANO(XYM),KV-3000/5000,KV-3000/5000(XYM),KV-7000,KV-7000(XYM),KV-8000,KV-8000(XYM),KV-X500,KV-X500(XYM)
+R,10,R00000-R59915,"X0-599F,Y0-599F",R00000-R99915,"X0-999F,Y0-999F",R00000-R199915,"X0-1999F,Y0-1999F",R00000-R199915,"X0-1999F,Y0-1999F",R00000-R199915,"X0-1999F,Y0-1999F"
+B,16,B0000-B1FFF,B0000-B1FFF,B0000-B3FFF,B0000-B3FFF,B0000-B7FFF,B0000-B7FFF,B0000-B7FFF,B0000-B7FFF,B0000-B7FFF,B0000-B7FFF
+MR,10,MR00000-MR59915,M0-9599,MR00000-MR99915,M0-15999,MR000000-MR399915,M000000-M63999,MR000000-MR399915,M000000-M63999,MR000000-MR399915,M000000-M63999
+LR,10,LR00000-LR19915,L0-3199,LR00000-LR99915,L0-15999,LR00000-LR99915,L00000-L15999,LR00000-LR99915,L00000-L15999,LR00000-LR99915,L00000-L15999
+CR,10,CR0000-CR8915,CR0000-CR8915,CR0000-CR3915,CR0000-153915,CR0000-CR7915,CR0000-CR7915,CR0000-CR7915,CR0000-CR7915,CR0000-CR7915,CR0000-CR7915
+CM,10,CR0000-CR8999,CR0000-CR8999,CM0000-CM5999,CM0000-CM5999,CM0000-CM5999,CM0000-CM5999,CM0000-CM7599,CM0000-CM7599,CM0000-CM7599,CM0000-CM7599
+T,10,T0000-T0511,T0000-T0511,T0000-T3999,T0000-T3999,T0000-T3999,T0000-T3999,T0000-T3999,T0000-T3999,T0000-T3999,T0000-T3999
+C,10,C0000-C0255,C0000-C0255,C0000-C3999,C0000-C3999,C0000-C3999,C0000-C3999,C0000-C3999,C0000-C3999,C0000-C3999,C0000-C3999
+DM,10,DM00000-DM32767,D0-32767,DM00000-DM65534,D0-65534,DM00000-DM65534,D00000-D65534,DM00000-DM65534,D00000-D65534,DM00000-DM65534,D00000-D65534
+EM,10,-,-,EM00000-EM65534,E0-65534,EM00000-EM65534,E00000-E65534,EM00000-EM65534,E00000-E65534,EM00000-EM65534,E00000-E65534
+FM,10,-,-,FM00000-FM32767,E0-32767,FM00000-FM32767,F00000-F32767,FM00000-FM32767,F00000-F32767,FM00000-FM32767,F00000-F32767
+ZF,10,-,-,ZF000000-ZF131071,ZF000000-ZF131071,ZF000000-ZF524287,ZF000000-ZF524287,ZF000000-ZF524287,ZF000000-ZF524287,ZF000000-ZF524287,ZF000000-ZF524287
+W,16,W0000-W3FFF,W0000-W3FFF,W0000-W3FFF,W0000-W3FFF,W0000-W7FFF,W0000-W7FFF,W0000-W7FFF,W0000-W7FFF,W0000-W7FFF,W0000-W7FFF
+TM,10,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511
+VM,10,0-9499,0-9499,0-49999,0-49999,0-63999,0-63999,0-589823,0-589823,-,-
+VB,16,0-1FFF,0-1FFF,0-3FFF,0-3FFF,0-F9FF,0-F9FF,0-F9FF,0-F9FF,-,-
+Z,10,Z1-12,Z1-12,Z1-12,Z1-12,Z1-12,Z1-12,Z1-12,Z1-12,-,-
+CTH,10,0-3,0-3,0-1,0-3,-,-,-,-,-,-
+CTC,10,0-7,0-7,0-3,0-3,-,-,-,-,-,-
+AT,10,-,-,0-7,0-7,0-7,0-7,0-7,0-7,-,-
+"#;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KvDeviceRangeNotation {
@@ -56,7 +76,7 @@ pub fn device_range_catalog_for_model(
         .position(|header| header == resolved_model)
         .ok_or_else(|| {
             HostLinkError::protocol(format!(
-                "Resolved model column '{resolved_model}' was not found in range.csv."
+                "Resolved model column '{resolved_model}' was not found in the embedded device range table."
             ))
         })?;
 
@@ -102,15 +122,16 @@ fn range_table() -> Result<&'static RangeTable, HostLinkError> {
 }
 
 fn parse_range_table() -> Result<RangeTable, HostLinkError> {
-    let csv_text = decode_range_csv()?;
-    let mut lines = csv_text.lines().filter(|line| !line.trim().is_empty());
+    let mut lines = RANGE_CSV_DATA
+        .lines()
+        .filter(|line| !line.trim().is_empty());
     let header_line = lines
         .next()
-        .ok_or_else(|| HostLinkError::protocol("range.csv is empty"))?;
+        .ok_or_else(|| HostLinkError::protocol("Embedded device range table is empty"))?;
     let headers = parse_csv_line(header_line)?;
     if headers.len() < 3 {
         return Err(HostLinkError::protocol(
-            "range.csv must contain at least DeviceType, Base, and one model column",
+            "Embedded device range table must contain at least DeviceType, Base, and one model column",
         ));
     }
 
@@ -124,7 +145,7 @@ fn parse_range_table() -> Result<RangeTable, HostLinkError> {
         let fields = parse_csv_line(line)?;
         if fields.len() != headers.len() {
             return Err(HostLinkError::protocol(format!(
-                "range.csv row has {} columns but {} were expected: {line}",
+                "Embedded device range row has {} columns but {} were expected: {line}",
                 fields.len(),
                 headers.len()
             )));
@@ -144,17 +165,6 @@ fn parse_range_table() -> Result<RangeTable, HostLinkError> {
         model_headers,
         rows,
     })
-}
-
-fn decode_range_csv() -> Result<String, HostLinkError> {
-    let (decoded, _, had_errors) = SHIFT_JIS.decode(RANGE_CSV_BYTES);
-    if had_errors {
-        return Err(HostLinkError::protocol(
-            "range.csv could not be decoded as Shift_JIS",
-        ));
-    }
-
-    Ok(decoded.into_owned())
 }
 
 fn parse_csv_line(line: &str) -> Result<Vec<String>, HostLinkError> {
@@ -183,7 +193,7 @@ fn parse_csv_line(line: &str) -> Result<Vec<String>, HostLinkError> {
 
     if in_quotes {
         return Err(HostLinkError::protocol(format!(
-            "range.csv contains an unterminated quoted field: {line}"
+            "Embedded device range table contains an unterminated quoted field: {line}"
         )));
     }
 
@@ -199,7 +209,7 @@ fn notation_from_base(base_text: &str) -> Result<KvDeviceRangeNotation, HostLink
         Ok(KvDeviceRangeNotation::Hexadecimal)
     } else {
         Err(HostLinkError::protocol(format!(
-            "Unsupported base cell '{base_text}' in range.csv"
+            "Unsupported base cell '{base_text}' in the embedded device range table"
         )))
     }
 }
@@ -293,7 +303,7 @@ fn resolve_model_column<'a>(
 
     direct_model_match(table, &resolved_key).ok_or_else(|| {
         HostLinkError::protocol(format!(
-            "Resolved model '{resolved_key}' was not found in range.csv."
+            "Resolved model '{resolved_key}' was not found in the embedded device range table."
         ))
     })
 }

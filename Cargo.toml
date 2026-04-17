@@ -12,7 +12,6 @@ include = [
     "Cargo.toml",
     "README.md",
     "docs/**",
-    "range.csv",
     "src/**",
     "examples/**",
     "tests/**",
