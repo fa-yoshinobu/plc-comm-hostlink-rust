@@ -89,10 +89,12 @@ The full static range specification is documented in
 
 ## Verification
 
-Run the crate tests:
+Run formatting, static analysis, and tests:
 
 ```bash
-cargo test
+cargo fmt --all --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features
 ```
 
 Run the shared cross-verify harness after building the Rust wrapper:

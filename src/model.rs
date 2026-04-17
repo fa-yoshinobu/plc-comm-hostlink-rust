@@ -49,7 +49,7 @@ pub struct HostLinkClock {
 impl HostLinkClock {
     pub fn now_local() -> Self {
         let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-        let week = now.weekday().number_days_from_sunday() as u8;
+        let week = now.weekday().number_days_from_sunday();
         Self {
             year: (now.year() % 100) as u8,
             month: month_to_number(now.month()),
