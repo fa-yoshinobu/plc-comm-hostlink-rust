@@ -55,6 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `open_and_connect`
 - `read_typed` / `write_typed`
 - `read_comments`
+- `device_range_catalog_for_model`
 - `write_bit_in_word`
 - `read_named`
 - `poll`
@@ -64,6 +65,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `write_words_chunked` / `write_dwords_chunked`
 
 Comment reads also accept XYM aliases such as `D10`, `E20`, `F30`, `M100`, `L200`, `X100`, and `Y100`.
+
+Device-range catalogs are also available for UI use cases such as device monitors:
+
+```rust
+use plc_comm_hostlink::device_range_catalog_for_model;
+
+let catalog = device_range_catalog_for_model("KV-8000")?;
+let dm = catalog.entry("DM").unwrap();
+assert_eq!(dm.address_range.as_deref(), Some("DM00000-DM65534"));
+```
+
+The full static range specification is documented in
+[`docs/DEVICE_RANGES.md`](docs/DEVICE_RANGES.md).
 
 ## Verification
 

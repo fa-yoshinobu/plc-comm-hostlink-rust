@@ -4,6 +4,7 @@ use crate::address::{
     validate_device_type, validate_expansion_buffer_count, validate_expansion_buffer_span,
     ws_device_types,
 };
+use crate::device_ranges::{KvDeviceRangeCatalog, device_range_catalog_for_model};
 use crate::error::HostLinkError;
 use crate::helpers;
 use crate::model::{
@@ -226,6 +227,11 @@ impl HostLinkClient {
             model: model_name_for_code(&code).to_owned(),
             code,
         })
+    }
+
+    pub async fn read_device_range_catalog(&self) -> Result<KvDeviceRangeCatalog, HostLinkError> {
+        let model = self.query_model().await?;
+        device_range_catalog_for_model(&model.model)
     }
 
     pub async fn confirm_operating_mode(&self) -> Result<KvPlcMode, HostLinkError> {
@@ -889,6 +895,11 @@ impl QueuedHostLinkClient {
     ) -> Result<helpers::NamedSnapshot, HostLinkError> {
         let _guard = self.gate.lock().await;
         helpers::read_named(&self.client, addresses).await
+    }
+
+    pub async fn read_device_range_catalog(&self) -> Result<KvDeviceRangeCatalog, HostLinkError> {
+        let _guard = self.gate.lock().await;
+        self.client.read_device_range_catalog().await
     }
 
     pub fn poll<'a, S: AsRef<str> + 'a>(
