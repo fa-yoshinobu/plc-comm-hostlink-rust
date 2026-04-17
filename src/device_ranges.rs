@@ -443,7 +443,7 @@ fn device_metadata(device_type: &str) -> (KvDeviceRangeCategory, bool) {
     if matches!(device_type, "ZF") {
         return (KvDeviceRangeCategory::FileRefresh, false);
     }
-    if matches!(device_type, "T" | "C" | "TM" | "AT" | "CTH" | "CTC") {
+    if matches!(device_type, "T" | "C" | "AT" | "CTH" | "CTC") {
         return (KvDeviceRangeCategory::TimerCounter, false);
     }
     if is_direct_bit_device_type(device_type) {
@@ -565,6 +565,11 @@ mod tests {
             x_catalog.entry("ZF").unwrap().address_range.as_deref(),
             Some("ZF000000-ZF524287")
         );
+
+        let tm = catalog.entry("TM").unwrap();
+        assert_eq!(tm.category, KvDeviceRangeCategory::Word);
+        assert!(!tm.is_bit_device);
+        assert_eq!(tm.address_range.as_deref(), Some("TM000-TM511"));
     }
 
     #[test]
