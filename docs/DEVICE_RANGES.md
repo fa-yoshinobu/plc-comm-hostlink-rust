@@ -21,6 +21,18 @@ returns:
 - `segments` splits comma-separated alias ranges such as `X0-999F,Y0-999F`.
 - `notation` is derived from the `Base` column: `10` -> `Decimal`, `16` -> `Hexadecimal`.
 
+## Source Corrections
+
+The original source sheet contained a few obvious typos. The embedded catalog
+and the tables below already reflect the corrected values.
+
+| Location | Original value | Corrected value | Reason |
+| --- | --- | --- | --- |
+| `CR` row, `KV-3000/5000(XYM)` | `CR0000-153915` | `CR0000-CR3915` | The missing `CR` prefix is inconsistent with the same row and family. |
+| `CM` row, `KV-NANO` | `CR0000-CR8999` | `CM0000-CM8999` | The row is `CM`, so the `CR` device prefix was treated as a typo. |
+| `CM` row, `KV-NANO(XYM)` | `CR0000-CR8999` | `CM0000-CM8999` | Same typo as the standard `KV-NANO` column. |
+| `FM` row, `KV-3000/5000(XYM)` | `E0-32767` | `F0-32767` | The row is `FM`, so the `E` alias was treated as a typo and corrected to `F`. |
+
 ## Model Resolution
 
 The public API accepts either the exact catalog column name or a runtime model
