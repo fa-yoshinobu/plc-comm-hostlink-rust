@@ -21,8 +21,8 @@ pub use client::{
     open_and_connect,
 };
 pub use device_ranges::{
-    KvDeviceRangeCatalog, KvDeviceRangeEntry, KvDeviceRangeNotation, KvDeviceRangeSegment,
-    available_device_range_models, device_range_catalog_for_model,
+    KvDeviceRangeCatalog, KvDeviceRangeCategory, KvDeviceRangeEntry, KvDeviceRangeNotation,
+    KvDeviceRangeSegment, available_device_range_models, device_range_catalog_for_model,
 };
 pub use error::{HostLinkError, decode_error_code};
 pub use helpers::{

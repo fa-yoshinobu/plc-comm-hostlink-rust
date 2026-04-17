@@ -7,19 +7,30 @@ This document describes the static device-range catalog used by:
 - `QueuedHostLinkClient::read_device_range_catalog()`
 
 The current catalog is embedded directly in `src/device_ranges.rs`. The library
-returns:
+returns `slmp-rust`-style range metadata so the same UI code can consume both
+protocols with minimal branching:
 
 - `KvDeviceRangeCatalog`
+- `KvDeviceRangeCategory`
 - `KvDeviceRangeEntry`
 - `KvDeviceRangeSegment`
 - `KvDeviceRangeNotation`
 
 ## Behavior
 
+- `KvDeviceRangeCatalog.model` is the resolved catalog family such as `KV-8000`.
+- `KvDeviceRangeCatalog.model_code` is populated only when the catalog came from `?K`.
+- `KvDeviceRangeEntry.device` follows the published alias when the row maps to a single alias device.
+  Examples: `DM(XYM)` -> `D`, `FM(XYM)` -> `F`.
+- `KvDeviceRangeEntry.device_type` preserves the original catalog row such as `DM` or `R`.
 - `supported = false` means the source cell was `-`.
-- `address_range` preserves the original catalog text.
+- `address_range` preserves the published catalog text.
+- `lower_bound`, `upper_bound`, and `point_count` are parsed from that published range text.
 - `segments` splits comma-separated alias ranges such as `X0-999F,Y0-999F`.
-- `notation` is derived from the `Base` column: `10` -> `Decimal`, `16` -> `Hexadecimal`.
+- `entry(device)` matches the original row, the primary published device, or any segment alias.
+- `notation` follows the published device notation. Most rows match the `Base` column directly, and
+  XYM alias devices such as `X` and `Y` switch to `Hexadecimal`.
+- Multi-alias rows such as `R(XYM)` keep `device = R` and publish alias details in `segments` with a note.
 
 ## Source Corrections
 
@@ -32,6 +43,11 @@ and the tables below already reflect the corrected values.
 | `CM` row, `KV-NANO` | `CR0000-CR8999` | `CM0000-CM8999` | The row is `CM`, so the `CR` device prefix was treated as a typo. |
 | `CM` row, `KV-NANO(XYM)` | `CR0000-CR8999` | `CM0000-CM8999` | Same typo as the standard `KV-NANO` column. |
 | `FM` row, `KV-3000/5000(XYM)` | `E0-32767` | `F0-32767` | The row is `FM`, so the `E` alias was treated as a typo and corrected to `F`. |
+| `VM` row | `0-...` | `VM0-...` | Bare numeric ranges were normalized to keep the device prefix in the published catalog. |
+| `VB` row | `0-...` | `VB0-...` | Bare numeric ranges were normalized to keep the device prefix in the published catalog. |
+| `CTH` row | `0-...` | `CTH0-...` | Bare numeric ranges were normalized to keep the device prefix in the published catalog. |
+| `CTC` row | `0-...` | `CTC0-...` | Bare numeric ranges were normalized to keep the device prefix in the published catalog. |
+| `AT` row | `0-...` | `AT0-...` | Bare numeric ranges were normalized to keep the device prefix in the published catalog. |
 
 ## Model Resolution
 
@@ -90,12 +106,12 @@ GitHub-style Markdown renderers.
 | ZF | 10 | - | ZF000000-ZF131071 | ZF000000-ZF524287 | ZF000000-ZF524287 | ZF000000-ZF524287 |
 | W | 16 | W0000-W3FFF | W0000-W3FFF | W0000-W7FFF | W0000-W7FFF | W0000-W7FFF |
 | TM | 10 | TM000-TM511 | TM000-TM511 | TM000-TM511 | TM000-TM511 | TM000-TM511 |
-| VM | 10 | 0-9499 | 0-49999 | 0-63999 | 0-589823 | - |
-| VB | 16 | 0-1FFF | 0-3FFF | 0-F9FF | 0-F9FF | - |
+| VM | 10 | VM0-9499 | VM0-49999 | VM0-63999 | VM0-589823 | - |
+| VB | 16 | VB0-1FFF | VB0-3FFF | VB0-F9FF | VB0-F9FF | - |
 | Z | 10 | Z1-12 | Z1-12 | Z1-12 | Z1-12 | - |
-| CTH | 10 | 0-3 | 0-1 | - | - | - |
-| CTC | 10 | 0-7 | 0-3 | - | - | - |
-| AT | 10 | - | 0-7 | 0-7 | 0-7 | - |
+| CTH | 10 | CTH0-3 | CTH0-1 | - | - | - |
+| CTC | 10 | CTC0-7 | CTC0-3 | - | - | - |
+| AT | 10 | - | AT0-7 | AT0-7 | AT0-7 | - |
 
 ### XYM Catalog Columns
 
@@ -115,12 +131,12 @@ GitHub-style Markdown renderers.
 | ZF | 10 | - | ZF000000-ZF131071 | ZF000000-ZF524287 | ZF000000-ZF524287 | ZF000000-ZF524287 |
 | W | 16 | W0000-W3FFF | W0000-W3FFF | W0000-W7FFF | W0000-W7FFF | W0000-W7FFF |
 | TM | 10 | TM000-TM511 | TM000-TM511 | TM000-TM511 | TM000-TM511 | TM000-TM511 |
-| VM | 10 | 0-9499 | 0-49999 | 0-63999 | 0-589823 | - |
-| VB | 16 | 0-1FFF | 0-3FFF | 0-F9FF | 0-F9FF | - |
+| VM | 10 | VM0-9499 | VM0-49999 | VM0-63999 | VM0-589823 | - |
+| VB | 16 | VB0-1FFF | VB0-3FFF | VB0-F9FF | VB0-F9FF | - |
 | Z | 10 | Z1-12 | Z1-12 | Z1-12 | Z1-12 | - |
-| CTH | 10 | 0-3 | 0-3 | - | - | - |
-| CTC | 10 | 0-7 | 0-3 | - | - | - |
-| AT | 10 | - | 0-7 | 0-7 | 0-7 | - |
+| CTH | 10 | CTH0-3 | CTH0-3 | - | - | - |
+| CTC | 10 | CTC0-7 | CTC0-3 | - | - | - |
+| AT | 10 | - | AT0-7 | AT0-7 | AT0-7 | - |
 
 ## Notes
 

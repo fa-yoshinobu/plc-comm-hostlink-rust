@@ -69,10 +69,18 @@ Comment reads also accept XYM aliases such as `D10`, `E20`, `F30`, `M100`, `L200
 Device-range catalogs are also available for UI use cases such as device monitors:
 
 ```rust
-use plc_comm_hostlink::device_range_catalog_for_model;
+use plc_comm_hostlink::{
+    device_range_catalog_for_model, KvDeviceRangeCategory,
+};
 
 let catalog = device_range_catalog_for_model("KV-8000")?;
 let dm = catalog.entry("DM").unwrap();
+assert_eq!(catalog.model, "KV-8000");
+assert_eq!(dm.device, "DM");
+assert_eq!(dm.category, KvDeviceRangeCategory::Word);
+assert_eq!(dm.lower_bound, 0);
+assert_eq!(dm.upper_bound, Some(65534));
+assert_eq!(dm.point_count, Some(65535));
 assert_eq!(dm.address_range.as_deref(), Some("DM00000-DM65534"));
 ```
 

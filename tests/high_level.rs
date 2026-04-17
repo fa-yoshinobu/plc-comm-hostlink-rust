@@ -404,6 +404,9 @@ async fn read_device_range_catalog_resolves_query_model_into_range_catalog() {
     let client = HostLinkClient::connect(options).await.unwrap();
     let catalog = client.read_device_range_catalog().await.unwrap();
 
+    assert_eq!(catalog.model, "KV-8000");
+    assert_eq!(catalog.model_code, "58");
+    assert!(catalog.has_model_code);
     assert_eq!(catalog.requested_model, "KV-8000A");
     assert_eq!(catalog.resolved_model, "KV-8000");
     assert_eq!(

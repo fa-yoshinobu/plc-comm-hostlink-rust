@@ -1,4 +1,6 @@
+use crate::address::{default_format_by_device_type, is_direct_bit_device_type};
 use crate::error::HostLinkError;
+use crate::model::KvModelInfo;
 use std::sync::OnceLock;
 
 const RANGE_CSV_DATA: &str = r#"DeviceType,Base,KV-NANO,KV-NANO(XYM),KV-3000/5000,KV-3000/5000(XYM),KV-7000,KV-7000(XYM),KV-8000,KV-8000(XYM),KV-X500,KV-X500(XYM)
@@ -16,12 +18,12 @@ FM,10,-,-,FM00000-FM32767,F0-32767,FM00000-FM32767,F00000-F32767,FM00000-FM32767
 ZF,10,-,-,ZF000000-ZF131071,ZF000000-ZF131071,ZF000000-ZF524287,ZF000000-ZF524287,ZF000000-ZF524287,ZF000000-ZF524287,ZF000000-ZF524287,ZF000000-ZF524287
 W,16,W0000-W3FFF,W0000-W3FFF,W0000-W3FFF,W0000-W3FFF,W0000-W7FFF,W0000-W7FFF,W0000-W7FFF,W0000-W7FFF,W0000-W7FFF,W0000-W7FFF
 TM,10,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511
-VM,10,0-9499,0-9499,0-49999,0-49999,0-63999,0-63999,0-589823,0-589823,-,-
-VB,16,0-1FFF,0-1FFF,0-3FFF,0-3FFF,0-F9FF,0-F9FF,0-F9FF,0-F9FF,-,-
+VM,10,VM0-9499,VM0-9499,VM0-49999,VM0-49999,VM0-63999,VM0-63999,VM0-589823,VM0-589823,-,-
+VB,16,VB0-1FFF,VB0-1FFF,VB0-3FFF,VB0-3FFF,VB0-F9FF,VB0-F9FF,VB0-F9FF,VB0-F9FF,-,-
 Z,10,Z1-12,Z1-12,Z1-12,Z1-12,Z1-12,Z1-12,Z1-12,Z1-12,-,-
-CTH,10,0-3,0-3,0-1,0-3,-,-,-,-,-,-
-CTC,10,0-7,0-7,0-3,0-3,-,-,-,-,-,-
-AT,10,-,-,0-7,0-7,0-7,0-7,0-7,0-7,-,-
+CTH,10,CTH0-3,CTH0-3,CTH0-1,CTH0-3,-,-,-,-,-,-
+CTC,10,CTC0-7,CTC0-7,CTC0-3,CTC0-3,-,-,-,-,-,-
+AT,10,-,-,AT0-7,AT0-7,AT0-7,AT0-7,AT0-7,AT0-7,-,-
 "#;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,23 +32,49 @@ pub enum KvDeviceRangeNotation {
     Hexadecimal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KvDeviceRangeCategory {
+    Bit,
+    Word,
+    TimerCounter,
+    Index,
+    FileRefresh,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KvDeviceRangeSegment {
     pub device: String,
+    pub category: KvDeviceRangeCategory,
+    pub is_bit_device: bool,
+    pub notation: KvDeviceRangeNotation,
+    pub lower_bound: u32,
+    pub upper_bound: Option<u32>,
+    pub point_count: Option<u32>,
     pub address_range: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KvDeviceRangeEntry {
+    pub device: String,
     pub device_type: String,
+    pub category: KvDeviceRangeCategory,
+    pub is_bit_device: bool,
     pub notation: KvDeviceRangeNotation,
     pub supported: bool,
+    pub lower_bound: u32,
+    pub upper_bound: Option<u32>,
+    pub point_count: Option<u32>,
     pub address_range: Option<String>,
+    pub source: String,
+    pub notes: Option<String>,
     pub segments: Vec<KvDeviceRangeSegment>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KvDeviceRangeCatalog {
+    pub model: String,
+    pub model_code: String,
+    pub has_model_code: bool,
     pub requested_model: String,
     pub resolved_model: String,
     pub entries: Vec<KvDeviceRangeEntry>,
@@ -54,16 +82,43 @@ pub struct KvDeviceRangeCatalog {
 
 impl KvDeviceRangeCatalog {
     pub fn entry(&self, device_type: &str) -> Option<&KvDeviceRangeEntry> {
+        let wanted = device_type.trim();
         self.entries
             .iter()
-            .find(|entry| entry.device_type.eq_ignore_ascii_case(device_type.trim()))
+            .find(|entry| entry.device_type.eq_ignore_ascii_case(wanted))
+            .or_else(|| {
+                self.entries
+                    .iter()
+                    .find(|entry| entry.device.eq_ignore_ascii_case(wanted))
+            })
+            .or_else(|| {
+                self.entries.iter().find(|entry| {
+                    entry
+                        .segments
+                        .iter()
+                        .any(|segment| segment.device.eq_ignore_ascii_case(wanted))
+                })
+            })
     }
 }
 
 pub fn device_range_catalog_for_model(
     model: impl AsRef<str>,
 ) -> Result<KvDeviceRangeCatalog, HostLinkError> {
-    let requested_model = model.as_ref().trim().to_owned();
+    build_catalog(model.as_ref(), None)
+}
+
+pub(crate) fn device_range_catalog_for_query_model(
+    model: &KvModelInfo,
+) -> Result<KvDeviceRangeCatalog, HostLinkError> {
+    build_catalog(&model.model, Some(&model.code))
+}
+
+fn build_catalog(
+    requested_model: &str,
+    model_code: Option<&str>,
+) -> Result<KvDeviceRangeCatalog, HostLinkError> {
+    let requested_model = requested_model.trim().to_owned();
     if requested_model.is_empty() {
         return Err(HostLinkError::protocol("Model name must not be empty"));
     }
@@ -83,10 +138,13 @@ pub fn device_range_catalog_for_model(
     let entries = table
         .rows
         .iter()
-        .map(|row| build_entry(row, model_index))
+        .map(|row| build_entry(row, model_index, resolved_model))
         .collect::<Vec<_>>();
 
     Ok(KvDeviceRangeCatalog {
+        model: resolved_model.to_owned(),
+        model_code: model_code.unwrap_or_default().to_owned(),
+        has_model_code: model_code.is_some(),
         requested_model,
         resolved_model: resolved_model.to_owned(),
         entries,
@@ -214,40 +272,64 @@ fn notation_from_base(base_text: &str) -> Result<KvDeviceRangeNotation, HostLink
     }
 }
 
-fn build_entry(row: &RangeRow, model_index: usize) -> KvDeviceRangeEntry {
+fn build_entry(row: &RangeRow, model_index: usize, resolved_model: &str) -> KvDeviceRangeEntry {
     let range_text = row.ranges[model_index].trim();
     let supported = !range_text.is_empty() && range_text != "-";
     let address_range = supported.then(|| range_text.to_owned());
     let segments = address_range
         .as_deref()
-        .map(parse_segments)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(device, address_range)| KvDeviceRangeSegment {
-            device: if device.is_empty() {
-                row.device_type.clone()
-            } else {
-                device
-            },
-            address_range,
-        })
-        .collect();
+        .map(|text| parse_segments(row, text))
+        .unwrap_or_default();
+    let primary_device = primary_device_name(row, &segments);
+    let (category, is_bit_device) = device_metadata(&primary_device);
+    let notation = entry_notation(row.notation, &segments);
+    let (lower_bound, upper_bound, point_count) = summarize_entry_bounds(&segments);
+    let notes = entry_notes(&segments);
 
     KvDeviceRangeEntry {
+        device: primary_device,
         device_type: row.device_type.clone(),
-        notation: row.notation,
+        category,
+        is_bit_device,
+        notation,
         supported,
+        lower_bound,
+        upper_bound,
+        point_count,
         address_range,
+        source: format!("Embedded device range table ({resolved_model})"),
+        notes,
         segments,
     }
 }
 
-fn parse_segments(range_text: &str) -> Vec<(String, String)> {
+fn parse_segments(row: &RangeRow, range_text: &str) -> Vec<KvDeviceRangeSegment> {
     range_text
         .split(',')
         .map(str::trim)
         .filter(|segment| !segment.is_empty())
-        .map(|segment| (segment_device(segment), segment.to_owned()))
+        .map(|segment| {
+            let device = segment_device(segment);
+            let device = if device.is_empty() {
+                row.device_type.clone()
+            } else {
+                device
+            };
+            let (category, is_bit_device) = device_metadata(&device);
+            let notation = notation_for_device(row.notation, &device);
+            let (lower_bound, upper_bound, point_count) =
+                parse_segment_bounds(segment, notation, &device);
+            KvDeviceRangeSegment {
+                device,
+                category,
+                is_bit_device,
+                notation,
+                lower_bound,
+                upper_bound,
+                point_count,
+                address_range: segment.to_owned(),
+            }
+        })
         .collect()
 }
 
@@ -256,6 +338,132 @@ fn segment_device(segment: &str) -> String {
         .chars()
         .take_while(|ch| ch.is_ascii_alphabetic())
         .collect::<String>()
+}
+
+fn primary_device_name(row: &RangeRow, segments: &[KvDeviceRangeSegment]) -> String {
+    let unique_devices = segments.iter().map(|segment| segment.device.as_str()).fold(
+        Vec::<&str>::new(),
+        |mut devices, device| {
+            if !devices
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(device))
+            {
+                devices.push(device);
+            }
+            devices
+        },
+    );
+    if unique_devices.len() == 1 {
+        unique_devices[0].to_owned()
+    } else {
+        row.device_type.clone()
+    }
+}
+
+fn summarize_entry_bounds(segments: &[KvDeviceRangeSegment]) -> (u32, Option<u32>, Option<u32>) {
+    let Some(first) = segments.first() else {
+        return (0, None, None);
+    };
+    let all_same = segments.iter().skip(1).all(|segment| {
+        segment.lower_bound == first.lower_bound
+            && segment.upper_bound == first.upper_bound
+            && segment.point_count == first.point_count
+    });
+    if all_same {
+        (first.lower_bound, first.upper_bound, first.point_count)
+    } else {
+        (first.lower_bound, None, None)
+    }
+}
+
+fn entry_notation(
+    fallback: KvDeviceRangeNotation,
+    segments: &[KvDeviceRangeSegment],
+) -> KvDeviceRangeNotation {
+    let Some(first) = segments.first() else {
+        return fallback;
+    };
+    if segments
+        .iter()
+        .skip(1)
+        .all(|segment| segment.notation == first.notation)
+    {
+        first.notation
+    } else {
+        fallback
+    }
+}
+
+fn entry_notes(segments: &[KvDeviceRangeSegment]) -> Option<String> {
+    (segments.len() > 1).then(|| {
+        "Published address range expands to multiple alias devices; inspect segments.".to_owned()
+    })
+}
+
+fn parse_segment_bounds(
+    segment: &str,
+    notation: KvDeviceRangeNotation,
+    default_device: &str,
+) -> (u32, Option<u32>, Option<u32>) {
+    let Some((start_text, end_text)) = segment.split_once('-') else {
+        return (0, None, None);
+    };
+    let start = parse_segment_number(start_text, notation, default_device);
+    let end = parse_segment_number(end_text, notation, default_device);
+    let point_count = start
+        .zip(end)
+        .and_then(|(lower, upper)| upper.checked_sub(lower))
+        .and_then(|distance| distance.checked_add(1));
+    (start.unwrap_or(0), end, point_count)
+}
+
+fn parse_segment_number(
+    text: &str,
+    notation: KvDeviceRangeNotation,
+    default_device: &str,
+) -> Option<u32> {
+    let normalized = text.trim();
+    let trimmed = normalized
+        .strip_prefix(default_device)
+        .unwrap_or(normalized)
+        .trim_start_matches(|ch: char| ch.is_ascii_alphabetic());
+    if trimmed.is_empty() {
+        return None;
+    }
+    match notation {
+        KvDeviceRangeNotation::Decimal => trimmed.parse().ok(),
+        KvDeviceRangeNotation::Hexadecimal => u32::from_str_radix(trimmed, 16).ok(),
+    }
+}
+
+fn device_metadata(device_type: &str) -> (KvDeviceRangeCategory, bool) {
+    if matches!(device_type, "Z") {
+        return (KvDeviceRangeCategory::Index, false);
+    }
+    if matches!(device_type, "ZF") {
+        return (KvDeviceRangeCategory::FileRefresh, false);
+    }
+    if matches!(device_type, "T" | "C" | "TM" | "AT" | "CTH" | "CTC") {
+        return (KvDeviceRangeCategory::TimerCounter, false);
+    }
+    if is_direct_bit_device_type(device_type) {
+        return (KvDeviceRangeCategory::Bit, true);
+    }
+    match default_format_by_device_type(device_type) {
+        "" => (KvDeviceRangeCategory::Bit, true),
+        _ => (KvDeviceRangeCategory::Word, false),
+    }
+}
+
+fn notation_for_device(
+    fallback: KvDeviceRangeNotation,
+    device_type: &str,
+) -> KvDeviceRangeNotation {
+    if matches!(device_type, "B" | "W" | "VB" | "X" | "Y") {
+        KvDeviceRangeNotation::Hexadecimal
+    } else {
+        fallback
+    }
 }
 
 fn resolve_model_column<'a>(
@@ -328,8 +536,8 @@ fn normalize_model_key(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        KvDeviceRangeNotation, available_device_range_models, device_range_catalog_for_model,
-        normalize_model_key,
+        KvDeviceRangeCategory, KvDeviceRangeNotation, available_device_range_models,
+        device_range_catalog_for_model, normalize_model_key,
     };
 
     #[test]
@@ -342,6 +550,9 @@ mod tests {
     #[test]
     fn resolves_known_runtime_model_names_to_csv_family_columns() {
         let catalog = device_range_catalog_for_model("KV-8000A").unwrap();
+        assert_eq!(catalog.model, "KV-8000");
+        assert_eq!(catalog.model_code, "");
+        assert!(!catalog.has_model_code);
         assert_eq!(catalog.resolved_model, "KV-8000");
         assert_eq!(
             catalog.entry("DM").unwrap().address_range.as_deref(),
@@ -361,19 +572,50 @@ mod tests {
         let catalog = device_range_catalog_for_model("KV-3000/5000(XYM)").unwrap();
         let entry = catalog.entry("R").unwrap();
 
-        assert_eq!(entry.notation, KvDeviceRangeNotation::Decimal);
+        assert_eq!(entry.device, "R");
+        assert_eq!(entry.category, KvDeviceRangeCategory::Bit);
+        assert!(entry.is_bit_device);
+        assert_eq!(entry.notation, KvDeviceRangeNotation::Hexadecimal);
+        assert_eq!(entry.lower_bound, 0);
+        assert_eq!(entry.upper_bound, Some(0x999F));
+        assert_eq!(entry.point_count, Some(0x99A0));
         assert_eq!(entry.address_range.as_deref(), Some("X0-999F,Y0-999F"));
+        assert!(
+            entry
+                .notes
+                .as_deref()
+                .unwrap()
+                .contains("multiple alias devices")
+        );
         assert_eq!(entry.segments.len(), 2);
         assert_eq!(entry.segments[0].device, "X");
+        assert_eq!(
+            entry.segments[0].notation,
+            KvDeviceRangeNotation::Hexadecimal
+        );
         assert_eq!(entry.segments[0].address_range, "X0-999F");
         assert_eq!(entry.segments[1].device, "Y");
+        assert_eq!(
+            entry.segments[1].notation,
+            KvDeviceRangeNotation::Hexadecimal
+        );
         assert_eq!(entry.segments[1].address_range, "Y0-999F");
+        assert_eq!(catalog.entry("X").unwrap().device_type, "R");
 
         let dm = catalog.entry("DM").unwrap();
+        assert_eq!(dm.device, "D");
+        assert_eq!(dm.category, KvDeviceRangeCategory::Word);
+        assert!(!dm.is_bit_device);
+        assert_eq!(dm.lower_bound, 0);
+        assert_eq!(dm.upper_bound, Some(65534));
+        assert_eq!(dm.point_count, Some(65535));
+        assert_eq!(dm.notation, KvDeviceRangeNotation::Decimal);
         assert_eq!(dm.segments[0].device, "D");
         assert_eq!(dm.segments[0].address_range, "D0-65534");
+        assert_eq!(catalog.entry("D").unwrap().device_type, "DM");
 
         let fm = catalog.entry("FM").unwrap();
+        assert_eq!(fm.device, "F");
         assert_eq!(fm.address_range.as_deref(), Some("F0-32767"));
         assert_eq!(fm.segments[0].device, "F");
         assert_eq!(fm.segments[0].address_range, "F0-32767");
@@ -391,6 +633,33 @@ mod tests {
         assert_eq!(
             xym.entry("CR").unwrap().address_range.as_deref(),
             Some("CR0000-CR3915")
+        );
+    }
+
+    #[test]
+    fn single_device_ranges_keep_their_device_prefixes() {
+        let nano = device_range_catalog_for_model("KV-N24nn").unwrap();
+        assert_eq!(
+            nano.entry("VM").unwrap().address_range.as_deref(),
+            Some("VM0-9499")
+        );
+        assert_eq!(
+            nano.entry("VB").unwrap().address_range.as_deref(),
+            Some("VB0-1FFF")
+        );
+        assert_eq!(
+            nano.entry("CTC").unwrap().address_range.as_deref(),
+            Some("CTC0-7")
+        );
+
+        let kv3000 = device_range_catalog_for_model("KV-3000/5000").unwrap();
+        assert_eq!(
+            kv3000.entry("AT").unwrap().address_range.as_deref(),
+            Some("AT0-7")
+        );
+        assert_eq!(
+            kv3000.entry("CTH").unwrap().address_range.as_deref(),
+            Some("CTH0-1")
         );
     }
 

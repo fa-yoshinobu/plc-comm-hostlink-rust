@@ -4,7 +4,7 @@ use crate::address::{
     validate_device_type, validate_expansion_buffer_count, validate_expansion_buffer_span,
     ws_device_types,
 };
-use crate::device_ranges::{KvDeviceRangeCatalog, device_range_catalog_for_model};
+use crate::device_ranges::{KvDeviceRangeCatalog, device_range_catalog_for_query_model};
 use crate::error::HostLinkError;
 use crate::helpers;
 use crate::model::{
@@ -231,7 +231,7 @@ impl HostLinkClient {
 
     pub async fn read_device_range_catalog(&self) -> Result<KvDeviceRangeCatalog, HostLinkError> {
         let model = self.query_model().await?;
-        device_range_catalog_for_model(&model.model)
+        device_range_catalog_for_query_model(&model)
     }
 
     pub async fn confirm_operating_mode(&self) -> Result<KvPlcMode, HostLinkError> {
