@@ -67,8 +67,8 @@ async fn read_typed_and_write_typed_support_float_suffix() {
 #[tokio::test]
 async fn read_named_direct_bits_use_unsuffixed_rd_commands() {
     let (port, received) = start_scripted_server(|command| match command.as_str() {
-        "RDS R0 1" => "1".to_owned(),
-        "RDS CR0 1" => "0".to_owned(),
+        "RDS R000 1" => "1".to_owned(),
+        "RDS CR000 1" => "0".to_owned(),
         _ => "E1".to_owned(),
     })
     .await;
@@ -82,15 +82,15 @@ async fn read_named_direct_bits_use_unsuffixed_rd_commands() {
     assert_eq!(result["CR0"], HostLinkValue::Bool(false));
     assert_eq!(
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
-        vec!["RDS R0 1", "RDS CR0 1"]
+        vec!["RDS R000 1", "RDS CR000 1"]
     );
 }
 
 #[tokio::test]
 async fn read_named_batches_contiguous_direct_bit_reads() {
     let (port, received) = start_scripted_server(|command| match command.as_str() {
-        "RDS R0 4" => "1 0 1 0".to_owned(),
-        "RDS CR0 4" => "0 1 0 1".to_owned(),
+        "RDS R000 4" => "1 0 1 0".to_owned(),
+        "RDS CR000 4" => "0 1 0 1".to_owned(),
         _ => "E1".to_owned(),
     })
     .await;
@@ -114,14 +114,14 @@ async fn read_named_batches_contiguous_direct_bit_reads() {
     assert_eq!(result["CR3"], HostLinkValue::Bool(true));
     assert_eq!(
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
-        vec!["RDS R0 4", "RDS CR0 4"]
+        vec!["RDS R000 4", "RDS CR000 4"]
     );
 }
 
 #[tokio::test]
 async fn read_typed_empty_dtype_uses_device_default_format() {
     let (port, received) = start_scripted_server(|command| match command.as_str() {
-        "RD CR0" => "1".to_owned(),
+        "RD CR000" => "1".to_owned(),
         "RD DM200.S" => "-12".to_owned(),
         _ => "E1".to_owned(),
     })
@@ -141,7 +141,7 @@ async fn read_typed_empty_dtype_uses_device_default_format() {
     );
     assert_eq!(
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
-        vec!["RD CR0", "RD DM200.S"]
+        vec!["RD CR000", "RD DM200.S"]
     );
 }
 

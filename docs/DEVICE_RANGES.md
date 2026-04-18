@@ -142,6 +142,9 @@ GitHub-style Markdown renderers.
 
 - XYM columns may remap the same logical row to alias devices such as `X`, `Y`,
   `D`, `E`, `F`, `M`, and `L`.
+- Low-level address parsing and span validation in `src/address.rs` are expected
+  to stay aligned with these published XYM alias limits. In particular, `M`
+  accepts `0..63999`, while `L` remains `0..15999`.
 - The crate keeps unsupported rows in the catalog and marks them with
   `supported = false`.
 - If the catalog changes, update both `src/device_ranges.rs` and this document together.
