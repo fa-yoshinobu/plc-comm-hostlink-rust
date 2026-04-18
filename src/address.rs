@@ -36,7 +36,9 @@ impl KvDeviceAddress {
         let range = device_range(&self.device_type).ok_or_else(|| {
             HostLinkError::protocol(format!("Unsupported device type: {}", self.device_type))
         })?;
-        let number = if range.base == 16 {
+        let number = if uses_bit_bank_address(&self.device_type) {
+            format_bit_bank_number(self.number)
+        } else if range.base == 16 {
             format!("{:X}", self.number)
         } else {
             self.number.to_string()
@@ -183,6 +185,20 @@ pub(crate) fn is_direct_bit_device_type(device_type: &str) -> bool {
     )
 }
 
+fn uses_bit_bank_address(device_type: &str) -> bool {
+    matches!(device_type, "R" | "MR" | "LR" | "CR")
+}
+
+fn is_valid_bit_bank_number(number: u32) -> bool {
+    number % 100 <= 15
+}
+
+fn format_bit_bank_number(number: u32) -> String {
+    let bank = number / 100;
+    let bit = number % 100;
+    format!("{bank}{bit:02}")
+}
+
 pub(crate) fn is_optimizable_read_named_device_type(device_type: &str) -> bool {
     default_format_by_device_type(device_type) == ".U"
 }
@@ -278,6 +294,11 @@ fn parse_device_internal(
         return Err(HostLinkError::protocol(format!(
             "Device number out of range: {device_type}{number_text} (allowed: {}..{})",
             range.lo, range.hi
+        )));
+    }
+    if uses_bit_bank_address(&device_type) && !is_valid_bit_bank_number(number) {
+        return Err(HostLinkError::protocol(format!(
+            "Invalid bit-bank device number: {device_type}{number_text} (lower two digits must be 00..15)"
         )));
     }
 
@@ -593,7 +614,12 @@ fn device_range(device_type: &str) -> Option<DeviceRange> {
             hi: 0x63999F,
             base: 16,
         },
-        "M" | "L" => DeviceRange {
+        "M" => DeviceRange {
+            lo: 0,
+            hi: 63_999,
+            base: 10,
+        },
+        "L" => DeviceRange {
             lo: 0,
             hi: 15_999,
             base: 10,
@@ -615,7 +641,7 @@ fn device_range(device_type: &str) -> Option<DeviceRange> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HostLinkAddress, parse_device, parse_logical_address};
+    use super::{HostLinkAddress, parse_device, parse_logical_address, validate_device_span};
 
     #[test]
     fn parse_device_normalizes_hex_suffix_and_number() {
@@ -648,8 +674,41 @@ mod tests {
     #[test]
     fn parse_logical_direct_bit_defaults_to_bool_read() {
         let logical = parse_logical_address("cr0").unwrap();
-        assert_eq!(logical.to_text().unwrap(), "CR0");
+        assert_eq!(logical.to_text().unwrap(), "CR000");
         assert_eq!(logical.data_type, "");
+    }
+
+    #[test]
+    fn parse_device_rejects_invalid_bit_bank_numbers() {
+        assert!(parse_device("R016").is_err());
+        assert!(parse_device("MR116").is_err());
+        assert!(parse_device("LR99916").is_err());
+        assert!(parse_device("CR7916").is_err());
+    }
+
+    #[test]
+    fn parse_device_accepts_valid_bit_bank_boundaries() {
+        assert_eq!(parse_device("R0").unwrap().to_text().unwrap(), "R000");
+        assert_eq!(parse_device("R1").unwrap().to_text().unwrap(), "R001");
+        assert_eq!(parse_device("R015").unwrap().to_text().unwrap(), "R015");
+        assert_eq!(parse_device("R100").unwrap().to_text().unwrap(), "R100");
+        assert_eq!(parse_device("MR115").unwrap().to_text().unwrap(), "MR115");
+        assert_eq!(parse_device("CR0").unwrap().to_text().unwrap(), "CR000");
+        assert_eq!(parse_device("CR7915").unwrap().to_text().unwrap(), "CR7915");
+    }
+
+    #[test]
+    fn parse_device_accepts_high_xym_m_addresses() {
+        assert_eq!(parse_device("M63872").unwrap().to_text().unwrap(), "M63872");
+        assert!(parse_device("M64000").is_err());
+    }
+
+    #[test]
+    fn validate_device_span_allows_xym_m_upper_bound() {
+        validate_device_span("M", 63_998, "", 1).unwrap();
+        validate_device_span("M", 63_998, "", 2).unwrap();
+        assert!(validate_device_span("M", 63_999, "", 2).is_err());
+        assert!(validate_device_span("L", 16_000, "", 1).is_err());
     }
 
     #[test]
