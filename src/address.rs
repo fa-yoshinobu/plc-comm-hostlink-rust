@@ -6,10 +6,12 @@ const DEVICE_TYPES_PARSE_ORDER: &[&str] = &[
     "R", "B", "W", "Z", "T", "C", "X", "Y", "M", "L", "D", "E", "F",
 ];
 const FORCE_DEVICE_TYPES: &[&str] = &["R", "B", "MR", "LR", "CR", "T", "C", "VB"];
-const MBS_DEVICE_TYPES: &[&str] = &["R", "B", "MR", "LR", "CR", "T", "C", "VB"];
+const MBS_DEVICE_TYPES: &[&str] = &[
+    "R", "B", "MR", "LR", "CR", "T", "C", "VB", "X", "Y", "M", "L",
+];
 const MWS_DEVICE_TYPES: &[&str] = &[
-    "R", "B", "MR", "LR", "CR", "VB", "DM", "EM", "FM", "W", "TM", "Z", "TC", "TS", "CC", "CS",
-    "CM", "VM",
+    "R", "B", "MR", "LR", "CR", "VB", "X", "Y", "DM", "EM", "FM", "W", "TM", "Z", "TC", "TS", "CC",
+    "CS", "CM", "VM",
 ];
 const RDC_DEVICE_TYPES: &[&str] = &[
     "R", "B", "MR", "LR", "CR", "DM", "EM", "FM", "ZF", "W", "TM", "Z", "T", "C", "CM", "X", "Y",
@@ -38,6 +40,8 @@ impl KvDeviceAddress {
         })?;
         let number = if uses_bit_bank_address(&self.device_type) {
             format_bit_bank_number(self.number)
+        } else if uses_xym_bit_address(&self.device_type) {
+            format_xym_bit_number(self.number)
         } else if range.base == 16 {
             format!("{:X}", self.number)
         } else {
@@ -189,6 +193,10 @@ fn uses_bit_bank_address(device_type: &str) -> bool {
     matches!(device_type, "R" | "MR" | "LR" | "CR")
 }
 
+fn uses_xym_bit_address(device_type: &str) -> bool {
+    matches!(device_type, "X" | "Y")
+}
+
 fn is_valid_bit_bank_number(number: u32) -> bool {
     number % 100 <= 15
 }
@@ -197,6 +205,12 @@ fn format_bit_bank_number(number: u32) -> String {
     let bank = number / 100;
     let bit = number % 100;
     format!("{bank}{bit:02}")
+}
+
+fn format_xym_bit_number(number: u32) -> String {
+    let bank = number / 16;
+    let bit = number % 16;
+    format!("{bank}{bit:X}")
 }
 
 pub(crate) fn is_optimizable_read_named_device_type(device_type: &str) -> bool {
@@ -285,15 +299,20 @@ fn parse_device_internal(
         HostLinkError::protocol(format!("Unsupported device type: {device_type}"))
     })?;
 
-    let number = u32::from_str_radix(&number_text, range.base).map_err(|_| {
-        HostLinkError::protocol(format!(
-            "Invalid device number for {device_type}: {number_text}"
-        ))
-    })?;
+    let number = if uses_xym_bit_address(&device_type) {
+        parse_xym_bit_number(&device_type, &number_text)?
+    } else {
+        u32::from_str_radix(&number_text, range.base).map_err(|_| {
+            HostLinkError::protocol(format!(
+                "Invalid device number for {device_type}: {number_text}"
+            ))
+        })?
+    };
     if number < range.lo || number > range.hi {
         return Err(HostLinkError::protocol(format!(
             "Device number out of range: {device_type}{number_text} (allowed: {}..{})",
-            range.lo, range.hi
+            format_device_number(&device_type, range.lo),
+            format_device_number(&device_type, range.hi)
         )));
     }
     if uses_bit_bank_address(&device_type) && !is_valid_bit_bank_number(number) {
@@ -426,8 +445,8 @@ pub fn validate_device_span(
         .ok_or_else(|| HostLinkError::protocol("Device span overflow"))?;
 
     if start_number < range.lo || start_number > range.hi || end_number > range.hi {
-        let start_text = format_number(start_number, range.base);
-        let end_text = format_number(end_number, range.base);
+        let start_text = format_device_number(device_type, start_number);
+        let end_text = format_device_number(device_type, end_number);
         return Err(HostLinkError::protocol(format!(
             "Device span out of range: {device_type}{start_text}..{device_type}{end_text} with format '{effective_format}'"
         )));
@@ -509,12 +528,53 @@ fn extract_suffix(raw: &str) -> Result<(&str, String), HostLinkError> {
     }
 }
 
-fn format_number(value: u32, base: u32) -> String {
-    if base == 16 {
+fn format_device_number(device_type: &str, value: u32) -> String {
+    if uses_bit_bank_address(device_type) {
+        return format_bit_bank_number(value);
+    }
+    if uses_xym_bit_address(device_type) {
+        return format_xym_bit_number(value);
+    }
+
+    let Some(range) = device_range(device_type) else {
+        return value.to_string();
+    };
+    if range.base == 16 {
         format!("{value:X}")
     } else {
         value.to_string()
     }
+}
+
+fn parse_xym_bit_number(device_type: &str, number_text: &str) -> Result<u32, HostLinkError> {
+    let bank_text = if number_text.len() == 1 {
+        "0"
+    } else {
+        &number_text[..number_text.len() - 1]
+    };
+    if !bank_text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(HostLinkError::protocol(format!(
+            "Invalid X/Y device number: {device_type}{number_text} (bank digits must be decimal and bit digit must be 0..F)"
+        )));
+    }
+
+    let bank = u32::from_str_radix(bank_text, 10).map_err(|_| {
+        HostLinkError::protocol(format!(
+            "Invalid device number for {device_type}: {number_text}"
+        ))
+    })?;
+    let bit = u32::from_str_radix(&number_text[number_text.len() - 1..], 16).map_err(|_| {
+        HostLinkError::protocol(format!(
+            "Invalid device number for {device_type}: {number_text}"
+        ))
+    })?;
+    bank.checked_mul(16)
+        .and_then(|value| value.checked_add(bit))
+        .ok_or_else(|| {
+            HostLinkError::protocol(format!(
+                "Invalid device number for {device_type}: {number_text}"
+            ))
+        })
 }
 
 fn device_range(device_type: &str) -> Option<DeviceRange> {
@@ -606,13 +666,13 @@ fn device_range(device_type: &str) -> Option<DeviceRange> {
         },
         "X" => DeviceRange {
             lo: 0,
-            hi: 0x1999F,
-            base: 16,
+            hi: 1_999 * 16 + 15,
+            base: 10,
         },
         "Y" => DeviceRange {
             lo: 0,
-            hi: 0x63999F,
-            base: 16,
+            hi: 63_999 * 16 + 15,
+            base: 10,
         },
         "M" => DeviceRange {
             lo: 0,
@@ -704,7 +764,31 @@ mod tests {
     }
 
     #[test]
+    fn parse_device_uses_decimal_bank_hex_bit_for_xym_bits() {
+        let address = parse_device("X390").unwrap();
+        assert_eq!(address.device_type, "X");
+        assert_eq!(address.number, 39 * 16);
+        assert_eq!(address.to_text().unwrap(), "X390");
+
+        assert_eq!(
+            parse_device("X3F0").unwrap_err().to_string(),
+            "Invalid X/Y device number: X3F0 (bank digits must be decimal and bit digit must be 0..F)"
+        );
+        assert_eq!(parse_device("X1999F").unwrap().to_text().unwrap(), "X1999F");
+        assert!(parse_device("X20000").is_err());
+        assert_eq!(
+            parse_device("Y63999F").unwrap().to_text().unwrap(),
+            "Y63999F"
+        );
+        assert!(parse_device("Y640000").is_err());
+    }
+
+    #[test]
     fn validate_device_span_allows_xym_m_upper_bound() {
+        validate_device_span("X", 1_999 * 16 + 15, "", 1).unwrap();
+        assert!(validate_device_span("X", 1_999 * 16 + 15, "", 2).is_err());
+        validate_device_span("Y", 63_999 * 16 + 15, "", 1).unwrap();
+        assert!(validate_device_span("Y", 63_999 * 16 + 15, "", 2).is_err());
         validate_device_span("M", 63_998, "", 1).unwrap();
         validate_device_span("M", 63_998, "", 2).unwrap();
         assert!(validate_device_span("M", 63_999, "", 2).is_err());

@@ -15,6 +15,7 @@ struct FrameVector {
     id: String,
     command: String,
     device: Option<String>,
+    devices: Option<Vec<String>>,
     count: Option<usize>,
     value: Option<i32>,
     values: Option<Vec<i32>>,
@@ -96,6 +97,14 @@ async fn run_vector(
                     None,
                 )
                 .await?;
+        }
+        "register_monitor_bits" => {
+            let devices = vector.devices.as_ref().unwrap();
+            client.register_monitor_bits(devices).await?;
+        }
+        "register_monitor_words" => {
+            let devices = vector.devices.as_ref().unwrap();
+            client.register_monitor_words(devices).await?;
         }
         "write" => {
             client
