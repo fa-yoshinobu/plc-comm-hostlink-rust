@@ -87,6 +87,27 @@ async fn read_named_direct_bits_use_unsuffixed_rd_commands() {
 }
 
 #[tokio::test]
+async fn read_named_batches_xym_direct_bits_with_hostlink_notation() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RDS X100 2" => "1 0".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let result = client.read_named(&["X100", "X101"]).await.unwrap();
+    assert_eq!(result["X100"], HostLinkValue::Bool(true));
+    assert_eq!(result["X101"], HostLinkValue::Bool(false));
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RDS X100 2"]
+    );
+}
+
+#[tokio::test]
 async fn read_named_batches_contiguous_direct_bit_reads() {
     let (port, received) = start_scripted_server(|command| match command.as_str() {
         "RDS R000 4" => "1 0 1 0".to_owned(),
