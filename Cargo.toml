@@ -1,15 +1,19 @@
 [package]
 name = "plc-comm-hostlink-rust"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.85"
 description = "Async Rust Host Link client based on plc-comm-hostlink-dotnet"
 license = "MIT"
 readme = "README.md"
+repository = "https://github.com/fa-yoshinobu/plc-comm-hostlink-rust"
+homepage = "https://github.com/fa-yoshinobu/plc-comm-hostlink-rust"
+documentation = "https://docs.rs/plc-comm-hostlink-rust"
 keywords = ["plc", "keyence", "hostlink", "async", "tokio"]
 categories = ["network-programming", "asynchronous"]
 include = [
     "Cargo.toml",
+    "CHANGELOG.md",
     "README.md",
     "docs/**",
     "src/**",
