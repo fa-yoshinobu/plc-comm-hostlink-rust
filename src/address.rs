@@ -558,7 +558,7 @@ fn parse_xym_bit_number(device_type: &str, number_text: &str) -> Result<u32, Hos
         )));
     }
 
-    let bank = u32::from_str_radix(bank_text, 10).map_err(|_| {
+    let bank = bank_text.parse::<u32>().map_err(|_| {
         HostLinkError::protocol(format!(
             "Invalid device number for {device_type}: {number_text}"
         ))
