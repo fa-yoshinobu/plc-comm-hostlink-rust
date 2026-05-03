@@ -1,7 +1,8 @@
 use futures_util::{StreamExt, pin_mut};
 use plc_comm_hostlink::{
-    HostLinkConnectionOptions, HostLinkValue, open_and_connect, read_comments, read_dwords,
-    read_named, read_words, write_bit_in_word,
+    HostLinkConnectionOptions, HostLinkValue, KvDeviceRangeCatalog, KvDeviceRangeEntry,
+    KvDeviceRangeSegment, open_and_connect, read_comments, read_dwords, read_named, read_words,
+    write_bit_in_word,
 };
 use serde_json::{Value, json};
 
@@ -62,6 +63,14 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
     let client = open_and_connect(options).await?;
 
     let result = match command.as_str() {
+        "query-model" => {
+            let model = client.inner_client().query_model().await?;
+            json!({"status": "success", "code": model.code, "model": model.model})
+        }
+        "range-catalog" | "read-device-range-catalog" => {
+            let catalog = client.inner_client().read_device_range_catalog().await?;
+            json!({"status": "success", "catalog": normalize_catalog(&catalog)})
+        }
         "write-typed" => {
             if dtype.trim().is_empty() || extra.is_empty() {
                 json!({"status": "error", "message": "write-typed requires --dtype and one value"})
@@ -149,6 +158,48 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
 
     let _ = client.close().await;
     Ok(result)
+}
+
+fn normalize_catalog(catalog: &KvDeviceRangeCatalog) -> Value {
+    json!({
+        "model": catalog.model,
+        "modelCode": catalog.model_code,
+        "hasModelCode": catalog.has_model_code,
+        "requestedModel": catalog.requested_model,
+        "resolvedModel": catalog.resolved_model,
+        "entries": catalog.entries.iter().map(normalize_entry).collect::<Vec<_>>(),
+    })
+}
+
+fn normalize_entry(entry: &KvDeviceRangeEntry) -> Value {
+    json!({
+        "device": entry.device,
+        "deviceType": entry.device_type,
+        "category": format!("{:?}", entry.category),
+        "isBitDevice": entry.is_bit_device,
+        "notation": format!("{:?}", entry.notation),
+        "supported": entry.supported,
+        "lowerBound": entry.lower_bound,
+        "upperBound": entry.upper_bound,
+        "pointCount": entry.point_count,
+        "addressRange": entry.address_range,
+        "source": entry.source,
+        "notes": entry.notes,
+        "segments": entry.segments.iter().map(normalize_segment).collect::<Vec<_>>(),
+    })
+}
+
+fn normalize_segment(segment: &KvDeviceRangeSegment) -> Value {
+    json!({
+        "device": segment.device,
+        "category": format!("{:?}", segment.category),
+        "isBitDevice": segment.is_bit_device,
+        "notation": format!("{:?}", segment.notation),
+        "lowerBound": segment.lower_bound,
+        "upperBound": segment.upper_bound,
+        "pointCount": segment.point_count,
+        "addressRange": segment.address_range,
+    })
 }
 
 fn parse_typed_value(dtype: &str, raw: &str) -> Result<HostLinkValue, Box<dyn std::error::Error>> {
