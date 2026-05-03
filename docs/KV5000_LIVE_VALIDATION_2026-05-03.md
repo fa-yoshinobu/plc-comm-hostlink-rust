@@ -56,3 +56,43 @@ Observed:
   - `DM120=26801`
   - CPU state `Run`
 
+## Device Range Sample Compare
+
+Command:
+
+```bash
+KV_SAMPLE_POINTS=10 cargo run --features cli --example kv_device_range_sample_compare -- 192.168.250.100 8501
+```
+
+Behavior:
+
+- Uses the live range catalog resolved from `?M` (`KV-3000/5000`, model code `52`).
+- Samples up to 10 addresses per device: first, second, middle/quarter points, and last.
+- Performs read, write A, readback A, write B, readback B, and restore.
+- `R` write samples start at `R200` to avoid the current PLC's real I/O at `R0`.
+- The command exits non-zero when NG is present. This is intentional; NG is not hidden.
+
+Summary:
+
+- `passed=148`
+- `read_failed=20`
+- `write_failed=8`
+- `readback_failed=2`
+- `restore_failed=0`
+- `skipped=0`
+- `unsupported=2`
+
+OK devices:
+
+- Bit: `R`, `B`, `MR`, `LR`, `CR`
+- Word: `CM`, `DM`, `EM`, `FM`, `ZF`, `W`, `TM`, `VM`, `Z`
+
+NG / untested devices:
+
+- `T`: 10 samples all `read_failed`, `E0: Abnormal device No.`
+- `C`: 10 samples all `read_failed`, `E0: Abnormal device No.`
+- `VB`: `VB0` and `VB1` `readback_failed`; remaining 8 samples passed.
+- `AT`: 8 samples all `write_failed`, `E1: Abnormal command`.
+- `CTH`, `CTC`: catalog entries exist, but the current Rust parser/client does not support these device types yet.
+
+No restore failure was observed.

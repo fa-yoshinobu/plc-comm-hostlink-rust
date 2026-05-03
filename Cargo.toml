@@ -38,6 +38,11 @@ name = "basic_high_level"
 path = "examples/basic_high_level.rs"
 required-features = ["cli"]
 
+[[example]]
+name = "kv_device_range_sample_compare"
+path = "examples/kv_device_range_sample_compare.rs"
+required-features = ["cli"]
+
 [dependencies]
 async-stream = "0.3"
 encoding_rs = "0.8"
