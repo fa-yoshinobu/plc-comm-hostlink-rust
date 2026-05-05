@@ -23,6 +23,8 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
+const UDP_RECEIVE_BUFFER_SIZE: usize = 65_535;
+
 pub trait HostLinkPayloadValue {
     fn format_for_suffix(&self, data_format: &str) -> String;
 
@@ -161,7 +163,7 @@ impl HostLinkClient {
                 rx_start: 0,
                 rx_count: 0,
                 tcp_read_buf: vec![0u8; 8192],
-                udp_read_buf: vec![0u8; 4096],
+                udp_read_buf: vec![0u8; UDP_RECEIVE_BUFFER_SIZE],
             })),
         }
     }
@@ -963,8 +965,10 @@ async fn recv_udp_with_timeout(
     buffer: &mut Vec<u8>,
     duration: Duration,
 ) -> Result<(), HostLinkError> {
-    if buffer.len() != 4096 {
-        buffer.resize(4096, 0);
+    if buffer.len() != UDP_RECEIVE_BUFFER_SIZE {
+        // UDP datagrams cannot be continued by another recv call.
+        // Keep the buffer large enough for a full datagram to avoid truncating PLC responses.
+        buffer.resize(UDP_RECEIVE_BUFFER_SIZE, 0);
     }
     let read = timeout(duration, socket.recv(buffer.as_mut_slice()))
         .await

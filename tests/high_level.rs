@@ -1,12 +1,12 @@
 use encoding_rs::SHIFT_JIS;
 use futures_util::{StreamExt, pin_mut};
 use plc_comm_hostlink::{
-    HostLinkClient, HostLinkConnectionOptions, HostLinkValue, open_and_connect, read_comments,
-    read_dwords_chunked, read_typed, write_dwords_chunked,
+    HostLinkClient, HostLinkConnectionOptions, HostLinkTransportMode, HostLinkValue,
+    open_and_connect, read_comments, read_dwords_chunked, read_typed, write_dwords_chunked,
 };
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, UdpSocket};
 
 #[tokio::test]
 async fn read_named_batches_contiguous_word_reads() {
@@ -39,6 +39,29 @@ async fn read_named_batches_contiguous_word_reads() {
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
         vec!["RDS DM100.U 8"]
     );
+}
+
+#[tokio::test]
+async fn udp_send_raw_accepts_large_datagram_response() {
+    let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let port = socket.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let mut request = vec![0u8; 1024];
+        let (_read, peer) = socket.recv_from(&mut request).await.unwrap();
+        let mut response = "7".repeat(5000).into_bytes();
+        response.extend_from_slice(b"\r\n");
+        socket.send_to(&response, peer).await.unwrap();
+    });
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.transport = HostLinkTransportMode::Udp;
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let response = client.send_raw("LARGE").await.unwrap();
+
+    assert_eq!(response.len(), 5000);
+    assert!(response.chars().all(|ch| ch == '7'));
 }
 
 #[tokio::test]
