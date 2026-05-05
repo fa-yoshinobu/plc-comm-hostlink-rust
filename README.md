@@ -2,6 +2,10 @@
 
 # KV Host Link Protocol for Rust
 
+[![CI](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/actions/workflows/ci.yml)
+
+[![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)](https://www.rust-lang.org/)
+
 Async Rust implementation of the KEYENCE KV Host Link protocol, aligned with
 `plc-comm-hostlink-dotnet` and the shared `plc-comm-hostlink-cross-verify`
 harness.
