@@ -1,7 +1,8 @@
 use crate::address::{
-    KvDeviceAddress, is_direct_bit_device_type, is_optimizable_read_named_device_type,
-    offset_device, parse_device, parse_logical_address, parse_named_address_parts,
-    resolve_effective_format, validate_device_count, validate_device_span,
+    KvDeviceAddress, bit_bank_logical_number, is_direct_bit_device_type,
+    is_optimizable_read_named_device_type, offset_device, parse_device, parse_logical_address,
+    parse_named_address_parts, resolve_effective_format, uses_bit_bank_address,
+    validate_device_count, validate_device_span,
 };
 use crate::client::{HostLinkClient, HostLinkPayloadValue};
 use crate::error::HostLinkError;
@@ -23,7 +24,7 @@ pub enum HostLinkValue {
 
 pub type NamedSnapshot = IndexMap<String, HostLinkValue>;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReadPlanValueKind {
     Unsigned16,
     Signed16,
@@ -390,7 +391,7 @@ pub(crate) fn compile_read_named_plan(addresses: &[String]) -> Option<CompiledRe
         let mut sorted = bucket.clone();
         sorted.sort_by_key(|request| {
             (
-                request.base_address.number,
+                read_plan_number(request),
                 usize::MAX - get_word_width(request.kind),
             )
         });
@@ -402,7 +403,7 @@ pub(crate) fn compile_read_named_plan(addresses: &[String]) -> Option<CompiledRe
         let mut current_mode: Option<ReadPlanSegmentMode> = None;
 
         for request in sorted {
-            let request_start = request.base_address.number;
+            let request_start = read_plan_number(&request);
             let request_end_exclusive = request_start + get_word_width(request.kind) as u32;
             let request_mode = segment_mode_for_kind(request.kind);
             if current_start.is_none()
@@ -461,7 +462,7 @@ pub(crate) async fn execute_read_named_plan(
                 let words =
                     read_words(client, &segment.start_address.to_text()?, segment.count).await?;
                 for request in &segment.requests {
-                    let offset = (request.base_address.number - segment.start_number) as usize;
+                    let offset = (read_plan_number(request) - segment.start_number) as usize;
                     resolved[request.index] =
                         resolve_planned_value(&words, offset, request.kind, request.bit_index)?;
                 }
@@ -471,7 +472,7 @@ pub(crate) async fn execute_read_named_plan(
                     .read_consecutive(&segment.start_address.to_text()?, segment.count, None)
                     .await?;
                 for request in &segment.requests {
-                    let offset = (request.base_address.number - segment.start_number) as usize;
+                    let offset = (read_plan_number(request) - segment.start_number) as usize;
                     resolved[request.index] = resolve_direct_bit_value(&tokens, offset)?;
                 }
             }
@@ -740,6 +741,16 @@ fn get_word_width(kind: ReadPlanValueKind) -> usize {
         | ReadPlanValueKind::Signed32
         | ReadPlanValueKind::Float32 => 2,
         _ => 1,
+    }
+}
+
+fn read_plan_number(request: &ReadPlanRequest) -> u32 {
+    if request.kind == ReadPlanValueKind::DirectBit
+        && uses_bit_bank_address(&request.base_address.device_type)
+    {
+        bit_bank_logical_number(request.base_address.number)
+    } else {
+        request.base_address.number
     }
 }
 

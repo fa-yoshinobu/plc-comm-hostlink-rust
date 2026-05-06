@@ -189,7 +189,7 @@ pub(crate) fn is_direct_bit_device_type(device_type: &str) -> bool {
     )
 }
 
-fn uses_bit_bank_address(device_type: &str) -> bool {
+pub(crate) fn uses_bit_bank_address(device_type: &str) -> bool {
     matches!(device_type, "R" | "MR" | "LR" | "CR")
 }
 
@@ -199,6 +199,14 @@ fn uses_xym_bit_address(device_type: &str) -> bool {
 
 fn is_valid_bit_bank_number(number: u32) -> bool {
     number % 100 <= 15
+}
+
+pub(crate) fn bit_bank_logical_number(number: u32) -> u32 {
+    (number / 100) * 16 + (number % 100)
+}
+
+fn bit_bank_number_from_logical(number: u32) -> u32 {
+    (number / 16) * 100 + (number % 16)
 }
 
 fn format_bit_bank_number(number: u32) -> String {
@@ -222,10 +230,16 @@ pub(crate) fn offset_device(
     word_offset: u32,
 ) -> Result<String, HostLinkError> {
     let mut next = start.clone();
-    next.number = next
-        .number
-        .checked_add(word_offset)
-        .ok_or_else(|| HostLinkError::protocol("Device offset overflow"))?;
+    next.number = if uses_bit_bank_address(&next.device_type) {
+        let logical = bit_bank_logical_number(next.number)
+            .checked_add(word_offset)
+            .ok_or_else(|| HostLinkError::protocol("Device offset overflow"))?;
+        bit_bank_number_from_logical(logical)
+    } else {
+        next.number
+            .checked_add(word_offset)
+            .ok_or_else(|| HostLinkError::protocol("Device offset overflow"))?
+    };
     next.suffix.clear();
     next.to_text()
 }
@@ -439,13 +453,28 @@ pub fn validate_device_span(
     } else {
         1u32
     };
-    let end_number = start_number
+    let start_span_number = if uses_bit_bank_address(device_type) {
+        bit_bank_logical_number(start_number)
+    } else {
+        start_number
+    };
+    let hi_span_number = if uses_bit_bank_address(device_type) {
+        bit_bank_logical_number(range.hi)
+    } else {
+        range.hi
+    };
+    let end_span_number = start_span_number
         .checked_add((count as u32).saturating_mul(word_width))
         .and_then(|value| value.checked_sub(1))
         .ok_or_else(|| HostLinkError::protocol("Device span overflow"))?;
 
-    if start_number < range.lo || start_number > range.hi || end_number > range.hi {
+    if start_number < range.lo || start_number > range.hi || end_span_number > hi_span_number {
         let start_text = format_device_number(device_type, start_number);
+        let end_number = if uses_bit_bank_address(device_type) {
+            bit_bank_number_from_logical(end_span_number)
+        } else {
+            end_span_number
+        };
         let end_text = format_device_number(device_type, end_number);
         return Err(HostLinkError::protocol(format!(
             "Device span out of range: {device_type}{start_text}..{device_type}{end_text} with format '{effective_format}'"
@@ -701,7 +730,9 @@ fn device_range(device_type: &str) -> Option<DeviceRange> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HostLinkAddress, parse_device, parse_logical_address, validate_device_span};
+    use super::{
+        HostLinkAddress, offset_device, parse_device, parse_logical_address, validate_device_span,
+    };
 
     #[test]
     fn parse_device_normalizes_hex_suffix_and_number() {
@@ -755,6 +786,21 @@ mod tests {
         assert_eq!(parse_device("MR115").unwrap().to_text().unwrap(), "MR115");
         assert_eq!(parse_device("CR0").unwrap().to_text().unwrap(), "CR000");
         assert_eq!(parse_device("CR7915").unwrap().to_text().unwrap(), "CR7915");
+    }
+
+    #[test]
+    fn bit_bank_offsets_cross_bank_boundaries_by_bit_position() {
+        let start = parse_device("CR3614").unwrap();
+        assert_eq!(offset_device(&start, 0).unwrap(), "CR3614");
+        assert_eq!(offset_device(&start, 1).unwrap(), "CR3615");
+        assert_eq!(offset_device(&start, 2).unwrap(), "CR3700");
+        assert_eq!(offset_device(&start, 18).unwrap(), "CR3800");
+    }
+
+    #[test]
+    fn validate_device_span_uses_bit_bank_point_count() {
+        validate_device_span("CR", 7900, "", 16).unwrap();
+        assert!(validate_device_span("CR", 7900, "", 17).is_err());
     }
 
     #[test]
