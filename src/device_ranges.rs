@@ -430,10 +430,27 @@ fn parse_segment_number(
     if trimmed.is_empty() {
         return None;
     }
+    if matches!(default_device, "X" | "Y") {
+        return parse_xym_segment_number(trimmed);
+    }
     match notation {
         KvDeviceRangeNotation::Decimal => trimmed.parse().ok(),
         KvDeviceRangeNotation::Hexadecimal => u32::from_str_radix(trimmed, 16).ok(),
     }
+}
+
+fn parse_xym_segment_number(text: &str) -> Option<u32> {
+    let (bank_text, bit_text) = text.split_at(text.len().saturating_sub(1));
+    if !bank_text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let bank = if bank_text.is_empty() {
+        0
+    } else {
+        bank_text.parse::<u32>().ok()?
+    };
+    let bit = u32::from_str_radix(bit_text, 16).ok()?;
+    bank.checked_mul(16)?.checked_add(bit)
 }
 
 fn device_metadata(device_type: &str) -> (KvDeviceRangeCategory, bool) {
@@ -582,8 +599,8 @@ mod tests {
         assert!(entry.is_bit_device);
         assert_eq!(entry.notation, KvDeviceRangeNotation::Hexadecimal);
         assert_eq!(entry.lower_bound, 0);
-        assert_eq!(entry.upper_bound, Some(0x999F));
-        assert_eq!(entry.point_count, Some(0x99A0));
+        assert_eq!(entry.upper_bound, Some(999 * 16 + 15));
+        assert_eq!(entry.point_count, Some(1_000 * 16));
         assert_eq!(entry.address_range.as_deref(), Some("X0-999F,Y0-999F"));
         assert!(
             entry
@@ -598,14 +615,27 @@ mod tests {
             entry.segments[0].notation,
             KvDeviceRangeNotation::Hexadecimal
         );
+        assert_eq!(entry.segments[0].lower_bound, 0);
+        assert_eq!(entry.segments[0].upper_bound, Some(999 * 16 + 15));
+        assert_eq!(entry.segments[0].point_count, Some(1_000 * 16));
         assert_eq!(entry.segments[0].address_range, "X0-999F");
         assert_eq!(entry.segments[1].device, "Y");
         assert_eq!(
             entry.segments[1].notation,
             KvDeviceRangeNotation::Hexadecimal
         );
+        assert_eq!(entry.segments[1].lower_bound, 0);
+        assert_eq!(entry.segments[1].upper_bound, Some(999 * 16 + 15));
+        assert_eq!(entry.segments[1].point_count, Some(1_000 * 16));
         assert_eq!(entry.segments[1].address_range, "Y0-999F");
         assert_eq!(catalog.entry("X").unwrap().device_type, "R");
+
+        let kv8000 = device_range_catalog_for_model("KV-8000(XYM)").unwrap();
+        let r = kv8000.entry("R").unwrap();
+        assert_eq!(r.upper_bound, Some(1_999 * 16 + 15));
+        assert_eq!(r.point_count, Some(2_000 * 16));
+        assert_eq!(r.segments[0].upper_bound, Some(1_999 * 16 + 15));
+        assert_eq!(r.segments[1].upper_bound, Some(1_999 * 16 + 15));
 
         let dm = catalog.entry("DM").unwrap();
         assert_eq!(dm.device, "D");

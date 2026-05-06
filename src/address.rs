@@ -671,7 +671,7 @@ fn device_range(device_type: &str) -> Option<DeviceRange> {
         },
         "Y" => DeviceRange {
             lo: 0,
-            hi: 63_999 * 16 + 15,
+            hi: 1_999 * 16 + 15,
             base: 10,
         },
         "M" => DeviceRange {
@@ -776,19 +776,16 @@ mod tests {
         );
         assert_eq!(parse_device("X1999F").unwrap().to_text().unwrap(), "X1999F");
         assert!(parse_device("X20000").is_err());
-        assert_eq!(
-            parse_device("Y63999F").unwrap().to_text().unwrap(),
-            "Y63999F"
-        );
-        assert!(parse_device("Y640000").is_err());
+        assert_eq!(parse_device("Y1999F").unwrap().to_text().unwrap(), "Y1999F");
+        assert!(parse_device("Y20000").is_err());
     }
 
     #[test]
     fn validate_device_span_allows_xym_m_upper_bound() {
         validate_device_span("X", 1_999 * 16 + 15, "", 1).unwrap();
         assert!(validate_device_span("X", 1_999 * 16 + 15, "", 2).is_err());
-        validate_device_span("Y", 63_999 * 16 + 15, "", 1).unwrap();
-        assert!(validate_device_span("Y", 63_999 * 16 + 15, "", 2).is_err());
+        validate_device_span("Y", 1_999 * 16 + 15, "", 1).unwrap();
+        assert!(validate_device_span("Y", 1_999 * 16 + 15, "", 2).is_err());
         validate_device_span("M", 63_998, "", 1).unwrap();
         validate_device_span("M", 63_998, "", 2).unwrap();
         assert!(validate_device_span("M", 63_999, "", 2).is_err());

@@ -28,8 +28,11 @@ protocols with minimal branching:
 - `lower_bound`, `upper_bound`, and `point_count` are parsed from that published range text.
 - `segments` splits comma-separated alias ranges such as `X0-999F,Y0-999F`.
 - `entry(device)` matches the original row, the primary published device, or any segment alias.
-- `notation` follows the published device notation. Most rows match the `Base` column directly, and
-  XYM alias devices such as `X` and `Y` switch to `Hexadecimal`.
+- `notation` follows the published device notation. Most rows match the `Base` column directly.
+  XYM alias devices such as `X` and `Y` expose a hexadecimal low bit digit, but the digits before
+  that bit are decimal (`X1999F` means bank `1999`, bit `F`).
+- For XYM `X`/`Y` ranges, `lower_bound`, `upper_bound`, and `point_count` use the linear parsed
+  index (`bank * 16 + bit`) while `address_range` keeps the published text.
 - Multi-alias rows such as `R(XYM)` keep `device = R` and publish alias details in `segments` with a note.
 
 ## Source Corrections
@@ -143,8 +146,8 @@ GitHub-style Markdown renderers.
 - XYM columns may remap the same logical row to alias devices such as `X`, `Y`,
   `D`, `E`, `F`, `M`, and `L`.
 - Low-level address parsing and span validation in `src/address.rs` are expected
-  to stay aligned with these published XYM alias limits. In particular, `M`
-  accepts `0..63999`, while `L` remains `0..15999`.
+  to stay aligned with these published XYM alias limits. In particular, `X`
+  and `Y` accept `0..1999F`, `M` accepts `0..63999`, and `L` remains `0..15999`.
 - The crate keeps unsupported rows in the catalog and marks them with
   `supported = false`.
 - If the catalog changes, update both `src/device_ranges.rs` and this document together.
