@@ -521,11 +521,7 @@ fn sample_numbers_between(lower_bound: u32, upper_bound: u32, count: usize) -> V
             break;
         }
         let denominator = count.saturating_sub(1) as u64;
-        let offset = if denominator == 0 {
-            0
-        } else {
-            (index as u64 * span) / denominator
-        };
+        let offset = (index as u64 * span).checked_div(denominator).unwrap_or(0);
         selected.insert((lower + offset) as u32);
     }
 
