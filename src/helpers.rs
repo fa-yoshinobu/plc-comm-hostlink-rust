@@ -127,19 +127,44 @@ pub async fn read_typed(
             read_single_parsed(client, &device, Some("S"), "Invalid signed 16-bit response")
                 .await?,
         )),
-        "D" => Ok(HostLinkValue::U32(
-            read_single_parsed::<u32>(
-                client,
-                &device,
-                Some("D"),
-                "Invalid unsigned 32-bit response",
-            )
-            .await?,
-        )),
-        "L" => Ok(HostLinkValue::I32(
-            read_single_parsed(client, &device, Some("L"), "Invalid signed 32-bit response")
-                .await?,
-        )),
+        "D" => {
+            if is_timer_counter_composite_device(&device)? {
+                let response = read_single_response(client, &device, Some("D")).await?;
+                Ok(HostLinkValue::U32(parse_last_token(
+                    &response,
+                    "Invalid unsigned 32-bit response",
+                )?))
+            } else {
+                Ok(HostLinkValue::U32(
+                    read_single_parsed::<u32>(
+                        client,
+                        &device,
+                        Some("D"),
+                        "Invalid unsigned 32-bit response",
+                    )
+                    .await?,
+                ))
+            }
+        }
+        "L" => {
+            if is_timer_counter_composite_device(&device)? {
+                let response = read_single_response(client, &device, Some("L")).await?;
+                Ok(HostLinkValue::I32(parse_last_token(
+                    &response,
+                    "Invalid signed 32-bit response",
+                )?))
+            } else {
+                Ok(HostLinkValue::I32(
+                    read_single_parsed(
+                        client,
+                        &device,
+                        Some("L"),
+                        "Invalid signed 32-bit response",
+                    )
+                    .await?,
+                ))
+            }
+        }
         "U" => Ok(HostLinkValue::U16(
             read_single_parsed::<u16>(
                 client,
@@ -198,11 +223,27 @@ fn parse_bool_token(token: &str) -> Result<bool, HostLinkError> {
     }
 }
 
-fn first_response_token(response_text: &str) -> Result<&str, HostLinkError> {
+fn response_tokens(response_text: &str) -> impl Iterator<Item = &str> {
     response_text
-        .split(' ')
-        .find(|token| !token.is_empty())
+        .split(|ch| ch == ' ' || ch == ',')
+        .filter(|token| !token.is_empty())
+}
+
+fn first_response_token(response_text: &str) -> Result<&str, HostLinkError> {
+    response_tokens(response_text)
+        .next()
         .ok_or_else(|| HostLinkError::protocol("Missing response token"))
+}
+
+fn last_response_token(response_text: &str) -> Result<&str, HostLinkError> {
+    response_tokens(response_text)
+        .last()
+        .ok_or_else(|| HostLinkError::protocol("Missing response token"))
+}
+
+fn is_timer_counter_composite_device(device: &str) -> Result<bool, HostLinkError> {
+    let address = parse_device(device)?;
+    Ok(matches!(address.device_type.as_str(), "T" | "C"))
 }
 
 fn parse_first_token<T: FromStr>(
@@ -214,12 +255,21 @@ fn parse_first_token<T: FromStr>(
         .map_err(|_| HostLinkError::protocol(invalid_message))
 }
 
+fn parse_last_token<T: FromStr>(
+    response_text: &str,
+    invalid_message: &'static str,
+) -> Result<T, HostLinkError> {
+    last_response_token(response_text)?
+        .parse::<T>()
+        .map_err(|_| HostLinkError::protocol(invalid_message))
+}
+
 fn parse_all_tokens<T: FromStr>(
     response_text: &str,
     invalid_message: &'static str,
 ) -> Result<Vec<T>, HostLinkError> {
     let mut values = Vec::new();
-    for token in response_text.split(' ').filter(|token| !token.is_empty()) {
+    for token in response_tokens(response_text) {
         values.push(
             token
                 .parse::<T>()

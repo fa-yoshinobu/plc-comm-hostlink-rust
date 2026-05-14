@@ -16,6 +16,10 @@ the public Python, .NET, and Node-RED Host Link libraries.
 - queued high-level helper API for typed reads/writes, comment reads, named snapshots, and polling
 - `hostlink_verify_client` wrapper binary for diagnostics and compatibility checks
 
+`T` / `C` preset writes use Host Link `WS` / `WSS` only on KV-8000/7000-series
+CPU units. Manuals state that other CPU units do not support those commands
+and return abnormal response `E1` when they are executed.
+
 ## Installation
 
 ```bash

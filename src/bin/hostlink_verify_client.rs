@@ -213,6 +213,32 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                 json!({"status": "success"})
             }
         }
+        "write-set-value" => {
+            if dtype.trim().is_empty() || extra.is_empty() {
+                json!({"status": "error", "message": "write-set-value requires --dtype and one value"})
+            } else {
+                client
+                    .inner_client()
+                    .write_set_value(&address, extra[0].parse::<i64>()?, Some(&dtype))
+                    .await?;
+                json!({"status": "success"})
+            }
+        }
+        "write-set-values" => {
+            if dtype.trim().is_empty() || extra.is_empty() {
+                json!({"status": "error", "message": "write-set-values requires --dtype and at least one value"})
+            } else {
+                let values = extra
+                    .iter()
+                    .map(|item| item.parse::<i64>())
+                    .collect::<Result<Vec<_>, _>>()?;
+                client
+                    .inner_client()
+                    .write_set_value_consecutive(&address, &values, Some(&dtype))
+                    .await?;
+                json!({"status": "success"})
+            }
+        }
         "read-typed" => {
             if dtype.trim().is_empty() {
                 json!({"status": "error", "message": "read-typed requires --dtype"})
