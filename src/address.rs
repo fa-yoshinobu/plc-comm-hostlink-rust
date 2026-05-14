@@ -172,7 +172,8 @@ pub(crate) fn ws_device_types() -> &'static [&'static str] {
 pub(crate) fn default_format_by_device_type(device_type: &str) -> &'static str {
     match device_type {
         "R" | "B" | "MR" | "LR" | "CR" | "VB" | "X" | "Y" | "M" | "L" => "",
-        "DM" | "EM" | "FM" | "ZF" | "W" | "TM" | "Z" | "AT" | "CM" | "VM" | "D" | "E" | "F" => ".U",
+        "DM" | "EM" | "FM" | "ZF" | "W" | "TM" | "Z" | "CM" | "VM" | "D" | "E" | "F" => ".U",
+        "AT" => ".D",
         "T" | "TC" | "TS" | "C" | "CC" | "CS" => ".D",
         _ => "",
     }
@@ -448,7 +449,9 @@ pub fn validate_device_span(
         ));
     }
 
-    let word_width = if matches!(effective_format, ".D" | ".L") {
+    let word_width = if device_type == "AT" {
+        1u32
+    } else if matches!(effective_format, ".D" | ".L") {
         2u32
     } else {
         1u32
@@ -804,6 +807,13 @@ mod tests {
     }
 
     #[test]
+    fn validate_device_span_treats_at_32bit_as_device_points() {
+        validate_device_span("AT", 7, ".D", 1).unwrap();
+        validate_device_span("AT", 0, ".D", 8).unwrap();
+        assert!(validate_device_span("AT", 1, ".D", 8).is_err());
+    }
+
+    #[test]
     fn parse_device_accepts_high_xym_m_addresses() {
         assert_eq!(parse_device("M63872").unwrap().to_text().unwrap(), "M63872");
         assert!(parse_device("M64000").is_err());
@@ -849,6 +859,13 @@ mod tests {
     fn parse_logical_counter_defaults_to_dword_read() {
         let logical = parse_logical_address("t0").unwrap();
         assert_eq!(logical.to_text().unwrap(), "T0");
+        assert_eq!(logical.data_type, "D");
+    }
+
+    #[test]
+    fn parse_logical_at_defaults_to_dword_read() {
+        let logical = parse_logical_address("at7").unwrap();
+        assert_eq!(logical.to_text().unwrap(), "AT7");
         assert_eq!(logical.data_type, "D");
     }
 }

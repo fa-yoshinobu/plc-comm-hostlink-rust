@@ -20,6 +20,9 @@ the public Python, .NET, and Node-RED Host Link libraries.
 CPU units. Manuals state that other CPU units do not support those commands
 and return abnormal response `E1` when they are executed.
 
+`AT` digital trimmer values are treated as 32-bit device points on PLC families
+that support them; `AT0` defaults to `AT0:D`, and `AT7:D` is a valid endpoint.
+
 ## Installation
 
 ```bash
