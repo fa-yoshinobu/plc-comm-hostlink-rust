@@ -105,6 +105,22 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                 json!({"status": "success"})
             }
         }
+        "switch-bank" => {
+            let bank_text = if address.trim().is_empty() {
+                extra.first().cloned().unwrap_or_default()
+            } else {
+                address.clone()
+            };
+            if bank_text.trim().is_empty() {
+                json!({"status": "error", "message": "switch-bank requires bank number"})
+            } else {
+                client
+                    .inner_client()
+                    .switch_bank(bank_text.parse()?)
+                    .await?;
+                json!({"status": "success"})
+            }
+        }
         "read-bit" => {
             let values = client.inner_client().read(&address, None).await?;
             json!({"status": "success", "value": values.first().cloned().unwrap_or_else(|| "0".to_owned())})
