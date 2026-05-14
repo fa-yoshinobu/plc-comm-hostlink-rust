@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-05-14
+
+### Added
+- Added `TimerCounterValue` plus `read_timer_counter`, `read_timer`, and
+  `read_counter` helpers for full `T` / `C` composite values.
+- Added `read-timer-counter`, `read-timer`, and `read-counter` commands to the
+  verification wrapper.
+
 ### Changed
 - Documented that `WS` / `WSS` timer/counter preset writes are supported only
   by KV-8000/7000-series CPU units; other CPU units return abnormal response
