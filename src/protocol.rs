@@ -68,7 +68,7 @@ pub fn ensure_success(response_text: String) -> Result<String, HostLinkError> {
 
 pub fn split_data_tokens(response_text: &str) -> Vec<String> {
     response_text
-        .split(|ch| ch == ' ' || ch == ',')
+        .split([' ', ','])
         .filter(|token| !token.is_empty())
         .map(ToOwned::to_owned)
         .collect()

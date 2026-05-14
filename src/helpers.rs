@@ -282,7 +282,7 @@ fn parse_bool_token(token: &str) -> Result<bool, HostLinkError> {
 
 fn response_tokens(response_text: &str) -> impl Iterator<Item = &str> {
     response_text
-        .split(|ch| ch == ' ' || ch == ',')
+        .split([' ', ','])
         .filter(|token| !token.is_empty())
 }
 
