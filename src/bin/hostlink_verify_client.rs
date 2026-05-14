@@ -124,6 +124,28 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             client.inner_client().forced_reset(&address).await?;
             json!({"status": "success"})
         }
+        "forced-set-consecutive" => {
+            if extra.is_empty() {
+                json!({"status": "error", "message": "forced-set-consecutive requires count"})
+            } else {
+                client
+                    .inner_client()
+                    .forced_set_consecutive(&address, extra[0].parse()?)
+                    .await?;
+                json!({"status": "success"})
+            }
+        }
+        "forced-reset-consecutive" => {
+            if extra.is_empty() {
+                json!({"status": "error", "message": "forced-reset-consecutive requires count"})
+            } else {
+                client
+                    .inner_client()
+                    .forced_reset_consecutive(&address, extra[0].parse()?)
+                    .await?;
+                json!({"status": "success"})
+            }
+        }
         "monitor-bits" => {
             let devices = ([address.clone()]
                 .into_iter()
