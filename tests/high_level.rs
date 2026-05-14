@@ -319,7 +319,8 @@ async fn read_comments_helper_and_named_snapshot_support_comment_values() {
 async fn read_comments_decodes_shift_jis_payloads() {
     let (port, received) = start_scripted_server_bytes(|command| match command.as_str() {
         "RDC DM20" => {
-            let (encoded, _, _) = SHIFT_JIS.encode("運転許可");
+            let expected = "\u{904b}\u{8ee2}\u{8a31}\u{53ef}";
+            let (encoded, _, _) = SHIFT_JIS.encode(expected);
             let mut bytes = encoded.into_owned();
             bytes.extend_from_slice(b"                    ");
             bytes
@@ -334,7 +335,7 @@ async fn read_comments_decodes_shift_jis_payloads() {
 
     let comment = read_comments(&client, "DM20", true).await.unwrap();
 
-    assert_eq!(comment, "運転許可");
+    assert_eq!(comment, "\u{904b}\u{8ee2}\u{8a31}\u{53ef}");
     assert_eq!(
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
         vec!["RDC DM20"]
