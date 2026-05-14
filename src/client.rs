@@ -663,6 +663,27 @@ impl HostLinkClient {
         helpers::read_typed(self, device, dtype).await
     }
 
+    pub async fn read_timer_counter(
+        &self,
+        device: &str,
+    ) -> Result<helpers::TimerCounterValue, HostLinkError> {
+        helpers::read_timer_counter(self, device).await
+    }
+
+    pub async fn read_timer(
+        &self,
+        device: &str,
+    ) -> Result<helpers::TimerCounterValue, HostLinkError> {
+        helpers::read_timer(self, device).await
+    }
+
+    pub async fn read_counter(
+        &self,
+        device: &str,
+    ) -> Result<helpers::TimerCounterValue, HostLinkError> {
+        helpers::read_counter(self, device).await
+    }
+
     pub async fn write_typed<T: HostLinkPayloadValue>(
         &self,
         device: &str,
@@ -872,6 +893,30 @@ impl QueuedHostLinkClient {
     ) -> Result<helpers::HostLinkValue, HostLinkError> {
         let _guard = self.gate.lock().await;
         helpers::read_typed(&self.client, device, dtype).await
+    }
+
+    pub async fn read_timer_counter(
+        &self,
+        device: &str,
+    ) -> Result<helpers::TimerCounterValue, HostLinkError> {
+        let _guard = self.gate.lock().await;
+        helpers::read_timer_counter(&self.client, device).await
+    }
+
+    pub async fn read_timer(
+        &self,
+        device: &str,
+    ) -> Result<helpers::TimerCounterValue, HostLinkError> {
+        let _guard = self.gate.lock().await;
+        helpers::read_timer(&self.client, device).await
+    }
+
+    pub async fn read_counter(
+        &self,
+        device: &str,
+    ) -> Result<helpers::TimerCounterValue, HostLinkError> {
+        let _guard = self.gate.lock().await;
+        helpers::read_counter(&self.client, device).await
     }
 
     pub async fn write_typed<T: HostLinkPayloadValue>(

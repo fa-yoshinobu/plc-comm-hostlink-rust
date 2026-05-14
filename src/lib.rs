@@ -26,10 +26,11 @@ pub use device_ranges::{
 };
 pub use error::{HostLinkError, decode_error_code};
 pub use helpers::{
-    HostLinkValue, NamedSnapshot, poll, read_comments, read_dwords, read_dwords_chunked,
-    read_dwords_single_request, read_named, read_typed, read_words, read_words_chunked,
-    read_words_single_request, write_bit_in_word, write_dwords_chunked,
-    write_dwords_single_request, write_typed, write_words_chunked, write_words_single_request,
+    HostLinkValue, NamedSnapshot, TimerCounterValue, poll, read_comments, read_counter,
+    read_dwords, read_dwords_chunked, read_dwords_single_request, read_named, read_timer,
+    read_timer_counter, read_typed, read_words, read_words_chunked, read_words_single_request,
+    write_bit_in_word, write_dwords_chunked, write_dwords_single_request, write_typed,
+    write_words_chunked, write_words_single_request,
 };
 pub use model::{
     HostLinkClock, HostLinkConnectionOptions, HostLinkTraceDirection, HostLinkTraceFrame,

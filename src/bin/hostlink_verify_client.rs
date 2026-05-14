@@ -1,8 +1,9 @@
 use futures_util::{StreamExt, pin_mut};
 use plc_comm_hostlink::{
     HostLinkConnectionOptions, HostLinkTransportMode, HostLinkValue, KvDeviceRangeCatalog,
-    KvDeviceRangeEntry, KvDeviceRangeSegment, KvPlcMode, open_and_connect, read_comments,
-    read_dwords, read_named, read_words, write_bit_in_word,
+    KvDeviceRangeEntry, KvDeviceRangeSegment, KvPlcMode, TimerCounterValue, open_and_connect,
+    read_comments, read_counter, read_dwords, read_named, read_timer, read_timer_counter,
+    read_words, write_bit_in_word,
 };
 use serde_json::{Value, json};
 
@@ -247,6 +248,18 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                 json!({"status": "success", "value": normalize_value(&value)})
             }
         }
+        "read-timer-counter" => {
+            let value = read_timer_counter(client.inner_client(), &address).await?;
+            json!({"status": "success", "value": normalize_timer_counter(&value)})
+        }
+        "read-timer" => {
+            let value = read_timer(client.inner_client(), &address).await?;
+            json!({"status": "success", "value": normalize_timer_counter(&value)})
+        }
+        "read-counter" => {
+            let value = read_counter(client.inner_client(), &address).await?;
+            json!({"status": "success", "value": normalize_timer_counter(&value)})
+        }
         "read-comments" => {
             let value = read_comments(client.inner_client(), &address, true).await?;
             json!({"status": "success", "value": value})
@@ -457,6 +470,14 @@ fn normalize_value(value: &HostLinkValue) -> Value {
         HostLinkValue::U32(value) => json!(value.to_string()),
         HostLinkValue::I32(value) => json!(value.to_string()),
     }
+}
+
+fn normalize_timer_counter(value: &TimerCounterValue) -> Value {
+    json!({
+        "status": value.status.to_string(),
+        "current": value.current.to_string(),
+        "preset": value.preset.to_string(),
+    })
 }
 
 fn normalize_named(values: &plc_comm_hostlink::NamedSnapshot) -> Value {

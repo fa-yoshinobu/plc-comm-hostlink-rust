@@ -66,6 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `HostLinkConnectionOptions`
 - `open_and_connect`
 - `read_typed` / `write_typed`
+- `read_timer_counter` / `read_timer` / `read_counter`
 - `read_comments`
 - `device_range_catalog_for_model`
 - `write_bit_in_word`
@@ -77,6 +78,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `write_words_chunked` / `write_dwords_chunked`
 
 Comment reads also accept XYM aliases such as `D10`, `E20`, `F30`, `M100`, `L200`, `X100`, and `Y100`.
+
+`read_typed("T10", "D")` and `read_named(&["T10"])` return the timer/counter
+preset value for compatibility. Use `read_timer_counter(&client, "T10")` or
+`client.read_timer_counter("T10")` when the Host Link composite fields are
+needed: `status`, `current`, and `preset`.
 
 Device-range catalogs are also available for UI use cases such as device monitors:
 

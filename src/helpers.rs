@@ -25,6 +25,13 @@ pub enum HostLinkValue {
 pub type NamedSnapshot = IndexMap<String, HostLinkValue>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimerCounterValue {
+    pub status: u32,
+    pub current: u32,
+    pub preset: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReadPlanValueKind {
     Unsigned16,
     Signed16,
@@ -181,6 +188,56 @@ pub async fn read_typed(
             "Unsupported logical data type '{other}'."
         ))),
     }
+}
+
+pub async fn read_timer_counter(
+    client: &HostLinkClient,
+    device: &str,
+) -> Result<TimerCounterValue, HostLinkError> {
+    let mut address = parse_device(device)?;
+    if !matches!(address.device_type.as_str(), "T" | "C") {
+        return Err(HostLinkError::protocol(
+            "read_timer_counter requires a T or C device.",
+        ));
+    }
+
+    address.suffix.clear();
+    let target = address.to_text()?;
+    let response = read_single_response(client, &target, Some("D")).await?;
+    let values = parse_all_tokens::<u32>(
+        &response,
+        "Invalid timer/counter status/current/preset response",
+    )?;
+    if values.len() < 3 {
+        return Err(HostLinkError::protocol(
+            "Timer/counter response did not contain status/current/preset.",
+        ));
+    }
+    Ok(TimerCounterValue {
+        status: values[0],
+        current: values[1],
+        preset: values[2],
+    })
+}
+
+pub async fn read_timer(
+    client: &HostLinkClient,
+    device: &str,
+) -> Result<TimerCounterValue, HostLinkError> {
+    if parse_device(device)?.device_type != "T" {
+        return Err(HostLinkError::protocol("read_timer requires a T device."));
+    }
+    read_timer_counter(client, device).await
+}
+
+pub async fn read_counter(
+    client: &HostLinkClient,
+    device: &str,
+) -> Result<TimerCounterValue, HostLinkError> {
+    if parse_device(device)?.device_type != "C" {
+        return Err(HostLinkError::protocol("read_counter requires a C device."));
+    }
+    read_timer_counter(client, device).await
 }
 
 pub async fn write_typed<T: HostLinkPayloadValue>(
