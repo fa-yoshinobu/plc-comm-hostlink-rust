@@ -109,6 +109,29 @@ async fn read_typed_timer_counter_composite_read_returns_set_value() {
 }
 
 #[tokio::test]
+async fn read_named_timer_counter_composite_read_returns_set_value() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RD T10.D" => "0,0000000010,0000000020".to_owned(),
+        "RD C10.D" => "0,0000000000,0000000030".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let result = client.read_named(&["T10", "C10"]).await.unwrap();
+
+    assert_eq!(result["T10"], HostLinkValue::U32(20));
+    assert_eq!(result["C10"], HostLinkValue::U32(30));
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RD T10.D", "RD C10.D"]
+    );
+}
+
+#[tokio::test]
 async fn read_named_direct_bits_use_unsuffixed_rd_commands() {
     let (port, received) = start_scripted_server(|command| match command.as_str() {
         "RDS R000 1" => "1".to_owned(),
