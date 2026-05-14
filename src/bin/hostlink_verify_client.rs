@@ -81,6 +81,10 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             let value = client.inner_client().check_error_no().await?;
             json!({"status": "success", "value": value})
         }
+        "clear-error" => {
+            client.inner_client().clear_error().await?;
+            json!({"status": "success"})
+        }
         "set-time-now" => {
             client.inner_client().set_time(None).await?;
             json!({"status": "success"})
