@@ -592,7 +592,7 @@ impl HostLinkClient {
         validate_expansion_buffer_count(&suffix, count)?;
         validate_expansion_buffer_span(address, &suffix, count)?;
         let response = self
-            .send_raw(&format!("URD {unit_no:02} {address} {suffix} {count}"))
+            .send_raw(&format!("URD {unit_no:02} {address}{suffix} {count}"))
             .await?;
         Ok(split_data_tokens(&response))
     }
@@ -622,7 +622,7 @@ impl HostLinkClient {
         validate_expansion_buffer_span(address, &suffix, values.len())?;
         let payload = build_joined_payload(values, &suffix);
         self.expect_ok(&format!(
-            "UWR {unit_no:02} {address} {suffix} {} {payload}",
+            "UWR {unit_no:02} {address}{suffix} {} {payload}",
             values.len()
         ))
         .await

@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- Corrected `URD` / `UWR` expansion unit buffer command framing so the data
+  suffix is attached directly to the buffer address, for example `100.U`.
+
 ## [0.1.2] - 2026-05-14
 
 ### Changed

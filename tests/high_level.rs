@@ -443,6 +443,35 @@ async fn read_rejects_32_bit_device_end_crossing_before_send() {
 }
 
 #[tokio::test]
+async fn expansion_unit_buffer_uses_address_suffix_command_form() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "URD 01 100.U 2" => "123 456".to_owned(),
+        "UWR 02 200.S 2 7 8" => "OK".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let values = client
+        .read_expansion_unit_buffer(1, 100, 2, None)
+        .await
+        .unwrap();
+    client
+        .write_expansion_unit_buffer(2, 200, &[7_i16, 8_i16], Some("S"))
+        .await
+        .unwrap();
+
+    assert_eq!(values, vec!["123".to_owned(), "456".to_owned()]);
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["URD 01 100.U 2", "UWR 02 200.S 2 7 8"]
+    );
+}
+
+#[tokio::test]
 async fn read_expansion_unit_buffer_rejects_32_bit_buffer_end_crossing_before_send() {
     let (port, received) = start_scripted_server(|_| "OK".to_owned()).await;
 

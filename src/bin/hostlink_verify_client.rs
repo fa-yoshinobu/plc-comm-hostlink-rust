@@ -244,6 +244,54 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                 json!({"status": "success", "values": values.into_iter().map(|value| value.to_string()).collect::<Vec<_>>()})
             }
         }
+        "read-expansion" => {
+            if extra.len() < 2 {
+                json!({"status": "error", "message": "read-expansion requires buffer address and count"})
+            } else {
+                let format = if dtype.trim().is_empty() {
+                    None
+                } else {
+                    Some(dtype.as_str())
+                };
+                let values = client
+                    .inner_client()
+                    .read_expansion_unit_buffer(
+                        address.parse()?,
+                        extra[0].parse()?,
+                        extra[1].parse()?,
+                        format,
+                    )
+                    .await?;
+                json!({"status": "success", "values": values})
+            }
+        }
+        "write-expansion" => {
+            if extra.len() < 2 {
+                json!({"status": "error", "message": "write-expansion requires buffer address and one or more values"})
+            } else {
+                let format = if dtype.trim().is_empty() {
+                    None
+                } else {
+                    Some(dtype.as_str())
+                };
+                let values = extra[1..]
+                    .iter()
+                    .map(|item| {
+                        parse_typed_value(if dtype.trim().is_empty() { "U" } else { &dtype }, item)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                client
+                    .inner_client()
+                    .write_expansion_unit_buffer(
+                        address.parse()?,
+                        extra[0].parse()?,
+                        &values,
+                        format,
+                    )
+                    .await?;
+                json!({"status": "success"})
+            }
+        }
         _ => json!({"status": "error", "message": format!("Unknown command: {command}")}),
     };
 
