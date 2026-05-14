@@ -59,7 +59,8 @@ NG / untested devices:
 - `CR`: `CR2000` `readback_failed`; remaining 9 samples passed.
 - `T`: 10 samples all `read_failed`, `E0: Abnormal device No.`
 - `C`: 10 samples all `read_failed`, `E0: Abnormal device No.`
-- `AT`: 8 samples all `write_failed`, `E1: Abnormal command`.
+- `AT`: 8 raw write samples returned `E1: Abnormal command`; current helpers
+  treat AT as outside the WR/WRS write table and reject it before sending.
 - `CTH`, `CTC`: unsupported by the resolved `KV-7000` catalog.
 
 Human review accepted these remaining NG/unsupported points as expected target behavior or catalog capability behavior.

@@ -296,6 +296,19 @@ async fn read_comments_decodes_shift_jis_payloads() {
 }
 
 #[tokio::test]
+async fn at_write_is_rejected_before_opening_connection() {
+    let client = HostLinkClient::new(HostLinkConnectionOptions::new("127.0.0.1"));
+
+    assert!(client.write("AT0", 3533, Some("D")).await.is_err());
+    assert!(
+        client
+            .write_consecutive("AT0", &[3533, 5543], Some("D"))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn open_and_connect_returns_queued_client_that_uses_helper_api() {
     let (port, received) = start_scripted_server(|command| match command.as_str() {
         "RD DM10.U" => "123".to_owned(),

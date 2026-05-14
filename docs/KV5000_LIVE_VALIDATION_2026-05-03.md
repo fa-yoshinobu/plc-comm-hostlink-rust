@@ -92,7 +92,8 @@ NG / untested devices:
 - `T`: 10 samples all `read_failed`, `E0: Abnormal device No.`
 - `C`: 10 samples all `read_failed`, `E0: Abnormal device No.`
 - `VB`: `VB0` and `VB1` `readback_failed`; remaining 8 samples passed.
-- `AT`: 8 samples all `write_failed`, `E1: Abnormal command`.
+- `AT`: 8 raw write samples returned `E1: Abnormal command`; current helpers
+  treat AT as outside the WR/WRS write table and reject it before sending.
 - `CTH`, `CTC`: catalog entries exist, but the current Rust parser/client does not support these device types yet.
 
 No restore failure was observed.

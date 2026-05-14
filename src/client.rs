@@ -2,7 +2,7 @@ use crate::address::{
     force_device_types, mbs_device_types, model_name_for_code, mws_device_types, parse_device,
     rdc_device_types, resolve_effective_format, validate_device_count, validate_device_span,
     validate_device_type, validate_expansion_buffer_count, validate_expansion_buffer_span,
-    ws_device_types,
+    wr_device_types, ws_device_types,
 };
 use crate::device_ranges::{KvDeviceRangeCatalog, device_range_catalog_for_query_model};
 use crate::error::HostLinkError;
@@ -334,6 +334,7 @@ impl HostLinkClient {
             address.suffix.clone()
         };
         let suffix = resolve_effective_format(&address.device_type, &suffix);
+        validate_device_type("WR", &address.device_type, wr_device_types())?;
         validate_device_span(&address.device_type, address.number, &suffix, 1)?;
         address.suffix = suffix.clone();
         let mut command = String::from("WR ");
@@ -360,6 +361,7 @@ impl HostLinkClient {
             address.suffix.clone()
         };
         let suffix = resolve_effective_format(&address.device_type, &suffix);
+        validate_device_type("WRS", &address.device_type, wr_device_types())?;
         validate_device_count(&address.device_type, &suffix, values.len())?;
         validate_device_span(&address.device_type, address.number, &suffix, values.len())?;
         address.suffix = suffix.clone();
@@ -501,6 +503,7 @@ impl HostLinkClient {
             address.suffix.clone()
         };
         let suffix = resolve_effective_format(&address.device_type, &suffix);
+        validate_device_type("WRE", &address.device_type, wr_device_types())?;
         validate_device_count(&address.device_type, &suffix, values.len())?;
         validate_device_span(&address.device_type, address.number, &suffix, values.len())?;
         address.suffix = suffix.clone();

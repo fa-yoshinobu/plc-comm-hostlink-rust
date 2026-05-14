@@ -17,6 +17,10 @@ const RDC_DEVICE_TYPES: &[&str] = &[
     "R", "B", "MR", "LR", "CR", "DM", "EM", "FM", "ZF", "W", "TM", "Z", "T", "C", "CM", "X", "Y",
     "M", "L", "D", "E", "F",
 ];
+const WR_DEVICE_TYPES: &[&str] = &[
+    "R", "B", "MR", "LR", "CR", "VB", "DM", "EM", "FM", "ZF", "W", "TM", "Z", "T", "TC", "TS", "C",
+    "CC", "CS", "CM", "VM", "X", "Y", "M", "L", "D", "E", "F",
+];
 const WS_DEVICE_TYPES: &[&str] = &["T", "C"];
 
 #[derive(Debug, Clone, Copy)]
@@ -163,6 +167,10 @@ pub(crate) fn mws_device_types() -> &'static [&'static str] {
 
 pub(crate) fn rdc_device_types() -> &'static [&'static str] {
     RDC_DEVICE_TYPES
+}
+
+pub(crate) fn wr_device_types() -> &'static [&'static str] {
+    WR_DEVICE_TYPES
 }
 
 pub(crate) fn ws_device_types() -> &'static [&'static str] {
@@ -735,6 +743,7 @@ fn device_range(device_type: &str) -> Option<DeviceRange> {
 mod tests {
     use super::{
         HostLinkAddress, offset_device, parse_device, parse_logical_address, validate_device_span,
+        wr_device_types,
     };
 
     #[test]
@@ -867,5 +876,12 @@ mod tests {
         let logical = parse_logical_address("at7").unwrap();
         assert_eq!(logical.to_text().unwrap(), "AT7");
         assert_eq!(logical.data_type, "D");
+    }
+
+    #[test]
+    fn wr_device_types_exclude_at() {
+        assert!(!wr_device_types().contains(&"AT"));
+        assert!(wr_device_types().contains(&"DM"));
+        assert!(wr_device_types().contains(&"TS"));
     }
 }

@@ -22,6 +22,8 @@ and return abnormal response `E1` when they are executed.
 
 `AT` digital trimmer values are treated as 32-bit device points on PLC families
 that support them; `AT0` defaults to `AT0:D`, and `AT7:D` is a valid endpoint.
+`AT` is not listed in the WR/WRS device table, so write helpers reject AT before
+sending.
 
 ## Installation
 

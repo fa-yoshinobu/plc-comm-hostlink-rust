@@ -16,8 +16,9 @@ This file tracks active follow-up items for the Rust Host Link library.
   `write_failed=8`, `readback_failed=2`, `restore_failed=0`,
   `unsupported=2`. Human review accepted the remaining NG/unsupported points as
   expected target behavior or intentionally unsupported parser/client coverage:
-  `T/C` read `E0`, `VB0/VB1` readback NG, `AT` write `E1`, and `CTH/CTC`
-  parser/client unsupported. See
+  `T/C` read `E0`, `VB0/VB1` readback NG, raw `AT` write `E1` with current
+  helpers rejecting AT before WR/WRS send, and `CTH/CTC` parser/client
+  unsupported. See
   `docs/KV5000_LIVE_VALIDATION_2026-05-03.md`.
 
 - [x] **KV-7000 class all-device sample compare**: On 2026-05-03, the live
@@ -27,6 +28,7 @@ This file tracks active follow-up items for the Rust Host Link library.
   `read_failed=20`, `write_failed=8`, `readback_failed=1`,
   `restore_failed=0`, `skipped=2`, and `unsupported=0`. Human review accepted
   the remaining NG/unsupported points as expected target behavior or catalog
-  capability behavior: `CR2000` readback NG, `T/C` read `E0`, `AT` write `E1`,
-  and catalog-unsupported `CTH/CTC`. See
+  capability behavior: `CR2000` readback NG, `T/C` read `E0`, raw `AT` write
+  `E1` with current helpers rejecting AT before WR/WRS send, and
+  catalog-unsupported `CTH/CTC`. See
   `docs/KV7000_LIVE_VALIDATION_2026-05-03.md`.
