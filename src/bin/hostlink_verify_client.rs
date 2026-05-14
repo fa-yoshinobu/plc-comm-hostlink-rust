@@ -1,8 +1,8 @@
 use futures_util::{StreamExt, pin_mut};
 use plc_comm_hostlink::{
-    HostLinkConnectionOptions, HostLinkValue, KvDeviceRangeCatalog, KvDeviceRangeEntry,
-    KvDeviceRangeSegment, open_and_connect, read_comments, read_dwords, read_named, read_words,
-    write_bit_in_word,
+    HostLinkConnectionOptions, HostLinkTransportMode, HostLinkValue, KvDeviceRangeCatalog,
+    KvDeviceRangeEntry, KvDeviceRangeSegment, KvPlcMode, open_and_connect, read_comments,
+    read_dwords, read_named, read_words, write_bit_in_word,
 };
 use serde_json::{Value, json};
 
@@ -35,6 +35,7 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
     let mut dtype = String::new();
     let mut count = 1usize;
     let mut interval_ms = 10u64;
+    let mut transport = String::from("tcp");
     let mut extra = Vec::new();
     let mut index = 5usize;
     while index < args.len() {
@@ -51,6 +52,10 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                 interval_ms = args[index + 1].parse()?;
                 index += 2;
             }
+            "--transport" if index + 1 < args.len() => {
+                transport = args[index + 1].clone();
+                index += 2;
+            }
             _ => {
                 extra.push(args[index].clone());
                 index += 1;
@@ -60,12 +65,98 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
 
     let mut options = HostLinkConnectionOptions::new(host.clone());
     options.port = port;
+    options.transport = parse_transport(&transport)?;
     let client = open_and_connect(options).await?;
 
     let result = match command.as_str() {
         "query-model" => {
             let model = client.inner_client().query_model().await?;
             json!({"status": "success", "code": model.code, "model": model.model})
+        }
+        "confirm-mode" => {
+            let mode = client.inner_client().confirm_operating_mode().await?;
+            json!({"status": "success", "mode": (mode as u8).to_string()})
+        }
+        "check-error" => {
+            let value = client.inner_client().check_error_no().await?;
+            json!({"status": "success", "value": value})
+        }
+        "set-time-now" => {
+            client.inner_client().set_time(None).await?;
+            json!({"status": "success"})
+        }
+        "change-mode" => {
+            let mode_text = if address.trim().is_empty() {
+                extra.first().cloned().unwrap_or_default()
+            } else {
+                address.clone()
+            };
+            if mode_text.trim().is_empty() {
+                json!({"status": "error", "message": "change-mode requires RUN or PROGRAM"})
+            } else {
+                client
+                    .inner_client()
+                    .change_mode(parse_mode(&mode_text)?)
+                    .await?;
+                json!({"status": "success"})
+            }
+        }
+        "read-bit" => {
+            let values = client.inner_client().read(&address, None).await?;
+            json!({"status": "success", "value": values.first().cloned().unwrap_or_else(|| "0".to_owned())})
+        }
+        "write-bit" => {
+            if extra.is_empty() {
+                json!({"status": "error", "message": "write-bit requires a bool value"})
+            } else {
+                client
+                    .inner_client()
+                    .write(&address, parse_bool(&extra[0]), None)
+                    .await?;
+                json!({"status": "success"})
+            }
+        }
+        "forced-set" => {
+            client.inner_client().forced_set(&address).await?;
+            json!({"status": "success"})
+        }
+        "forced-reset" => {
+            client.inner_client().forced_reset(&address).await?;
+            json!({"status": "success"})
+        }
+        "monitor-bits" => {
+            let devices = ([address.clone()]
+                .into_iter()
+                .filter(|item| !item.is_empty()))
+            .chain(extra.iter().cloned())
+            .collect::<Vec<_>>();
+            if devices.is_empty() {
+                json!({"status": "error", "message": "monitor-bits requires at least one address"})
+            } else {
+                client
+                    .inner_client()
+                    .register_monitor_bits(&devices)
+                    .await?;
+                let values = client.inner_client().read_monitor_bits().await?;
+                json!({"status": "success", "values": values})
+            }
+        }
+        "monitor-words" => {
+            let devices = ([address.clone()]
+                .into_iter()
+                .filter(|item| !item.is_empty()))
+            .chain(extra.iter().cloned())
+            .collect::<Vec<_>>();
+            if devices.is_empty() {
+                json!({"status": "error", "message": "monitor-words requires at least one address"})
+            } else {
+                client
+                    .inner_client()
+                    .register_monitor_words(&devices)
+                    .await?;
+                let values = client.inner_client().read_monitor_words().await?;
+                json!({"status": "success", "values": values})
+            }
         }
         "range-catalog" | "read-device-range-catalog" => {
             let catalog = client.inner_client().read_device_range_catalog().await?;
@@ -218,6 +309,22 @@ fn parse_bool(raw: &str) -> bool {
         raw.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "on" | "yes"
     )
+}
+
+fn parse_mode(raw: &str) -> Result<KvPlcMode, Box<dyn std::error::Error>> {
+    match raw.trim().to_ascii_uppercase().as_str() {
+        "1" | "RUN" => Ok(KvPlcMode::Run),
+        "0" | "PROGRAM" | "PROG" | "STOP" => Ok(KvPlcMode::Program),
+        _ => Err(format!("Unsupported mode: {raw}").into()),
+    }
+}
+
+fn parse_transport(raw: &str) -> Result<HostLinkTransportMode, Box<dyn std::error::Error>> {
+    match raw.trim().to_ascii_uppercase().as_str() {
+        "" | "TCP" => Ok(HostLinkTransportMode::Tcp),
+        "UDP" => Ok(HostLinkTransportMode::Udp),
+        _ => Err(format!("Unsupported transport: {raw}").into()),
+    }
 }
 
 fn normalize_value(value: &HostLinkValue) -> Value {

@@ -7,15 +7,14 @@
 [![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 
 Async Rust implementation of the KEYENCE KV Host Link protocol, aligned with
-`plc-comm-hostlink-dotnet` and the shared `plc-comm-hostlink-cross-verify`
-harness.
+the public Python, .NET, and Node-RED Host Link libraries.
 
 ## Scope
 
 - TCP and UDP Host Link transport
 - full low-level Host Link command surface from the `.NET` reference
 - queued high-level helper API for typed reads/writes, comment reads, named snapshots, and polling
-- `hostlink_verify_client` wrapper binary for cross-language verification
+- `hostlink_verify_client` wrapper binary for diagnostics and compatibility checks
 
 ## Installation
 
@@ -91,6 +90,12 @@ assert_eq!(dm.address_range.as_deref(), Some("DM00000-DM65534"));
 The full static range specification is documented in
 [`docs/DEVICE_RANGES.md`](docs/DEVICE_RANGES.md).
 
+## Verified Hardware
+
+- CPU: `KV-7500`
+- CPU: `KV-X500`
+- Transport: `TCP` and `UDP`
+
 ## Verification
 
 Run formatting, static analysis, and tests:
@@ -101,10 +106,8 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 ```
 
-Run the shared cross-verify harness after building the Rust wrapper:
+Build the diagnostic wrapper binary:
 
 ```bash
 cargo build --features cli --bin hostlink_verify_client
-cd ../plc-comm-hostlink-cross-verify
-python verify.py
 ```

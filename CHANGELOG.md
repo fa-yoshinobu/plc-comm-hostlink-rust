@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-05-14
+
+### Changed
+- Extended the `hostlink_verify_client` wrapper for operator-run live validation commands and TCP/UDP selection.
+- Added `KV-X500` to the README verified hardware list.
+
 ## [0.1.1] - 2026-05-02
 
 ### Changed
