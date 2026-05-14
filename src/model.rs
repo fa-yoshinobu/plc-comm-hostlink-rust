@@ -49,6 +49,10 @@ pub struct HostLinkClock {
 impl HostLinkClock {
     pub fn now_local() -> Self {
         let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+        Self::from_offset_datetime(now)
+    }
+
+    fn from_offset_datetime(now: OffsetDateTime) -> Self {
         let week = now.weekday().number_days_from_sunday();
         Self {
             year: (now.year() % 100) as u8,
@@ -76,6 +80,25 @@ fn month_to_number(month: Month) -> u8 {
         Month::October => 10,
         Month::November => 11,
         Month::December => 12,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HostLinkClock;
+    use time::{Date, Month, Time};
+
+    fn clock_for(year: i32, month: Month, day: u8) -> HostLinkClock {
+        let date = Date::from_calendar_date(year, month, day).unwrap();
+        let time = Time::from_hms(1, 2, 3).unwrap();
+        HostLinkClock::from_offset_datetime(date.with_time(time).assume_utc())
+    }
+
+    #[test]
+    fn clock_uses_sunday_based_weekday() {
+        assert_eq!(clock_for(2026, Month::March, 15).week, 0);
+        assert_eq!(clock_for(2026, Month::March, 16).week, 1);
+        assert_eq!(clock_for(2026, Month::March, 21).week, 6);
     }
 }
 
