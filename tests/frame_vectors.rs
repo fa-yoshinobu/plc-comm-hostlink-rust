@@ -20,6 +20,10 @@ struct FrameVector {
     value: Option<i32>,
     values: Option<Vec<i32>>,
     mode: Option<String>,
+    response: Option<String>,
+    bank_no: Option<u8>,
+    unit_no: Option<u8>,
+    buffer_address: Option<u32>,
     expected_body: String,
     data_format: Option<String>,
 }
@@ -32,7 +36,7 @@ async fn frame_vectors_send_expected_bodies() {
             .vectors;
 
     for vector in vectors {
-        let (port, received) = start_echo_server().await;
+        let (port, received) = start_echo_server(vector.response.clone()).await;
         let mut options = HostLinkConnectionOptions::new("127.0.0.1");
         options.port = port;
         let client = HostLinkClient::connect(options).await.unwrap();
@@ -48,11 +52,12 @@ async fn frame_vectors_send_expected_bodies() {
     }
 }
 
-async fn start_echo_server() -> (u16, Arc<Mutex<VecDeque<String>>>) {
+async fn start_echo_server(response: Option<String>) -> (u16, Arc<Mutex<VecDeque<String>>>) {
     let received = Arc::new(Mutex::new(VecDeque::new()));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let queue = Arc::clone(&received);
+    let response = response.unwrap_or_else(|| "OK".to_owned());
     tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut buffer = [0u8; 4096];
@@ -75,7 +80,8 @@ async fn start_echo_server() -> (u16, Arc<Mutex<VecDeque<String>>>) {
                     partial.push(*byte);
                 }
             }
-            stream.write_all(b"OK\r\n").await.unwrap();
+            stream.write_all(response.as_bytes()).await.unwrap();
+            stream.write_all(b"\r\n").await.unwrap();
         }
     });
     (port, received)
@@ -86,6 +92,26 @@ async fn run_vector(
     vector: &FrameVector,
 ) -> Result<(), plc_comm_hostlink::HostLinkError> {
     match vector.command.as_str() {
+        "check_error_no" => {
+            let _ = client.check_error_no().await?;
+        }
+        "query_model" => {
+            let _ = client.query_model().await?;
+        }
+        "read_device_range_catalog" => {
+            let _ = client.read_device_range_catalog().await?;
+        }
+        "confirm_operating_mode" => {
+            let _ = client.confirm_operating_mode().await?;
+        }
+        "forced_set" => {
+            client.forced_set(vector.device.as_deref().unwrap()).await?;
+        }
+        "forced_reset" => {
+            client
+                .forced_reset(vector.device.as_deref().unwrap())
+                .await?;
+        }
         "read" => {
             client.read(vector.device.as_deref().unwrap(), None).await?;
         }
@@ -105,6 +131,22 @@ async fn run_vector(
         "register_monitor_words" => {
             let devices = vector.devices.as_ref().unwrap();
             client.register_monitor_words(devices).await?;
+        }
+        "read_monitor_bits" => {
+            let _ = client.read_monitor_bits().await?;
+        }
+        "read_monitor_words" => {
+            let _ = client.read_monitor_words().await?;
+        }
+        "forced_set_consecutive" => {
+            client
+                .forced_set_consecutive(vector.device.as_deref().unwrap(), vector.count.unwrap())
+                .await?;
+        }
+        "forced_reset_consecutive" => {
+            client
+                .forced_reset_consecutive(vector.device.as_deref().unwrap(), vector.count.unwrap())
+                .await?;
         }
         "write" => {
             client
@@ -161,6 +203,16 @@ async fn run_vector(
                 )
                 .await?;
         }
+        "write_consecutive_legacy" => {
+            let values = vector.values.clone().unwrap();
+            client
+                .write_consecutive_legacy(
+                    vector.device.as_deref().unwrap(),
+                    &values,
+                    vector.data_format.as_deref(),
+                )
+                .await?;
+        }
         "write_set_value" => {
             client
                 .write_set_value(
@@ -168,6 +220,45 @@ async fn run_vector(
                     vector.value.unwrap(),
                     None,
                 )
+                .await?;
+        }
+        "write_set_value_consecutive" => {
+            let values = vector.values.clone().unwrap();
+            client
+                .write_set_value_consecutive(
+                    vector.device.as_deref().unwrap(),
+                    &values,
+                    vector.data_format.as_deref(),
+                )
+                .await?;
+        }
+        "switch_bank" => {
+            client.switch_bank(vector.bank_no.unwrap()).await?;
+        }
+        "read_expansion_unit_buffer" => {
+            let _ = client
+                .read_expansion_unit_buffer(
+                    vector.unit_no.unwrap(),
+                    vector.buffer_address.unwrap(),
+                    vector.count.unwrap(),
+                    vector.data_format.as_deref(),
+                )
+                .await?;
+        }
+        "write_expansion_unit_buffer" => {
+            let values = vector.values.clone().unwrap();
+            client
+                .write_expansion_unit_buffer(
+                    vector.unit_no.unwrap(),
+                    vector.buffer_address.unwrap(),
+                    &values,
+                    vector.data_format.as_deref(),
+                )
+                .await?;
+        }
+        "read_comments" => {
+            let _ = client
+                .read_comments(vector.device.as_deref().unwrap(), true)
                 .await?;
         }
         other => panic!("unsupported vector command: {other}"),

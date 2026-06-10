@@ -10,6 +10,7 @@ mod error;
 mod helpers;
 mod model;
 mod protocol;
+mod read_plan;
 
 pub use address::{
     HostLinkAddress, KvDeviceAddress, KvLogicalAddress, normalize_suffix, parse_device,

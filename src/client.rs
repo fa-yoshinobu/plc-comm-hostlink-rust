@@ -959,7 +959,7 @@ impl QueuedHostLinkClient {
     ) -> impl futures_core::Stream<Item = Result<helpers::NamedSnapshot, HostLinkError>> + 'a {
         async_stream::try_stream! {
             let addr_list = addresses.iter().map(|item| item.as_ref().to_owned()).collect::<Vec<_>>();
-            let compiled = helpers::compile_read_named_plan(&addr_list);
+            let compiled = crate::read_plan::compile_read_named_plan(&addr_list);
             loop {
                 let snapshot = {
                     let _guard = self.gate.lock().await;
