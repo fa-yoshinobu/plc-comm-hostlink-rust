@@ -2,7 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.1.4] - 2026-06-12
+
+### Changed
+- Bumped the crate revision for release alignment after the resolved
+  live-validation pass.
 
 ## [0.1.3] - 2026-05-14
 
