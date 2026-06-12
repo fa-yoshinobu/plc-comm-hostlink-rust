@@ -5,6 +5,8 @@
 [![docs.rs](https://img.shields.io/docsrs/plc-comm-hostlink-rust)](https://docs.rs/plc-comm-hostlink-rust)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+![HostLink Rust eyecatch](https://raw.githubusercontent.com/fa-yoshinobu/plc-comm-hostlink-rust/main/docs/assets/kv-rust-eyecatch.png)
+
 Async Rust implementation of the KEYENCE KV Host Link protocol, aligned with
 the public Python, .NET, and Node-RED Host Link libraries.
 
