@@ -109,6 +109,27 @@ async fn read_typed_timer_counter_composite_read_returns_set_value() {
 }
 
 #[tokio::test]
+async fn read_typed_timer_counter_16bit_composite_read_returns_set_value() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RD T0.U" => "0,00010,00020".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let value = read_typed(&client, "T0", "U").await.unwrap();
+
+    assert_eq!(value, HostLinkValue::U16(20));
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RD T0.U"]
+    );
+}
+
+#[tokio::test]
 async fn read_named_timer_counter_composite_read_returns_set_value() {
     let (port, received) = start_scripted_server(|command| match command.as_str() {
         "RD T10.D" => "0,0000000010,0000000020".to_owned(),
@@ -128,6 +149,27 @@ async fn read_named_timer_counter_composite_read_returns_set_value() {
     assert_eq!(
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
         vec!["RD T10.D", "RD C10.D"]
+    );
+}
+
+#[tokio::test]
+async fn read_named_native_32bit_z_uses_native_dword_read() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RD Z1.D" => "0000070000".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let result = client.read_named(&["Z1:D"]).await.unwrap();
+
+    assert_eq!(result["Z1:D"], HostLinkValue::U32(70_000));
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RD Z1.D"]
     );
 }
 
@@ -417,6 +459,59 @@ async fn read_comments_accepts_xym_alias_device_types() {
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
         vec!["RDC D10", "RDC M20"]
     );
+}
+
+#[tokio::test]
+async fn command_device_sets_follow_manual_and_xym_aliases() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "ST X100" => "OK".to_owned(),
+        "RS M100" => "OK".to_owned(),
+        "STS L100 4" => "OK".to_owned(),
+        "MWS D100.U E100.U F100.U M100 L100" => "OK".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    client.forced_set("X100").await.unwrap();
+    client.forced_reset("M100").await.unwrap();
+    client.forced_set_consecutive("L100", 4).await.unwrap();
+    client
+        .register_monitor_words(&["D100", "E100", "F100", "M100", "L100"])
+        .await
+        .unwrap();
+    assert!(client.forced_set_consecutive("T100", 4).await.is_err());
+
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec![
+            "ST X100",
+            "RS M100",
+            "STS L100 4",
+            "MWS D100.U E100.U F100.U M100 L100"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn wss_timer_counter_count_limit_is_enforced_before_send() {
+    let (port, received) = start_scripted_server(|_| "OK".to_owned()).await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+    let values = vec![0_i32; 121];
+
+    assert!(
+        client
+            .write_set_value_consecutive("T0", &values, None)
+            .await
+            .is_err()
+    );
+    assert!(received.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

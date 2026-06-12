@@ -5,13 +5,17 @@ const DEVICE_TYPES_PARSE_ORDER: &[&str] = &[
     "MR", "LR", "CR", "VB", "DM", "EM", "FM", "ZF", "TM", "TC", "TS", "CC", "CS", "AT", "CM", "VM",
     "R", "B", "W", "Z", "T", "C", "X", "Y", "M", "L", "D", "E", "F",
 ];
-const FORCE_DEVICE_TYPES: &[&str] = &["R", "B", "MR", "LR", "CR", "T", "C", "VB"];
+const FORCE_SINGLE_DEVICE_TYPES: &[&str] = &[
+    "R", "B", "MR", "LR", "CR", "T", "C", "VB", "X", "Y", "M", "L",
+];
+const FORCE_CONSECUTIVE_DEVICE_TYPES: &[&str] =
+    &["R", "B", "MR", "LR", "CR", "VB", "X", "Y", "M", "L"];
 const MBS_DEVICE_TYPES: &[&str] = &[
     "R", "B", "MR", "LR", "CR", "T", "C", "VB", "X", "Y", "M", "L",
 ];
 const MWS_DEVICE_TYPES: &[&str] = &[
-    "R", "B", "MR", "LR", "CR", "VB", "X", "Y", "DM", "EM", "FM", "W", "TM", "Z", "TC", "TS", "CC",
-    "CS", "CM", "VM",
+    "R", "B", "MR", "LR", "CR", "VB", "X", "Y", "M", "L", "DM", "EM", "FM", "D", "E", "F", "W",
+    "TM", "Z", "TC", "TS", "CC", "CS", "CM", "VM",
 ];
 const RDC_DEVICE_TYPES: &[&str] = &[
     "R", "B", "MR", "LR", "CR", "DM", "EM", "FM", "ZF", "W", "TM", "Z", "T", "C", "CM", "X", "Y",
@@ -108,10 +112,6 @@ impl HostLinkAddress {
     }
 
     pub fn normalize(text: &str) -> Result<String, HostLinkError> {
-        if let Ok(address) = parse_device(text) {
-            return address.to_text();
-        }
-
         parse_logical_address(text)?.to_text()
     }
 
@@ -154,7 +154,11 @@ pub(crate) fn model_name_for_code(code: &str) -> &str {
 }
 
 pub(crate) fn force_device_types() -> &'static [&'static str] {
-    FORCE_DEVICE_TYPES
+    FORCE_SINGLE_DEVICE_TYPES
+}
+
+pub(crate) fn force_consecutive_device_types() -> &'static [&'static str] {
+    FORCE_CONSECUTIVE_DEVICE_TYPES
 }
 
 pub(crate) fn mbs_device_types() -> &'static [&'static str] {
@@ -195,6 +199,13 @@ pub(crate) fn is_direct_bit_device_type(device_type: &str) -> bool {
     matches!(
         device_type,
         "R" | "B" | "MR" | "LR" | "CR" | "VB" | "X" | "Y" | "M" | "L"
+    )
+}
+
+pub(crate) fn is_native_32bit_device_type(device_type: &str) -> bool {
+    matches!(
+        device_type,
+        "T" | "TC" | "TS" | "C" | "CC" | "CS" | "Z" | "AT"
     )
 }
 
@@ -369,7 +380,9 @@ pub fn parse_logical_address(text: &str) -> Result<KvLogicalAddress, HostLinkErr
     }
 
     if let Some(dot_index) = raw.rfind('.') {
-        if let Ok(bit_index) = u8::from_str_radix(&raw[dot_index + 1..], 16) {
+        let bit_text = raw[dot_index + 1..].trim();
+        if bit_text.len() == 1 && bit_text.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            let bit_index = u8::from_str_radix(bit_text, 16).unwrap();
             if bit_index <= 15 {
                 let mut base = parse_device(&raw[..dot_index])?;
                 base.suffix.clear();
@@ -380,6 +393,9 @@ pub fn parse_logical_address(text: &str) -> Result<KvLogicalAddress, HostLinkErr
                 });
             }
         }
+        return Err(HostLinkError::protocol(format!(
+            "Invalid bit-in-word index in '{text}'. Use one hex digit 0-F or ':' for data type."
+        )));
     }
 
     let mut base = parse_device(raw)?;
@@ -457,13 +473,12 @@ pub fn validate_device_span(
         ));
     }
 
-    let word_width = if device_type == "AT" {
-        1u32
-    } else if matches!(effective_format, ".D" | ".L") {
-        2u32
-    } else {
-        1u32
-    };
+    let word_width =
+        if matches!(effective_format, ".D" | ".L") && !is_native_32bit_device_type(device_type) {
+            2u32
+        } else {
+            1u32
+        };
     let start_span_number = if uses_bit_bank_address(device_type) {
         bit_bank_logical_number(start_number)
     } else {
@@ -760,6 +775,10 @@ mod tests {
         let logical = parse_logical_address("dm100.a").unwrap();
         assert_eq!(logical.to_text().unwrap(), "DM100.A");
         assert_eq!(logical.bit_index, Some(10));
+
+        let bit_d = parse_logical_address("dm100.d").unwrap();
+        assert_eq!(bit_d.to_text().unwrap(), "DM100.D");
+        assert_eq!(bit_d.bit_index, Some(13));
     }
 
     #[test]
@@ -823,6 +842,26 @@ mod tests {
     }
 
     #[test]
+    fn validate_device_span_treats_native_32bit_devices_as_device_points() {
+        for (device_type, last_number) in [
+            ("T", 3999),
+            ("TC", 3999),
+            ("TS", 3999),
+            ("C", 3999),
+            ("CC", 3999),
+            ("CS", 3999),
+            ("Z", 12),
+        ] {
+            validate_device_span(device_type, last_number, ".D", 1).unwrap();
+        }
+
+        validate_device_span("T", 3880, ".D", 120).unwrap();
+        validate_device_span("Z", 1, ".D", 12).unwrap();
+        assert!(validate_device_span("T", 3881, ".D", 120).is_err());
+        assert!(validate_device_span("Z", 2, ".D", 12).is_err());
+    }
+
+    #[test]
     fn parse_device_accepts_high_xym_m_addresses() {
         assert_eq!(parse_device("M63872").unwrap().to_text().unwrap(), "M63872");
         assert!(parse_device("M64000").is_err());
@@ -858,10 +897,16 @@ mod tests {
     }
 
     #[test]
-    fn parse_logical_suffix_preserves_explicit_type() {
-        let logical = parse_logical_address("dm100.s").unwrap();
+    fn parse_logical_colon_preserves_explicit_type() {
+        let logical = parse_logical_address("dm100:s").unwrap();
         assert_eq!(logical.to_text().unwrap(), "DM100:S");
         assert_eq!(logical.data_type, "S");
+    }
+
+    #[test]
+    fn parse_logical_rejects_low_level_dot_suffixes() {
+        assert!(parse_logical_address("dm100.s").is_err());
+        assert!(parse_logical_address("dm100.10").is_err());
     }
 
     #[test]

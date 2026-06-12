@@ -167,6 +167,22 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                 json!({"status": "success"})
             }
         }
+        "register-monitor-bits" => {
+            let devices = ([address.clone()]
+                .into_iter()
+                .filter(|item| !item.is_empty()))
+            .chain(extra.iter().cloned())
+            .collect::<Vec<_>>();
+            if devices.is_empty() {
+                json!({"status": "error", "message": "register-monitor-bits requires at least one address"})
+            } else {
+                client
+                    .inner_client()
+                    .register_monitor_bits(&devices)
+                    .await?;
+                json!({"status": "success"})
+            }
+        }
         "monitor-bits" => {
             let devices = ([address.clone()]
                 .into_iter()
@@ -182,6 +198,22 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                     .await?;
                 let values = client.inner_client().read_monitor_bits().await?;
                 json!({"status": "success", "values": values})
+            }
+        }
+        "register-monitor-words" => {
+            let devices = ([address.clone()]
+                .into_iter()
+                .filter(|item| !item.is_empty()))
+            .chain(extra.iter().cloned())
+            .collect::<Vec<_>>();
+            if devices.is_empty() {
+                json!({"status": "error", "message": "register-monitor-words requires at least one address"})
+            } else {
+                client
+                    .inner_client()
+                    .register_monitor_words(&devices)
+                    .await?;
+                json!({"status": "success"})
             }
         }
         "monitor-words" => {

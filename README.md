@@ -78,6 +78,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `write_words_single_request` / `write_dwords_single_request`
 - `write_words_chunked` / `write_dwords_chunked`
 
+High-level address syntax is shared across the PLC helper libraries:
+
+- use `:` for data types and special views: `DM100:U`, `DM100:S`, `DM100:D`,
+  `DM100:L`, `DM100:F`, `DM100:H`, `DM100:COMMENT`
+- use `.` only for bit-in-word access: `DM100.0` through `DM100.F`
+- `DM100.D` is bit `0xD` / bit 13, not a 32-bit data type request
+- Host Link frames still use the manual suffix form internally, so
+  `DM100:D` is sent as `RD DM100.D`
+
 Comment reads also accept XYM aliases such as `D10`, `E20`, `F30`, `M100`, `L200`, `X100`, and `Y100`.
 
 `read_typed("T10", "D")` and `read_named(&["T10"])` return the timer/counter

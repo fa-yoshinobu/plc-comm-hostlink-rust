@@ -1,8 +1,9 @@
 use crate::address::{
-    force_device_types, mbs_device_types, model_name_for_code, mws_device_types, parse_device,
-    rdc_device_types, resolve_effective_format, validate_device_count, validate_device_span,
-    validate_device_type, validate_expansion_buffer_count, validate_expansion_buffer_span,
-    wr_device_types, ws_device_types,
+    force_consecutive_device_types, force_device_types, mbs_device_types, model_name_for_code,
+    mws_device_types, parse_device, rdc_device_types, resolve_effective_format,
+    validate_device_count, validate_device_span, validate_device_type,
+    validate_expansion_buffer_count, validate_expansion_buffer_span, wr_device_types,
+    ws_device_types,
 };
 use crate::device_ranges::{KvDeviceRangeCatalog, device_range_catalog_for_query_model};
 use crate::error::HostLinkError;
@@ -444,7 +445,11 @@ impl HostLinkClient {
             return Err(HostLinkError::protocol("count must be 1-16."));
         }
         let mut address = parse_device(device)?;
-        validate_device_type("STS", &address.device_type, force_device_types())?;
+        validate_device_type(
+            "STS",
+            &address.device_type,
+            force_consecutive_device_types(),
+        )?;
         address.suffix.clear();
         self.expect_ok(&format!("STS {} {}", address.to_text()?, count))
             .await
@@ -459,7 +464,11 @@ impl HostLinkClient {
             return Err(HostLinkError::protocol("count must be 1-16."));
         }
         let mut address = parse_device(device)?;
-        validate_device_type("RSS", &address.device_type, force_device_types())?;
+        validate_device_type(
+            "RSS",
+            &address.device_type,
+            force_consecutive_device_types(),
+        )?;
         address.suffix.clear();
         self.expect_ok(&format!("RSS {} {}", address.to_text()?, count))
             .await
@@ -530,6 +539,7 @@ impl HostLinkClient {
         } else {
             resolve_effective_format(&address.device_type, &address.suffix)
         };
+        validate_device_count(&address.device_type, &suffix, 1)?;
         validate_device_span(&address.device_type, address.number, &suffix, 1)?;
         address.suffix = suffix.clone();
         let mut command = String::from("WS ");
@@ -555,6 +565,7 @@ impl HostLinkClient {
         } else {
             resolve_effective_format(&address.device_type, &address.suffix)
         };
+        validate_device_count(&address.device_type, &suffix, values.len())?;
         validate_device_span(&address.device_type, address.number, &suffix, values.len())?;
         address.suffix = suffix.clone();
         let payload = build_joined_payload(values, &suffix);
