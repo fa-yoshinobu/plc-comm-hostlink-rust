@@ -1,7 +1,7 @@
 use crate::address::{
     KvDeviceAddress, bit_bank_logical_number, is_direct_bit_device_type,
-    is_optimizable_read_named_device_type, parse_device, parse_named_address_parts,
-    uses_bit_bank_address,
+    is_native_32bit_device_type, is_optimizable_read_named_device_type, parse_device,
+    parse_named_address_parts, uses_bit_bank_address,
 };
 use crate::error::HostLinkError;
 use crate::helpers::{HostLinkValue, parse_bool_token};
@@ -147,6 +147,14 @@ fn try_parse_optimizable_read_named_request(
         } else {
             (try_map_read_plan_value_kind(&dtype)?, 0)
         };
+    if is_native_32bit_device_type(&base_address.device_type)
+        && matches!(
+            kind,
+            ReadPlanValueKind::Unsigned32 | ReadPlanValueKind::Signed32
+        )
+    {
+        return None;
+    }
 
     Some(ReadPlanRequest {
         index,

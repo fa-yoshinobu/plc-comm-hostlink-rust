@@ -91,10 +91,25 @@ pub async fn read_typed(
             let bits = (words[0] as u32) | ((words[1] as u32) << 16);
             Ok(HostLinkValue::F32(f32::from_bits(bits)))
         }
-        "S" => Ok(HostLinkValue::I16(
-            read_single_parsed(client, &device, Some("S"), "Invalid signed 16-bit response")
-                .await?,
-        )),
+        "S" => {
+            if is_timer_counter_composite_device(&device)? {
+                let response = read_single_response(client, &device, Some("S")).await?;
+                Ok(HostLinkValue::I16(parse_last_token(
+                    &response,
+                    "Invalid signed 16-bit response",
+                )?))
+            } else {
+                Ok(HostLinkValue::I16(
+                    read_single_parsed(
+                        client,
+                        &device,
+                        Some("S"),
+                        "Invalid signed 16-bit response",
+                    )
+                    .await?,
+                ))
+            }
+        }
         "D" => {
             if is_timer_counter_composite_device(&device)? {
                 let response = read_single_response(client, &device, Some("D")).await?;
@@ -133,15 +148,25 @@ pub async fn read_typed(
                 ))
             }
         }
-        "U" => Ok(HostLinkValue::U16(
-            read_single_parsed::<u16>(
-                client,
-                &device,
-                Some("U"),
-                "Invalid unsigned 16-bit response",
-            )
-            .await?,
-        )),
+        "U" => {
+            if is_timer_counter_composite_device(&device)? {
+                let response = read_single_response(client, &device, Some("U")).await?;
+                Ok(HostLinkValue::U16(parse_last_token(
+                    &response,
+                    "Invalid unsigned 16-bit response",
+                )?))
+            } else {
+                Ok(HostLinkValue::U16(
+                    read_single_parsed::<u16>(
+                        client,
+                        &device,
+                        Some("U"),
+                        "Invalid unsigned 16-bit response",
+                    )
+                    .await?,
+                ))
+            }
+        }
         "" => Ok(HostLinkValue::Bool(
             read_single_bool(client, &device, None).await?,
         )),
