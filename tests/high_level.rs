@@ -316,7 +316,7 @@ async fn read_typed_empty_dtype_uses_device_default_format() {
         HostLinkValue::Bool(true)
     );
     assert_eq!(
-        read_typed(&client, "DM200.S", "").await.unwrap(),
+        read_typed(&client, "DM200:S", "").await.unwrap(),
         HostLinkValue::I16(-12)
     );
     assert_eq!(
@@ -467,7 +467,7 @@ async fn command_device_sets_follow_manual_and_xym_aliases() {
         "ST X100" => "OK".to_owned(),
         "RS M100" => "OK".to_owned(),
         "STS L100 4" => "OK".to_owned(),
-        "MWS D100.U E100.U F100.U M100 L100" => "OK".to_owned(),
+        "MWS D100.U E100.U F100.U MR100 LR100" => "OK".to_owned(),
         _ => "E1".to_owned(),
     })
     .await;
@@ -480,9 +480,11 @@ async fn command_device_sets_follow_manual_and_xym_aliases() {
     client.forced_reset("M100").await.unwrap();
     client.forced_set_consecutive("L100", 4).await.unwrap();
     client
-        .register_monitor_words(&["D100", "E100", "F100", "M100", "L100"])
+        .register_monitor_words(&["D100", "E100", "F100", "MR100", "LR100"])
         .await
         .unwrap();
+    assert!(client.register_monitor_words(&["M100"]).await.is_err());
+    assert!(client.register_monitor_words(&["L100"]).await.is_err());
     assert!(client.forced_set_consecutive("T100", 4).await.is_err());
 
     assert_eq!(
@@ -491,7 +493,7 @@ async fn command_device_sets_follow_manual_and_xym_aliases() {
             "ST X100",
             "RS M100",
             "STS L100 4",
-            "MWS D100.U E100.U F100.U M100 L100"
+            "MWS D100.U E100.U F100.U MR100 LR100"
         ]
     );
 }
@@ -680,11 +682,11 @@ async fn read_device_range_catalog_resolves_query_model_into_range_catalog() {
     let client = HostLinkClient::connect(options).await.unwrap();
     let catalog = client.read_device_range_catalog().await.unwrap();
 
-    assert_eq!(catalog.model, "KV-8000");
+    assert_eq!(catalog.plc_profile, "keyence:kv-8000");
     assert_eq!(catalog.model_code, "58");
     assert!(catalog.has_model_code);
-    assert_eq!(catalog.requested_model, "KV-8000A");
-    assert_eq!(catalog.resolved_model, "KV-8000");
+    assert_eq!(catalog.requested_plc_profile, "keyence:kv-8000");
+    assert_eq!(catalog.resolved_plc_profile, "keyence:kv-8000");
     assert_eq!(
         catalog.entry("DM").unwrap().address_range.as_deref(),
         Some("DM00000-DM65534")

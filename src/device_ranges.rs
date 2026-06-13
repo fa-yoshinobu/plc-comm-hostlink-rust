@@ -72,11 +72,11 @@ pub struct KvDeviceRangeEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KvDeviceRangeCatalog {
-    pub model: String,
+    pub plc_profile: String,
     pub model_code: String,
     pub has_model_code: bool,
-    pub requested_model: String,
-    pub resolved_model: String,
+    pub requested_plc_profile: String,
+    pub resolved_plc_profile: String,
     pub entries: Vec<KvDeviceRangeEntry>,
 }
 
@@ -102,29 +102,30 @@ impl KvDeviceRangeCatalog {
     }
 }
 
-pub fn device_range_catalog_for_model(
-    model: impl AsRef<str>,
+pub fn device_range_catalog_for_plc_profile(
+    plc_profile: impl AsRef<str>,
 ) -> Result<KvDeviceRangeCatalog, HostLinkError> {
-    build_catalog(model.as_ref(), None)
+    build_catalog(plc_profile.as_ref(), None)
 }
 
 pub(crate) fn device_range_catalog_for_query_model(
     model: &KvModelInfo,
 ) -> Result<KvDeviceRangeCatalog, HostLinkError> {
-    build_catalog(&model.model, Some(&model.code))
+    build_catalog_from_model(&model.model, Some(&model.code))
 }
 
 fn build_catalog(
-    requested_model: &str,
+    requested_plc_profile: &str,
     model_code: Option<&str>,
 ) -> Result<KvDeviceRangeCatalog, HostLinkError> {
-    let requested_model = requested_model.trim().to_owned();
-    if requested_model.is_empty() {
-        return Err(HostLinkError::protocol("Model name must not be empty"));
+    let requested_plc_profile = normalize_plc_profile(requested_plc_profile);
+    if requested_plc_profile.is_empty() {
+        return Err(HostLinkError::protocol("PLC profile must not be empty"));
     }
 
     let table = range_table()?;
-    let resolved_model = resolve_model_column(table, &requested_model)?;
+    let resolved_model = model_header_for_profile(table, &requested_plc_profile)?;
+    let resolved_plc_profile = profile_for_model_header(resolved_model)?;
     let model_index = table
         .model_headers
         .iter()
@@ -142,18 +143,33 @@ fn build_catalog(
         .collect::<Vec<_>>();
 
     Ok(KvDeviceRangeCatalog {
-        model: resolved_model.to_owned(),
+        plc_profile: resolved_plc_profile.clone(),
         model_code: model_code.unwrap_or_default().to_owned(),
         has_model_code: model_code.is_some(),
-        requested_model,
-        resolved_model: resolved_model.to_owned(),
+        requested_plc_profile,
+        resolved_plc_profile,
         entries,
     })
 }
 
-pub fn available_device_range_models() -> Vec<String> {
+fn build_catalog_from_model(
+    requested_model: &str,
+    model_code: Option<&str>,
+) -> Result<KvDeviceRangeCatalog, HostLinkError> {
+    let table = range_table()?;
+    let resolved_model = resolve_query_model_column(table, requested_model)?;
+    build_catalog(&profile_for_model_header(resolved_model)?, model_code)
+}
+
+pub fn available_plc_profiles() -> Vec<String> {
     range_table()
-        .map(|table| table.model_headers.clone())
+        .map(|table| {
+            table
+                .model_headers
+                .iter()
+                .filter_map(|header| profile_for_model_header(header).ok())
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -483,7 +499,47 @@ fn notation_for_device(
     }
 }
 
-fn resolve_model_column<'a>(
+fn model_header_for_profile<'a>(
+    table: &'a RangeTable,
+    plc_profile: &str,
+) -> Result<&'a str, HostLinkError> {
+    let normalized = normalize_plc_profile(plc_profile);
+    for header in &table.model_headers {
+        if profile_for_model_header(header)? == normalized {
+            return Ok(header);
+        }
+    }
+    let supported = available_plc_profiles().join(", ");
+    Err(HostLinkError::protocol(format!(
+        "Unsupported PLC profile '{plc_profile}'. Supported PLC profiles: {supported}."
+    )))
+}
+
+fn profile_for_model_header(model_header: &str) -> Result<String, HostLinkError> {
+    let normalized = normalize_model_key(model_header);
+    let wants_xym = normalized.ends_with("(XYM)");
+    let base_model = normalized.strip_suffix("(XYM)").unwrap_or(&normalized);
+    let profile_key = match base_model {
+        "KV-NANO" => "kv-nano",
+        "KV-3000/5000" => "kv-3000-5000",
+        "KV-7000" => "kv-7000",
+        "KV-8000" => "kv-8000",
+        "KV-X500" => "kv-x500",
+        _ => {
+            return Err(HostLinkError::protocol(format!(
+                "Cannot map model header '{model_header}' to a PLC profile."
+            )));
+        }
+    };
+    let suffix = if wants_xym { "-xym" } else { "" };
+    Ok(format!("keyence:{profile_key}{suffix}"))
+}
+
+fn normalize_plc_profile(text: &str) -> String {
+    text.trim().trim_end_matches('\0').to_owned()
+}
+
+fn resolve_query_model_column<'a>(
     table: &'a RangeTable,
     requested_model: &str,
 ) -> Result<&'a str, HostLinkError> {
@@ -553,31 +609,35 @@ fn normalize_model_key(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        KvDeviceRangeCategory, KvDeviceRangeNotation, available_device_range_models,
-        device_range_catalog_for_model, normalize_model_key,
+        KvDeviceRangeCategory, KvDeviceRangeNotation, available_plc_profiles,
+        device_range_catalog_for_plc_profile, normalize_model_key,
     };
 
     #[test]
-    fn available_models_include_xym_columns_from_csv() {
-        let models = available_device_range_models();
-        assert!(models.iter().any(|model| model == "KV-7000"));
-        assert!(models.iter().any(|model| model == "KV-7000(XYM)"));
+    fn available_profiles_include_xym_columns_from_csv() {
+        let profiles = available_plc_profiles();
+        assert!(profiles.iter().any(|profile| profile == "keyence:kv-7000"));
+        assert!(
+            profiles
+                .iter()
+                .any(|profile| profile == "keyence:kv-7000-xym")
+        );
     }
 
     #[test]
-    fn resolves_known_runtime_model_names_to_csv_family_columns() {
-        let catalog = device_range_catalog_for_model("KV-8000A").unwrap();
-        assert_eq!(catalog.model, "KV-8000");
+    fn resolves_plc_profiles_to_csv_family_columns() {
+        let catalog = device_range_catalog_for_plc_profile("keyence:kv-8000").unwrap();
+        assert_eq!(catalog.plc_profile, "keyence:kv-8000");
         assert_eq!(catalog.model_code, "");
         assert!(!catalog.has_model_code);
-        assert_eq!(catalog.resolved_model, "KV-8000");
+        assert_eq!(catalog.resolved_plc_profile, "keyence:kv-8000");
         assert_eq!(
             catalog.entry("DM").unwrap().address_range.as_deref(),
             Some("DM00000-DM65534")
         );
 
-        let x_catalog = device_range_catalog_for_model("KV-X530").unwrap();
-        assert_eq!(x_catalog.resolved_model, "KV-X500");
+        let x_catalog = device_range_catalog_for_plc_profile("keyence:kv-x500").unwrap();
+        assert_eq!(x_catalog.resolved_plc_profile, "keyence:kv-x500");
         assert_eq!(
             x_catalog.entry("ZF").unwrap().address_range.as_deref(),
             Some("ZF000000-ZF524287")
@@ -591,7 +651,7 @@ mod tests {
 
     #[test]
     fn xym_catalog_splits_multi_device_ranges_into_segments() {
-        let catalog = device_range_catalog_for_model("KV-3000/5000(XYM)").unwrap();
+        let catalog = device_range_catalog_for_plc_profile("keyence:kv-3000-5000-xym").unwrap();
         let entry = catalog.entry("R").unwrap();
 
         assert_eq!(entry.device, "R");
@@ -630,7 +690,7 @@ mod tests {
         assert_eq!(entry.segments[1].address_range, "Y0-999F");
         assert_eq!(catalog.entry("X").unwrap().device_type, "R");
 
-        let kv8000 = device_range_catalog_for_model("KV-8000(XYM)").unwrap();
+        let kv8000 = device_range_catalog_for_plc_profile("keyence:kv-8000-xym").unwrap();
         let r = kv8000.entry("R").unwrap();
         assert_eq!(r.upper_bound, Some(1_999 * 16 + 15));
         assert_eq!(r.point_count, Some(2_000 * 16));
@@ -658,19 +718,19 @@ mod tests {
 
     #[test]
     fn corrected_catalog_typos_are_published_consistently() {
-        let nano = device_range_catalog_for_model("KV-N24nn").unwrap();
+        let nano = device_range_catalog_for_plc_profile("keyence:kv-nano").unwrap();
         assert_eq!(
             nano.entry("CM").unwrap().address_range.as_deref(),
             Some("CM0000-CM8999")
         );
 
-        let xym = device_range_catalog_for_model("KV-3000/5000(XYM)").unwrap();
+        let xym = device_range_catalog_for_plc_profile("keyence:kv-3000-5000-xym").unwrap();
         assert_eq!(
             xym.entry("CR").unwrap().address_range.as_deref(),
             Some("CR0000-CR3915")
         );
 
-        let kvx = device_range_catalog_for_model("KV-X500").unwrap();
+        let kvx = device_range_catalog_for_plc_profile("keyence:kv-x500").unwrap();
         assert_eq!(
             kvx.entry("Z").unwrap().address_range.as_deref(),
             Some("Z1-10")
@@ -679,7 +739,7 @@ mod tests {
 
     #[test]
     fn single_device_ranges_keep_their_device_prefixes() {
-        let nano = device_range_catalog_for_model("KV-N24nn").unwrap();
+        let nano = device_range_catalog_for_plc_profile("keyence:kv-nano").unwrap();
         assert_eq!(
             nano.entry("VM").unwrap().address_range.as_deref(),
             Some("VM0-9499")
@@ -693,7 +753,7 @@ mod tests {
             Some("CTC0-7")
         );
 
-        let kv3000 = device_range_catalog_for_model("KV-3000/5000").unwrap();
+        let kv3000 = device_range_catalog_for_plc_profile("keyence:kv-3000-5000").unwrap();
         assert_eq!(
             kv3000.entry("AT").unwrap().address_range.as_deref(),
             Some("AT0-7")
@@ -706,7 +766,7 @@ mod tests {
 
     #[test]
     fn unsupported_entries_remain_present_but_marked_unsupported() {
-        let catalog = device_range_catalog_for_model("KV-N24nn").unwrap();
+        let catalog = device_range_catalog_for_plc_profile("keyence:kv-nano").unwrap();
         let em = catalog.entry("EM").unwrap();
 
         assert!(!em.supported);
@@ -717,5 +777,12 @@ mod tests {
     #[test]
     fn normalize_model_key_removes_whitespace_and_uppercases() {
         assert_eq!(normalize_model_key(" kv-x500 (xym) "), "KV-X500(XYM)");
+    }
+
+    #[test]
+    fn public_profile_input_rejects_legacy_model_names() {
+        assert!(device_range_catalog_for_plc_profile("KV-X500").is_err());
+        assert!(device_range_catalog_for_plc_profile("KEYENCE:KV-X500").is_err());
+        assert!(device_range_catalog_for_plc_profile("keyence:kv-1000").is_err());
     }
 }

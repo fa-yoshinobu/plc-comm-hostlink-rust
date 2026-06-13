@@ -111,8 +111,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let catalog = client.read_device_range_catalog().await?;
 
     println!(
-        "catalog -> model={} resolved_model={} model_code={} sample_points={}",
-        catalog.model, catalog.resolved_model, catalog.model_code, sample_points
+        "catalog -> plc_profile={} resolved_plc_profile={} model_code={} sample_points={}",
+        catalog.plc_profile, catalog.resolved_plc_profile, catalog.model_code, sample_points
     );
     if !only.is_empty() {
         println!("only -> {}", only.join(","));

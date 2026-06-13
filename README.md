@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `read_typed` / `write_typed`
 - `read_timer_counter` / `read_timer` / `read_counter`
 - `read_comments`
-- `device_range_catalog_for_model`
+- `device_range_catalog_for_plc_profile`
 - `write_bit_in_word`
 - `read_named`
 - `poll`
@@ -98,12 +98,12 @@ Device-range catalogs are also available for UI use cases such as device monitor
 
 ```rust
 use plc_comm_hostlink::{
-    device_range_catalog_for_model, KvDeviceRangeCategory,
+    device_range_catalog_for_plc_profile, KvDeviceRangeCategory,
 };
 
-let catalog = device_range_catalog_for_model("KV-8000")?;
+let catalog = device_range_catalog_for_plc_profile("keyence:kv-8000")?;
 let dm = catalog.entry("DM").unwrap();
-assert_eq!(catalog.model, "KV-8000");
+assert_eq!(catalog.plc_profile, "keyence:kv-8000");
 assert_eq!(dm.device, "DM");
 assert_eq!(dm.category, KvDeviceRangeCategory::Word);
 assert_eq!(dm.lower_bound, 0);

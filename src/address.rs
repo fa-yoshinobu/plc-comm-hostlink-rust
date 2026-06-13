@@ -14,8 +14,8 @@ const MBS_DEVICE_TYPES: &[&str] = &[
     "R", "B", "MR", "LR", "CR", "T", "C", "VB", "X", "Y", "M", "L",
 ];
 const MWS_DEVICE_TYPES: &[&str] = &[
-    "R", "B", "MR", "LR", "CR", "VB", "X", "Y", "M", "L", "DM", "EM", "FM", "D", "E", "F", "W",
-    "TM", "Z", "TC", "TS", "CC", "CS", "CM", "VM",
+    "R", "B", "MR", "LR", "CR", "VB", "X", "Y", "DM", "EM", "FM", "D", "E", "F", "W", "TM",
+    "Z", "TC", "TS", "CC", "CS", "CM", "VM",
 ];
 const RDC_DEVICE_TYPES: &[&str] = &[
     "R", "B", "MR", "LR", "CR", "DM", "EM", "FM", "ZF", "W", "TM", "Z", "T", "C", "CM", "X", "Y",
@@ -473,12 +473,7 @@ pub fn validate_device_span(
         ));
     }
 
-    let word_width =
-        if matches!(effective_format, ".D" | ".L") && !is_native_32bit_device_type(device_type) {
-            2u32
-        } else {
-            1u32
-        };
+    let device_width = device_span_width(device_type, effective_format);
     let start_span_number = if uses_bit_bank_address(device_type) {
         bit_bank_logical_number(start_number)
     } else {
@@ -490,7 +485,7 @@ pub fn validate_device_span(
         range.hi
     };
     let end_span_number = start_span_number
-        .checked_add((count as u32).saturating_mul(word_width))
+        .checked_add((count as u32).saturating_mul(device_width))
         .and_then(|value| value.checked_sub(1))
         .ok_or_else(|| HostLinkError::protocol("Device span overflow"))?;
 
@@ -508,6 +503,22 @@ pub fn validate_device_span(
     }
 
     Ok(())
+}
+
+fn device_span_width(device_type: &str, effective_format: &str) -> u32 {
+    if is_direct_bit_device_type(device_type) {
+        return match effective_format {
+            ".U" | ".S" | ".H" => 16,
+            ".D" | ".L" => 32,
+            _ => 1,
+        };
+    }
+
+    if matches!(effective_format, ".D" | ".L") && !is_native_32bit_device_type(device_type) {
+        2
+    } else {
+        1
+    }
 }
 
 pub fn validate_expansion_buffer_count(
@@ -832,6 +843,16 @@ mod tests {
     fn validate_device_span_uses_bit_bank_point_count() {
         validate_device_span("CR", 7900, "", 16).unwrap();
         assert!(validate_device_span("CR", 7900, "", 17).is_err());
+    }
+
+    #[test]
+    fn validate_device_span_uses_bit_width_for_typed_bit_devices() {
+        validate_device_span("R", 199900, "", 16).unwrap();
+        validate_device_span("R", 199900, ".U", 1).unwrap();
+        validate_device_span("R", 199800, ".D", 1).unwrap();
+        assert!(validate_device_span("R", 199900, ".U", 2).is_err());
+        assert!(validate_device_span("R", 199900, ".D", 1).is_err());
+        assert!(validate_device_span("CR", 7900, ".U", 2).is_err());
     }
 
     #[test]

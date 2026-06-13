@@ -414,11 +414,11 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
 
 fn normalize_catalog(catalog: &KvDeviceRangeCatalog) -> Value {
     json!({
-        "model": catalog.model,
+        "plcProfile": catalog.plc_profile,
         "modelCode": catalog.model_code,
         "hasModelCode": catalog.has_model_code,
-        "requestedModel": catalog.requested_model,
-        "resolvedModel": catalog.resolved_model,
+        "requestedPlcProfile": catalog.requested_plc_profile,
+        "resolvedPlcProfile": catalog.resolved_plc_profile,
         "entries": catalog.entries.iter().map(normalize_entry).collect::<Vec<_>>(),
     })
 }

@@ -2,7 +2,7 @@
 
 This document describes the static device-range catalog used by:
 
-- `device_range_catalog_for_model(model)`
+- `device_range_catalog_for_plc_profile(plc_profile)`
 - `HostLinkClient::read_device_range_catalog()`
 - `QueuedHostLinkClient::read_device_range_catalog()`
 
@@ -18,7 +18,7 @@ protocols with minimal branching:
 
 ## Behavior
 
-- `KvDeviceRangeCatalog.model` is the resolved catalog family such as `KV-8000`.
+- `KvDeviceRangeCatalog.plc_profile` is the resolved canonical profile such as `keyence:kv-8000`.
 - `KvDeviceRangeCatalog.model_code` is populated only when the catalog came from `?K`.
 - `KvDeviceRangeEntry.device` follows the published alias when the row maps to a single alias device.
   Examples: `DM(XYM)` -> `D`, `FM(XYM)` -> `F`.
@@ -52,25 +52,26 @@ and the tables below already reflect the corrected values.
 | `CTC` row | `0-...` | `CTC0-...` | Bare numeric ranges were normalized to keep the device prefix in the published catalog. |
 | `AT` row | `0-...` | `AT0-...` | Bare numeric ranges were normalized to keep the device prefix in the published catalog. |
 
-## Model Resolution
+## PLC Profiles
 
-The public API accepts either the exact catalog column name or a runtime model
-name returned by `?K`.
+The public API accepts canonical `PlcProfile` strings only. Legacy KEYENCE model
+labels such as `KV-X500` are not accepted as public profile input.
 
-Exact catalog columns:
+Supported profiles:
 
-- `KV-NANO`
-- `KV-NANO(XYM)`
-- `KV-3000/5000`
-- `KV-3000/5000(XYM)`
-- `KV-7000`
-- `KV-7000(XYM)`
-- `KV-8000`
-- `KV-8000(XYM)`
-- `KV-X500`
-- `KV-X500(XYM)`
+- `keyence:kv-nano`
+- `keyence:kv-nano-xym`
+- `keyence:kv-3000-5000`
+- `keyence:kv-3000-5000-xym`
+- `keyence:kv-7000`
+- `keyence:kv-7000-xym`
+- `keyence:kv-8000`
+- `keyence:kv-8000-xym`
+- `keyence:kv-x500`
+- `keyence:kv-x500-xym`
 
-Runtime model aliases resolved by the implementation:
+Runtime `?K` model labels are resolved internally when using
+`client.read_device_range_catalog().await?`:
 
 - `KV-N24nn`, `KV-N40nn`, `KV-N60nn`, `KV-NC32T` -> `KV-NANO`
 - `KV-3000`, `KV-5000`, `KV-5500` -> `KV-3000/5000`
@@ -81,8 +82,8 @@ Runtime model aliases resolved by the implementation:
 
 Examples:
 
-- `device_range_catalog_for_model("KV-X530")` resolves to `KV-X500`
-- `device_range_catalog_for_model("KV-3000/5000(XYM)")` stays on the explicit XYM column
+- `device_range_catalog_for_plc_profile("keyence:kv-x500")` selects the `KV-X500` catalog column
+- `device_range_catalog_for_plc_profile("keyence:kv-3000-5000-xym")` selects the explicit XYM column
 - `client.read_device_range_catalog().await?` resolves from the PLC `?K` model code
 
 ## Static Range Tables
