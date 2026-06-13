@@ -32,3 +32,7 @@ This file tracks active follow-up items for the Rust Host Link library.
   `E1` with current helpers rejecting AT before WR/WRS send, and
   catalog-unsupported `CTH/CTC`. See
   `docs/KV7000_LIVE_VALIDATION_2026-05-03.md`.
+
+## 3. Cross-Stack API Alignment
+
+- [ ] **Unify PLC profile naming across libraries**: Review public Host Link model/profile selectors and align them with the cross-library `PlcProfile` naming policy where practical. Standard saved/displayed names should converge on one canonical lowercase form such as `keyence:kv-x500` or `keyence:kv-7000`, with legacy names accepted only as input aliases. Do not collapse models into a broad profile when device ranges can differ.
