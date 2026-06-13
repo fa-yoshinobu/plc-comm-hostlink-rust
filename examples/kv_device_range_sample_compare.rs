@@ -1,3 +1,9 @@
+//! Device range sample comparison and write/readback diagnostic.
+//!
+//! This intentionally writes test values to sampled addresses and restores the
+//! original values. Run it only against a PLC and address range prepared for
+//! validation.
+
 use plc_comm_hostlink::{
     HostLinkConnectionOptions, HostLinkError, HostLinkValue, KvDeviceAddress, KvDeviceRangeEntry,
     KvDeviceRangeSegment, QueuedHostLinkClient, open_and_connect,
@@ -89,6 +95,7 @@ impl DeviceReport {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    // The default target follows the public docs: 192.168.250.100:8501.
     let args = std::env::args().collect::<Vec<_>>();
     let host = args
         .get(1)
@@ -108,6 +115,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut options = HostLinkConnectionOptions::new(host);
     options.port = port;
     let client = open_and_connect(options).await?;
+
+    // Profile selection is resolved from the PLC model query and matched to the
+    // embedded catalog; see docs/PROFILES.md for the canonical profile names.
     let catalog = client.read_device_range_catalog().await?;
 
     println!(
@@ -124,6 +134,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             continue;
         }
 
+        // Model-specific unsupported rows and parser gotchas are reported
+        // instead of hidden; see docs/GOTCHAS.md for the user-facing summary.
         let mut report = DeviceReport::new(entry);
         run_entry(&client, entry, sample_points, &mut summary, &mut report).await;
         print_device_report(&report);
@@ -434,6 +446,7 @@ fn test_values(
 }
 
 fn effective_lower_bound(segment: &KvDeviceRangeSegment) -> u32 {
+    // Avoid low real-I/O relay points during live write/readback checks.
     if segment.device.eq_ignore_ascii_case("R") {
         segment.lower_bound.max(200)
     } else {

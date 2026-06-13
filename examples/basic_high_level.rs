@@ -1,4 +1,9 @@
-use plc_comm_hostlink::{HostLinkConnectionOptions, open_and_connect, read_named, read_typed};
+//! Basic high-level Host Link example using the queued client.
+//!
+//! The default target is `192.168.250.100:8501`. The write uses a DM test
+//! address; change it before running against a PLC program that owns that range.
+
+use plc_comm_hostlink::{HostLinkConnectionOptions, open_and_connect};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -8,16 +13,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         options.port = port.parse()?;
     }
 
+    // `HostLinkConnectionOptions::new` defaults to Host Link port 8501.
     let client = open_and_connect(options).await?;
 
-    let dm0 = read_typed(client.inner_client(), "DM0", "U").await?;
-    client.write_typed("DM10", "U", dm0).await?;
+    // Profile selection is resolved from the PLC model query; see docs/PROFILES.md.
+    let catalog = client.read_device_range_catalog().await?;
+    println!("{:?}", catalog.plc_profile);
 
-    let snapshot = read_named(
-        client.inner_client(),
-        &["DM0", "DM1:S", "DM2:D", "DM4:F", "DM10.0"],
-    )
-    .await?;
+    // Start with DM reads before model-dependent devices; see docs/GOTCHAS.md.
+    let dm0 = client.read_typed("DM0", "U").await?;
+    client.write_typed("DM120", "U", dm0).await?;
+
+    let snapshot = client
+        .read_named(&["DM0", "DM1:S", "DM2:D", "DM4:F", "DM120.0"])
+        .await?;
     println!("{snapshot:?}");
     Ok(())
 }

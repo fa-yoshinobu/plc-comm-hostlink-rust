@@ -1,30 +1,40 @@
-# KV Host Link Protocol for Rust
-
 [![CI](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/plc-comm-hostlink-rust.svg)](https://crates.io/crates/plc-comm-hostlink-rust)
 [![docs.rs](https://img.shields.io/docsrs/plc-comm-hostlink-rust)](https://docs.rs/plc-comm-hostlink-rust)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-![HostLink Rust eyecatch](https://raw.githubusercontent.com/fa-yoshinobu/plc-comm-hostlink-rust/main/docs/assets/kv-rust-eyecatch.png)
+# KV Host Link Protocol for Rust
 
-Async Rust implementation of the KEYENCE KV Host Link protocol, aligned with
-the public Python, .NET, and Node-RED Host Link libraries.
+Rust async library for KEYENCE KV Host Link communication.
 
-## Scope
+## Supported PLC models
 
-- TCP and UDP Host Link transport
-- full low-level Host Link command surface from the `.NET` reference
-- queued high-level helper API for typed reads/writes, comment reads, named snapshots, and polling
-- `hostlink_verify_client` wrapper binary for diagnostics and compatibility checks
+| PLC profile | Catalog column | Notes |
+| --- | --- | --- |
+| `keyence:kv-nano` | `KV-NANO` | Standard KV-NANO device ranges. |
+| `keyence:kv-nano-xym` | `KV-NANO(XYM)` | KV-NANO ranges with XYM alias notation. |
+| `keyence:kv-3000-5000` | `KV-3000/5000` | KV-3000, KV-5000, and KV-5500 family ranges. |
+| `keyence:kv-3000-5000-xym` | `KV-3000/5000(XYM)` | KV-3000/5000 ranges with XYM alias notation. |
+| `keyence:kv-7000` | `KV-7000` | KV-7000, KV-7300, and KV-7500 family ranges. |
+| `keyence:kv-7000-xym` | `KV-7000(XYM)` | KV-7000 ranges with XYM alias notation. |
+| `keyence:kv-8000` | `KV-8000` | KV-8000 and KV-8000A family ranges. |
+| `keyence:kv-8000-xym` | `KV-8000(XYM)` | KV-8000 ranges with XYM alias notation. |
+| `keyence:kv-x500` | `KV-X500` | KV-X310, KV-X500, KV-X520, KV-X530, and KV-X550 family ranges. |
+| `keyence:kv-x500-xym` | `KV-X500(XYM)` | KV-X500 ranges with XYM alias notation. |
 
-`T` / `C` preset writes use Host Link `WS` / `WSS` only on KV-8000/7000-series
-CPU units. Manuals state that other CPU units do not support those commands
-and return abnormal response `E1` when they are executed.
+## Supported device types
 
-`AT` digital trimmer values are treated as 32-bit device points on PLC families
-that support them; `AT0` defaults to `AT0:D`, and `AT7:D` is a valid endpoint.
-`AT` is not listed in the WR/WRS device table, so write helpers reject AT before
-sending.
+| Family | Common devices | Typical use |
+| --- | --- | --- |
+| Relay bits | `R`, `B`, `MR`, `LR`, `CR`, `VB` | Direct bit reads, writes, monitor registration, and forced set/reset. |
+| Data memory | `DM`, `EM`, `FM`, `ZF` | Word, signed word, double word, long, and float reads or writes. |
+| Word memory | `W`, `TM`, `CM`, `VM` | Word-oriented register access. |
+| Timer/counter | `T`, `C`, `TC`, `TS`, `CC`, `CS` | Timer and counter current values, status, and preset reads. |
+| Index and trimmer | `Z`, `AT` | Index registers and digital trimmer values on supported PLCs. |
+| XYM bit aliases | `X`, `Y`, `M`, `L` | Alias notation exposed by XYM catalog profiles. |
+| XYM word aliases | `D`, `E`, `F` | Alias notation for `DM`, `EM`, and `FM` rows. |
+
+See [Supported registers](docs/SUPPORTED_REGISTERS.md) for ranges, suffixes, and addressing notes.
 
 ## Installation
 
@@ -32,107 +42,47 @@ sending.
 cargo add plc-comm-hostlink-rust
 ```
 
-The package name is `plc-comm-hostlink-rust` and the library import path is
-`plc_comm_hostlink`.
+The package name is `plc-comm-hostlink-rust`; the Rust import path is `plc_comm_hostlink`.
 
-Examples and the verification wrapper require `--features cli`.
-
-## Quick Start
+## Quick example
 
 ```rust
-use plc_comm_hostlink::{
-    open_and_connect, read_named, read_typed, write_typed, HostLinkConnectionOptions,
-};
+use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = open_and_connect(HostLinkConnectionOptions::new("192.168.250.100")).await?;
+    let client =
+        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100")).await?;
 
     let dm0 = client.read_typed("DM0", "U").await?;
-    client.write_typed("DM10", "U", dm0).await?;
-    let comment = client.read_comments("DM20", true).await?;
+    println!("{:?}", dm0);
 
-    let snapshot = client
-        .read_named(&["DM0", "DM1:S", "DM2:D", "DM4:F", "DM10.0", "DM20:COMMENT"])
-        .await?;
-
-    println!("{comment}");
-    println!("{snapshot:?}");
+    client.close().await?;
     Ok(())
 }
 ```
 
-## High-Level API
+## Documentation links
 
-- `HostLinkConnectionOptions`
-- `open_and_connect`
-- `read_typed` / `write_typed`
-- `read_timer_counter` / `read_timer` / `read_counter`
-- `read_comments`
-- `device_range_catalog_for_plc_profile`
-- `write_bit_in_word`
-- `read_named`
-- `poll`
-- `read_words_single_request` / `read_dwords_single_request`
-- `read_words_chunked` / `read_dwords_chunked`
-- `write_words_single_request` / `write_dwords_single_request`
-- `write_words_chunked` / `write_dwords_chunked`
+| Page | Link |
+| --- | --- |
+| Getting started | [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) |
+| Usage guide | [docs/USAGE_GUIDE.md](docs/USAGE_GUIDE.md) |
+| Supported registers | [docs/SUPPORTED_REGISTERS.md](docs/SUPPORTED_REGISTERS.md) |
+| PLC profiles | [docs/PROFILES.md](docs/PROFILES.md) |
+| Examples | [examples/README.md](examples/README.md) |
 
-High-level address syntax is shared across the PLC helper libraries:
+## Hardware verified
 
-- use `:` for data types and special views: `DM100:U`, `DM100:S`, `DM100:D`,
-  `DM100:L`, `DM100:F`, `DM100:H`, `DM100:COMMENT`
-- use `.` only for bit-in-word access: `DM100.0` through `DM100.F`
-- `DM100.D` is bit `0xD` / bit 13, not a 32-bit data type request
-- Host Link frames still use the manual suffix form internally, so
-  `DM100:D` is sent as `RD DM100.D`
+| PLC | Runtime result | Transport | Validation record |
+| --- | --- | --- | --- |
+| KEYENCE KV-7500 | Model code `55`, resolved as `KV-7000` | TCP and UDP | [KV-7000 live validation](docs/KV7000_LIVE_VALIDATION_2026-05-03.md) |
+| KEYENCE KV-5000 | Model code `52`, resolved as `KV-3000/5000` | TCP | [KV-5000 live validation](docs/KV5000_LIVE_VALIDATION_2026-05-03.md) |
 
-Comment reads also accept XYM aliases such as `D10`, `E20`, `F30`, `M100`, `L200`, `X100`, and `Y100`.
+## License and registry
 
-`read_typed("T10", "D")` and `read_named(&["T10"])` return the timer/counter
-preset value for compatibility. Use `read_timer_counter(&client, "T10")` or
-`client.read_timer_counter("T10")` when the Host Link composite fields are
-needed: `status`, `current`, and `preset`.
-
-Device-range catalogs are also available for UI use cases such as device monitors:
-
-```rust
-use plc_comm_hostlink::{
-    device_range_catalog_for_plc_profile, KvDeviceRangeCategory,
-};
-
-let catalog = device_range_catalog_for_plc_profile("keyence:kv-8000")?;
-let dm = catalog.entry("DM").unwrap();
-assert_eq!(catalog.plc_profile, "keyence:kv-8000");
-assert_eq!(dm.device, "DM");
-assert_eq!(dm.category, KvDeviceRangeCategory::Word);
-assert_eq!(dm.lower_bound, 0);
-assert_eq!(dm.upper_bound, Some(65534));
-assert_eq!(dm.point_count, Some(65535));
-assert_eq!(dm.address_range.as_deref(), Some("DM00000-DM65534"));
-```
-
-The full static range specification is documented in
-[`docs/DEVICE_RANGES.md`](docs/DEVICE_RANGES.md).
-
-## Verified Hardware
-
-- CPU: `KV-7500`
-- CPU: `KV-X500`
-- Transport: `TCP` and `UDP`
-
-## Verification
-
-Run formatting, static analysis, and tests:
-
-```bash
-cargo fmt --all --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
-```
-
-Build the diagnostic wrapper binary:
-
-```bash
-cargo build --features cli --bin hostlink_verify_client
-```
+| Item | Value |
+| --- | --- |
+| License | [MIT](LICENSE) |
+| Registry | [crates.io/crates/plc-comm-hostlink-rust](https://crates.io/crates/plc-comm-hostlink-rust) |
+| API docs | [docs.rs/plc-comm-hostlink-rust](https://docs.rs/plc-comm-hostlink-rust) |
