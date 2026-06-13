@@ -18,7 +18,7 @@ AT trimmer is not available on KV-X500.
 Fix: check the device range catalog before accessing `AT`.
 
 ```rust
-let catalog = client.read_device_range_catalog().await?;
+let catalog = device_range_catalog_for_plc_profile("keyence:kv-8000")?;
 println!("{:?}", catalog.entry("AT"));
 ```
 
@@ -73,6 +73,6 @@ println!("{:?}", value);
 Fix: treat them as catalog metadata only.
 
 ```rust
-let catalog = client.read_device_range_catalog().await?;
+let catalog = device_range_catalog_for_plc_profile("keyence:kv-8000")?;
 println!("{:?}", catalog.entry("CTH"));
 ```

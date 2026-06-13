@@ -26,7 +26,6 @@ Added frame vectors:
 
 - `check_error_no ?E`
 - `query_model ?K`
-- `read_device_range_catalog ?K`
 - `confirm_operating_mode ?M`
 - `forced_set ST R000`
 - `forced_reset RS R000`

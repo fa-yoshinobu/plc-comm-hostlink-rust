@@ -6,7 +6,8 @@
 
 use plc_comm_hostlink::{
     HostLinkConnectionOptions, HostLinkError, HostLinkValue, KvDeviceAddress, KvDeviceRangeEntry,
-    KvDeviceRangeSegment, QueuedHostLinkClient, open_and_connect,
+    KvDeviceRangeSegment, QueuedHostLinkClient, device_range_catalog_for_plc_profile,
+    open_and_connect,
 };
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -116,9 +117,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     options.port = port;
     let client = open_and_connect(options).await?;
 
-    // Profile selection is resolved from the PLC model query and matched to the
-    // embedded catalog; see docs/PROFILES.md for the canonical profile names.
-    let catalog = client.read_device_range_catalog().await?;
+    let plc_profile =
+        std::env::var("KV_PLC_PROFILE").unwrap_or_else(|_| "keyence:kv-8000".to_owned());
+    let catalog = device_range_catalog_for_plc_profile(&plc_profile)?;
 
     println!(
         "catalog -> plc_profile={} resolved_plc_profile={} model_code={} sample_points={}",

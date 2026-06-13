@@ -669,31 +669,18 @@ async fn read_expansion_unit_buffer_rejects_32_bit_buffer_end_crossing_before_se
     assert!(received.lock().unwrap().is_empty());
 }
 
-#[tokio::test]
-async fn read_device_range_catalog_resolves_query_model_into_range_catalog() {
-    let (port, received) = start_scripted_server(|command| match command.as_str() {
-        "?K" => "58".to_owned(),
-        _ => "E1".to_owned(),
-    })
-    .await;
-
-    let mut options = HostLinkConnectionOptions::new("127.0.0.1");
-    options.port = port;
-    let client = HostLinkClient::connect(options).await.unwrap();
-    let catalog = client.read_device_range_catalog().await.unwrap();
-
+#[test]
+fn device_range_catalog_uses_explicit_plc_profile() {
+    let catalog =
+        plc_comm_hostlink::device_range_catalog_for_plc_profile("keyence:kv-8000").unwrap();
     assert_eq!(catalog.plc_profile, "keyence:kv-8000");
-    assert_eq!(catalog.model_code, "58");
-    assert!(catalog.has_model_code);
+    assert_eq!(catalog.model_code, "");
+    assert!(!catalog.has_model_code);
     assert_eq!(catalog.requested_plc_profile, "keyence:kv-8000");
     assert_eq!(catalog.resolved_plc_profile, "keyence:kv-8000");
     assert_eq!(
         catalog.entry("DM").unwrap().address_range.as_deref(),
         Some("DM00000-DM65534")
-    );
-    assert_eq!(
-        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
-        vec!["?K"]
     );
 }
 

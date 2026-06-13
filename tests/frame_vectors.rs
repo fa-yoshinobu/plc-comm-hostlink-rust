@@ -98,9 +98,6 @@ async fn run_vector(
         "query_model" => {
             let _ = client.query_model().await?;
         }
-        "read_device_range_catalog" => {
-            let _ = client.read_device_range_catalog().await?;
-        }
         "confirm_operating_mode" => {
             let _ = client.confirm_operating_mode().await?;
         }

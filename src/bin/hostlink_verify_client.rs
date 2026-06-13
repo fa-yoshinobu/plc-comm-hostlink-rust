@@ -1,9 +1,9 @@
 use futures_util::{StreamExt, pin_mut};
 use plc_comm_hostlink::{
     HostLinkConnectionOptions, HostLinkTransportMode, HostLinkValue, KvDeviceRangeCatalog,
-    KvDeviceRangeEntry, KvDeviceRangeSegment, KvPlcMode, TimerCounterValue, open_and_connect,
-    read_comments, read_counter, read_dwords, read_named, read_timer, read_timer_counter,
-    read_words, write_bit_in_word,
+    KvDeviceRangeEntry, KvDeviceRangeSegment, KvPlcMode, TimerCounterValue,
+    device_range_catalog_for_plc_profile, open_and_connect, read_comments, read_counter,
+    read_dwords, read_named, read_timer, read_timer_counter, read_words, write_bit_in_word,
 };
 use serde_json::{Value, json};
 
@@ -234,8 +234,17 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             }
         }
         "range-catalog" | "read-device-range-catalog" => {
-            let catalog = client.inner_client().read_device_range_catalog().await?;
-            json!({"status": "success", "catalog": normalize_catalog(&catalog)})
+            let plc_profile = if address.trim().is_empty() {
+                extra.first().cloned().unwrap_or_default()
+            } else {
+                address.clone()
+            };
+            if plc_profile.trim().is_empty() {
+                json!({"status": "error", "message": "range-catalog requires a PLC profile"})
+            } else {
+                let catalog = device_range_catalog_for_plc_profile(&plc_profile)?;
+                json!({"status": "success", "catalog": normalize_catalog(&catalog)})
+            }
         }
         "write-typed" => {
             if dtype.trim().is_empty() || extra.is_empty() {

@@ -3,7 +3,9 @@
 //! The default target is `192.168.250.100:8501`. The write uses a DM test
 //! address; change it before running against a PLC program that owns that range.
 
-use plc_comm_hostlink::{HostLinkConnectionOptions, open_and_connect};
+use plc_comm_hostlink::{
+    HostLinkConnectionOptions, device_range_catalog_for_plc_profile, open_and_connect,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -16,8 +18,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `HostLinkConnectionOptions::new` defaults to Host Link port 8501.
     let client = open_and_connect(options).await?;
 
-    // Profile selection is resolved from the PLC model query; see docs/PROFILES.md.
-    let catalog = client.read_device_range_catalog().await?;
+    let plc_profile =
+        std::env::var("HOSTLINK_PLC_PROFILE").unwrap_or_else(|_| "keyence:kv-8000".to_owned());
+    let catalog = device_range_catalog_for_plc_profile(&plc_profile)?;
     println!("{:?}", catalog.plc_profile);
 
     // Start with DM reads before model-dependent devices; see docs/GOTCHAS.md.

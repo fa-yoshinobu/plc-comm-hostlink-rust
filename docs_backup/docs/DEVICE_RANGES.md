@@ -3,8 +3,6 @@
 This document describes the static device-range catalog used by:
 
 - `device_range_catalog_for_plc_profile(plc_profile)`
-- `HostLinkClient::read_device_range_catalog()`
-- `QueuedHostLinkClient::read_device_range_catalog()`
 
 The current catalog is embedded directly in `src/device_ranges.rs`. The library
 returns `slmp-rust`-style range metadata so the same UI code can consume both
@@ -19,7 +17,7 @@ protocols with minimal branching:
 ## Behavior
 
 - `KvDeviceRangeCatalog.plc_profile` is the resolved canonical profile such as `keyence:kv-8000`.
-- `KvDeviceRangeCatalog.model_code` is populated only when the catalog came from `?K`.
+- `KvDeviceRangeCatalog.model_code` is empty for static profile catalogs.
 - `KvDeviceRangeEntry.device` follows the published alias when the row maps to a single alias device.
   Examples: `DM(XYM)` -> `D`, `FM(XYM)` -> `F`.
 - `KvDeviceRangeEntry.device_type` preserves the original catalog row such as `DM` or `R`.
@@ -70,8 +68,10 @@ Supported profiles:
 - `keyence:kv-x500`
 - `keyence:kv-x500-xym`
 
-Runtime `?K` model labels are resolved internally when using
-`client.read_device_range_catalog().await?`:
+Applications must choose one of the canonical profiles explicitly. The runtime
+`?K` command remains available as a diagnostic, but its result is not used to
+select a device-range catalog. Use this family list only when choosing which
+canonical profile to pass:
 
 - `KV-N24nn`, `KV-N40nn`, `KV-N60nn`, `KV-NC32T` -> `KV-NANO`
 - `KV-3000`, `KV-5000`, `KV-5500` -> `KV-3000/5000`
@@ -84,7 +84,6 @@ Examples:
 
 - `device_range_catalog_for_plc_profile("keyence:kv-x500")` selects the `KV-X500` catalog column
 - `device_range_catalog_for_plc_profile("keyence:kv-3000-5000-xym")` selects the explicit XYM column
-- `client.read_device_range_catalog().await?` resolves from the PLC `?K` model code
 
 ## Static Range Tables
 

@@ -17,25 +17,22 @@ PLC profiles select one embedded device-range catalog column. They are useful wh
 | `keyence:kv-x500` | `KV-X500` | `KV-X310`, `KV-X500`, `KV-X520`, `KV-X530`, `KV-X550` |
 | `keyence:kv-x500-xym` | `KV-X500(XYM)` | KV-X500 family with XYM aliases. |
 
-## How to connect
-
-```rust
-let client = HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100")).await?;
-let catalog = client.read_device_range_catalog().await?;
-println!("{:?}", catalog.plc_profile);
-```
-
-Use a static profile when your application already knows the model family:
+## How to select a catalog
 
 ```rust
 use plc_comm_hostlink::device_range_catalog_for_plc_profile;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let catalog = device_range_catalog_for_plc_profile("keyence:kv-8000")?;
-    let dm = catalog.entry("DM").unwrap();
-    println!("{:?}", dm);
-    Ok(())
-}
+let catalog = device_range_catalog_for_plc_profile("keyence:kv-8000")?;
+println!("{:?}", catalog.plc_profile);
+```
+
+Connect separately when reading or writing PLC data:
+
+```rust
+use plc_comm_hostlink::{HostLinkConnectionOptions, HostLinkClient};
+
+let client = HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100")).await?;
+let dm0 = client.read_typed("DM0", "U").await?;
 ```
 
 ## Model-specific cautions

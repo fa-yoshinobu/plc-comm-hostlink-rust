@@ -3,7 +3,6 @@
   "vectors": [
     {"id": "check_error_no",                 "command": "check_error_no",                                                "response": "00",      "expected_body": "?E"},
     {"id": "query_model_kv8000a",            "command": "query_model",                                                   "response": "58",      "expected_body": "?K"},
-    {"id": "read_device_range_catalog_kv8000a", "command": "read_device_range_catalog",                                  "response": "58",      "expected_body": "?K"},
     {"id": "confirm_operating_mode_run",     "command": "confirm_operating_mode",                                        "response": "1",       "expected_body": "?M"},
     {"id": "forced_set_r0",                  "command": "forced_set",                "device": "R0",                                        "expected_body": "ST R000"},
     {"id": "forced_reset_r0",                "command": "forced_reset",              "device": "R0",                                        "expected_body": "RS R000"},

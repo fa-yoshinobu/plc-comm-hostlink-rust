@@ -1,6 +1,5 @@
 use crate::address::{default_format_by_device_type, is_direct_bit_device_type};
 use crate::error::HostLinkError;
-use crate::model::KvModelInfo;
 use std::sync::OnceLock;
 
 const RANGE_CSV_DATA: &str = r#"DeviceType,Base,KV-NANO,KV-NANO(XYM),KV-3000/5000,KV-3000/5000(XYM),KV-7000,KV-7000(XYM),KV-8000,KV-8000(XYM),KV-X500,KV-X500(XYM)
@@ -108,12 +107,6 @@ pub fn device_range_catalog_for_plc_profile(
     build_catalog(plc_profile.as_ref(), None)
 }
 
-pub(crate) fn device_range_catalog_for_query_model(
-    model: &KvModelInfo,
-) -> Result<KvDeviceRangeCatalog, HostLinkError> {
-    build_catalog_from_model(&model.model, Some(&model.code))
-}
-
 fn build_catalog(
     requested_plc_profile: &str,
     model_code: Option<&str>,
@@ -150,15 +143,6 @@ fn build_catalog(
         resolved_plc_profile,
         entries,
     })
-}
-
-fn build_catalog_from_model(
-    requested_model: &str,
-    model_code: Option<&str>,
-) -> Result<KvDeviceRangeCatalog, HostLinkError> {
-    let table = range_table()?;
-    let resolved_model = resolve_query_model_column(table, requested_model)?;
-    build_catalog(&profile_for_model_header(resolved_model)?, model_code)
 }
 
 pub fn available_plc_profiles() -> Vec<String> {
@@ -537,64 +521,6 @@ fn profile_for_model_header(model_header: &str) -> Result<String, HostLinkError>
 
 fn normalize_plc_profile(text: &str) -> String {
     text.trim().trim_end_matches('\0').to_owned()
-}
-
-fn resolve_query_model_column<'a>(
-    table: &'a RangeTable,
-    requested_model: &str,
-) -> Result<&'a str, HostLinkError> {
-    let normalized = normalize_model_key(requested_model);
-    if let Some(header) = direct_model_match(table, &normalized) {
-        return Ok(header);
-    }
-
-    let wants_xym = normalized.ends_with("(XYM)");
-    let base_model = normalized.strip_suffix("(XYM)").unwrap_or(&normalized);
-    let resolved_family = match base_model {
-        value if value.starts_with("KV-NANO") || value.starts_with("KV-N") => "KV-NANO",
-        value
-            if value.starts_with("KV-3000")
-                || value.starts_with("KV-5000")
-                || value.starts_with("KV-5500") =>
-        {
-            "KV-3000/5000"
-        }
-        value
-            if value.starts_with("KV-7000")
-                || value.starts_with("KV-7300")
-                || value.starts_with("KV-7500") =>
-        {
-            "KV-7000"
-        }
-        value if value.starts_with("KV-8000") => "KV-8000",
-        value if value.starts_with("KV-X5") || value.starts_with("KV-X3") => "KV-X500",
-        _ => {
-            let supported = table.model_headers.join(", ");
-            return Err(HostLinkError::protocol(format!(
-                "Unsupported model '{requested_model}'. Supported range models: {supported}."
-            )));
-        }
-    };
-
-    let resolved_key = if wants_xym {
-        format!("{resolved_family}(XYM)")
-    } else {
-        resolved_family.to_owned()
-    };
-
-    direct_model_match(table, &resolved_key).ok_or_else(|| {
-        HostLinkError::protocol(format!(
-            "Resolved model '{resolved_key}' was not found in the embedded device range table."
-        ))
-    })
-}
-
-fn direct_model_match<'a>(table: &'a RangeTable, normalized: &str) -> Option<&'a str> {
-    table
-        .model_headers
-        .iter()
-        .find(|header| normalize_model_key(header) == normalized)
-        .map(String::as_str)
 }
 
 fn normalize_model_key(text: &str) -> String {
