@@ -14,8 +14,8 @@ const MBS_DEVICE_TYPES: &[&str] = &[
     "R", "B", "MR", "LR", "CR", "T", "C", "VB", "X", "Y", "M", "L",
 ];
 const MWS_DEVICE_TYPES: &[&str] = &[
-    "R", "B", "MR", "LR", "CR", "VB", "X", "Y", "DM", "EM", "FM", "D", "E", "F", "W", "TM",
-    "Z", "TC", "TS", "CC", "CS", "CM", "VM",
+    "R", "B", "MR", "LR", "CR", "VB", "X", "Y", "DM", "EM", "FM", "D", "E", "F", "W", "TM", "Z",
+    "TC", "TS", "CC", "CS", "CM", "VM",
 ];
 const RDC_DEVICE_TYPES: &[&str] = &[
     "R", "B", "MR", "LR", "CR", "DM", "EM", "FM", "ZF", "W", "TM", "Z", "T", "C", "CM", "X", "Y",
