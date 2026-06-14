@@ -50,44 +50,6 @@ and the tables below already reflect the corrected values.
 | `CTC` row | `0-...` | `CTC0-...` | Bare numeric ranges were normalized to keep the device prefix in the published catalog. |
 | `AT` row | `0-...` | `AT0-...` | Bare numeric ranges were normalized to keep the device prefix in the published catalog. |
 
-## PLC Profiles
-
-The public API accepts canonical `PlcProfile` strings only. Legacy KEYENCE model
-labels such as `KV-X500` are not accepted as public profile input.
-
-Supported profiles:
-
-- `keyence:kv-nano`
-- `keyence:kv-nano-xym`
-- `keyence:kv-3000`
-- `keyence:kv-3000-xym`
-- `keyence:kv-5000`
-- `keyence:kv-5000-xym`
-- `keyence:kv-7000`
-- `keyence:kv-7000-xym`
-- `keyence:kv-8000`
-- `keyence:kv-8000-xym`
-- `keyence:kv-x500`
-- `keyence:kv-x500-xym`
-
-Applications must choose one of the canonical profiles explicitly. The runtime
-`?K` command remains available as a diagnostic, but its result is not used to
-select a device-range catalog. Use this family list only when choosing which
-canonical profile to pass:
-
-- `KV-N24nn`, `KV-N40nn`, `KV-N60nn`, `KV-NC32T` -> `KV-NANO`
-- `KV-3000` -> `KV-3000`
-- `KV-5000` -> `KV-5000`
-- `KV-7000`, `KV-7300`, `KV-7500` -> `KV-7000`
-- `KV-8000`, `KV-8000A` -> `KV-8000`
-- `KV-X310`, `KV-X500`, `KV-X520`, `KV-X530`, `KV-X550` -> `KV-X500`
-- Appending `(XYM)` selects the XYM catalog profile for the same family.
-
-Examples:
-
-- `device_range_catalog_for_plc_profile("keyence:kv-x500")` selects the `KV-X500` catalog profile
-- `device_range_catalog_for_plc_profile("keyence:kv-5000-xym")` selects the explicit KV-5000 XYM catalog
-
 ## Static Range Tables
 
 The following Markdown tables are design documentation for the embedded source

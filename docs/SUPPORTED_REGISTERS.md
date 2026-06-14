@@ -55,4 +55,4 @@ The source of truth is the embedded catalog in `src/device_ranges.rs` plus the a
 | Catalog-only rows | `CTH` and `CTC` appear in the range catalog but are not accepted by the current address parser. |
 | Default port | Use Host Link port `8501` unless your PLC configuration says otherwise. |
 
-For model-specific ranges, see [PROFILES.md](PROFILES.md).
+For numeric range bounds and XYM alias limits, see [DEVICE_RANGES.md](DEVICE_RANGES.md).
