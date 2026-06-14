@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0] - 2026-06-14
+
+### Changed
+- Bumped release metadata to 0.8.0 for the unified PLC communication library release.
+
 ## [0.1.4] - 2026-06-12
 
 ### Changed
