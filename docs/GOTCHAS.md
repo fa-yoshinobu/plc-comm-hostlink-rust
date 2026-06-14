@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## X/Y address rejected
+## X or Y address rejected
 
 | Field | Detail |
 | --- | --- |
@@ -60,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## R/MR/LR/CR address rejected
+## R, MR, LR, or CR address rejected
 
 | Field | Detail |
 | --- | --- |
