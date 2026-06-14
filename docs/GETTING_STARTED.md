@@ -2,7 +2,7 @@
 
 ## Start here
 
-Use this page to make your first KEYENCE KV Host Link connection from Rust. The examples use the high-level async API and read from `DM0` before any write.
+Use this page to make your first KEYENCE KV Host Link connection from Rust. The examples select the canonical profile `keyence:kv-7000`, use the high-level async API, and read from `DM0` before any write.
 
 ## Prerequisites
 
@@ -21,6 +21,20 @@ cargo add plc-comm-hostlink-rust
 ```
 
 The package name is `plc-comm-hostlink-rust`; the import path in Rust code is `plc_comm_hostlink`.
+
+## Choose profile
+
+Use the exact canonical profile string that matches your PLC model when you need the device range catalog. The library does not infer the catalog from the PLC model response.
+
+```rust
+use plc_comm_hostlink::device_range_catalog_for_plc_profile;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let catalog = device_range_catalog_for_plc_profile("keyence:kv-7000")?;
+    println!("{}", catalog.plc_profile);
+    Ok(())
+}
+```
 
 ## Connect
 
@@ -103,6 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | Symptom | Check |
 | --- | --- |
 | Connection fails immediately | The default port is `8501`, not `1025`. |
+| Profile selection fails | Use one of the exact strings in [PROFILES.md](PROFILES.md); aliases and old combined names are rejected. |
 | You need the verification binary | Build it with `cargo build --features cli --bin hostlink_verify_client`. |
 | Reads fail on special devices | Start with `DM` reads first, then move to timers, counters, aliases, or comments. |
 
@@ -113,4 +128,6 @@ Detailed edge cases live in [GOTCHAS.md](GOTCHAS.md).
 | Page | Link |
 | --- | --- |
 | Usage guide | [USAGE_GUIDE.md](USAGE_GUIDE.md) |
+| PLC profiles | [PROFILES.md](PROFILES.md) |
 | Supported registers | [SUPPORTED_REGISTERS.md](SUPPORTED_REGISTERS.md) |
+| Gotchas | [GOTCHAS.md](GOTCHAS.md) |

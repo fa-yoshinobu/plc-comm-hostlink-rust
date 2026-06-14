@@ -7,6 +7,8 @@
 | `HostLinkConnectionOptions` | `pub struct HostLinkConnectionOptions` | Configure host, port, timeout, transport, and frame suffix behavior. |
 | `HostLinkClient::connect` | `pub async fn connect(options: HostLinkConnectionOptions) -> Result<Self, HostLinkError>` | Open a direct async client. |
 | `open_and_connect` | `pub async fn open_and_connect(options: HostLinkConnectionOptions) -> Result<QueuedHostLinkClient, HostLinkError>` | Open a queued client that serializes operations. |
+| `available_plc_profiles` | `pub fn available_plc_profiles() -> Vec<String>` | List the exact canonical profile strings accepted by the embedded range catalog. |
+| `device_range_catalog_for_plc_profile` | `pub fn device_range_catalog_for_plc_profile(plc_profile: impl AsRef<str>) -> Result<KvDeviceRangeCatalog, HostLinkError>` | Select the profile-specific device range catalog. |
 | `read_typed` | `pub async fn read_typed(client: &HostLinkClient, device: &str, dtype: &str) -> Result<HostLinkValue, HostLinkError>` | Read one typed value through the helper function. |
 | `HostLinkClient::read_typed` | `pub async fn read_typed(&self, device: &str, dtype: &str) -> Result<HostLinkValue, HostLinkError>` | Read one typed value through the client method. |
 | `write_typed` | `pub async fn write_typed<T: HostLinkPayloadValue>(client: &HostLinkClient, device: &str, dtype: &str, value: &T) -> Result<(), HostLinkError>` | Write one typed value through the helper function. |
@@ -214,7 +216,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Device comments
 
 ```rust
-let comment = client.read_comments("DM20", true).await?;
+use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client =
+        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100")).await?;
+
+    let comment = client.read_comments("DM20", true).await?;
+    println!("{comment}");
+
+    client.close().await?;
+    Ok(())
+}
 ```
 
 ## Address reference table

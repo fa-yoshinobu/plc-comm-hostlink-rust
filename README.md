@@ -7,9 +7,9 @@
 
 Rust async library for KEYENCE KV Host Link communication.
 
-## Supported PLC models
+## Supported profiles
 
-| PLC profile | Catalog profile | Notes |
+| Canonical profile | Catalog profile | Notes |
 | --- | --- | --- |
 | `keyence:kv-nano` | `KV-NANO` | Standard KV-NANO device ranges. |
 | `keyence:kv-nano-xym` | `KV-NANO(XYM)` | KV-NANO ranges with XYM alias notation. |
@@ -49,15 +49,20 @@ The package name is `plc-comm-hostlink-rust`; the Rust import path is `plc_comm_
 ## Quick example
 
 ```rust
-use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
+use plc_comm_hostlink::{
+    HostLinkClient, HostLinkConnectionOptions, device_range_catalog_for_plc_profile,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client =
-        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100")).await?;
+    let catalog = device_range_catalog_for_plc_profile("keyence:kv-7000")?;
+
+    let mut options = HostLinkConnectionOptions::new("192.168.250.100");
+    options.port = 8501;
+    let client = HostLinkClient::connect(options).await?;
 
     let dm0 = client.read_typed("DM0", "U").await?;
-    println!("{:?}", dm0);
+    println!("{} DM0 = {:?}", catalog.plc_profile, dm0);
 
     client.close().await?;
     Ok(())
@@ -72,6 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | Usage guide | [docs/USAGE_GUIDE.md](docs/USAGE_GUIDE.md) |
 | Supported registers | [docs/SUPPORTED_REGISTERS.md](docs/SUPPORTED_REGISTERS.md) |
 | PLC profiles | [docs/PROFILES.md](docs/PROFILES.md) |
+| Gotchas | [docs/GOTCHAS.md](docs/GOTCHAS.md) |
 | Examples | [examples/README.md](examples/README.md) |
 
 ## Hardware verified

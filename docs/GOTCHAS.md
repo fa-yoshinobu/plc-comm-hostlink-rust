@@ -1,78 +1,175 @@
 # Gotchas
 
-## Timer/counter preset write fails
+## Timer/counter preset write returns E1
 
-Only KV-8000/7000-series support preset writes. Other models error out.
-
-Fix: use `read_timer_counter` for status only on unsupported models.
+| Field | Detail |
+| --- | --- |
+| Symptom | A timer or counter preset write returns `E1`. |
+| Root cause | Host Link preset writes through `WS` and `WSS` are supported on KV-8000/7000-series, not on KV-3000, KV-5000, or KV-NANO. |
+| Fix | Do not write timer/counter presets on unsupported models; use `read_timer`, `read_counter`, or `read_timer_counter` for safe reads. |
 
 ```rust
-let value = client.read_timer_counter("T0").await?;
-println!("{:?}", value);
+use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client =
+        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100")).await?;
+
+    let value = client.read_timer_counter("T0").await?;
+    println!("{:?}", value);
+
+    client.close().await?;
+    Ok(())
+}
 ```
 
-## AT device fails on some models
+## AT device fails on KV-X500
 
-AT trimmer is not available on KV-X500.
-
-Fix: check the device range catalog before accessing `AT`.
+| Field | Detail |
+| --- | --- |
+| Symptom | Reading `AT0` fails or the range catalog reports no `AT` entry for KV-X500. |
+| Root cause | `AT` is not available in `keyence:kv-x500` or `keyence:kv-x500-xym`. |
+| Fix | Check the selected profile before using `AT`, and avoid `AT` on KV-X500 projects. |
 
 ```rust
-let catalog = device_range_catalog_for_plc_profile("keyence:kv-8000")?;
-println!("{:?}", catalog.entry("AT"));
+use plc_comm_hostlink::device_range_catalog_for_plc_profile;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let catalog = device_range_catalog_for_plc_profile("keyence:kv-x500")?;
+    println!("{:?}", catalog.entry("AT"));
+    Ok(())
+}
 ```
 
-## X or Y address rejected
+## X/Y address rejected
 
-`X` and `Y` use decimal-bank plus hex-bit notation.
-
-Fix: use `"X10F"` instead of `"X275"`.
+| Field | Detail |
+| --- | --- |
+| Symptom | `X` or `Y` raises an address parse or PLC device-number error. |
+| Root cause | `X` and `Y` use decimal-bank plus hex-bit notation. `X10F` means bank 10, bit F. |
+| Fix | Use `X10F` or `Y10F`, and select an `-xym` profile when you want XYM aliases. |
 
 ```rust
-let value = client.read_typed("X10F", "").await?;
-println!("{:?}", value);
+use plc_comm_hostlink::HostLinkAddress;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let address = HostLinkAddress::normalize("X10F")?;
+    println!("{address}");
+    Ok(())
+}
 ```
 
 ## R/MR/LR/CR address rejected
 
-The low two digits are a decimal bit position and must be `00` through `15`.
-
-Fix: use `"R200"` instead of hex-only or single-decimal-bit notation.
+| Field | Detail |
+| --- | --- |
+| Symptom | `R`, `MR`, `LR`, or `CR` raises an address parse or PLC device-number error. |
+| Root cause | These families use KEYENCE two-digit bit notation. |
+| Fix | Use forms such as `R200` or `MR100`; do not treat the full suffix as one hexadecimal number. |
 
 ```rust
-let value = client.read_typed("R200", "").await?;
-println!("{:?}", value);
+use plc_comm_hostlink::HostLinkAddress;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let address = HostLinkAddress::normalize("MR100")?;
+    println!("{address}");
+    Ok(())
+}
 ```
 
-## Connection fails immediately
+## Wrong port causes an immediate timeout
 
-Default port is `8501`.
-
-Fix: `HostLinkConnectionOptions::new("192.168.250.100")` uses `8501` by default; verify you did not override it to `1025`.
+| Field | Detail |
+| --- | --- |
+| Symptom | The connection times out immediately even though the PLC responds on the network. |
+| Root cause | KV Host Link uses port `8501`, not the SLMP/Computerlink port `1025`. |
+| Fix | Set `options.port = 8501` or leave the default from `HostLinkConnectionOptions::new`. |
 
 ```rust
-let options = HostLinkConnectionOptions::new("192.168.250.100");
-println!("{:?}", options.port);
+use plc_comm_hostlink::HostLinkConnectionOptions;
+
+fn main() {
+    let mut options = HostLinkConnectionOptions::new("192.168.250.100");
+    options.port = 8501;
+    println!("{}", options.port);
+}
+```
+
+## keyence:kv-3000-5000 rejected
+
+| Field | Detail |
+| --- | --- |
+| Symptom | `device_range_catalog_for_plc_profile("keyence:kv-3000-5000")` returns an error. |
+| Root cause | The old combined profile no longer exists. KV-3000 and KV-5000 are separate canonical profiles. |
+| Fix | Use `keyence:kv-3000`, `keyence:kv-3000-xym`, `keyence:kv-5000`, or `keyence:kv-5000-xym`. |
+
+```rust
+use plc_comm_hostlink::device_range_catalog_for_plc_profile;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let catalog = device_range_catalog_for_plc_profile("keyence:kv-5000")?;
+    println!("{}", catalog.plc_profile);
+    Ok(())
+}
+```
+
+## Non-canonical profile string rejected
+
+| Field | Detail |
+| --- | --- |
+| Symptom | A display label, uppercase variant, or old alias returns `HostLinkError`. |
+| Root cause | The range catalog accepts only exact canonical profile strings. It does not infer the profile from a PLC model response. |
+| Fix | Store the canonical string from [PROFILES.md](PROFILES.md) in your project settings or UI value. |
+
+```rust
+use plc_comm_hostlink::available_plc_profiles;
+
+fn main() {
+    for profile in available_plc_profiles() {
+        println!("{profile}");
+    }
+}
 ```
 
 ## DM100.D reads the wrong thing
 
-Dot notation means bit-in-word, so `DM100.D` is bit `13`, not a double-word read.
-
-Fix: use colon notation for data types.
+| Field | Detail |
+| --- | --- |
+| Symptom | `DM100.D` reads a boolean-like value instead of a 32-bit value. |
+| Root cause | Dot notation means bit-in-word, so `DM100.D` is bit 13, not a double-word read. |
+| Fix | Use the dtype argument or colon notation for data types. |
 
 ```rust
-let value = client.read_typed("DM100", "D").await?;
-println!("{:?}", value);
+use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client =
+        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100")).await?;
+
+    let value = client.read_typed("DM100", "D").await?;
+    println!("{:?}", value);
+
+    client.close().await?;
+    Ok(())
+}
 ```
 
 ## CTH or CTC address rejected
 
-`CTH` and `CTC` appear in the catalog for some profiles, but the current parser does not accept them as input addresses.
-
-Fix: treat them as catalog metadata only.
+| Field | Detail |
+| --- | --- |
+| Symptom | `CTH` or `CTC` appears in the catalog but fails as an input address. |
+| Root cause | `CTH` and `CTC` are catalog metadata rows for supported profiles, while the current address parser does not accept them as input addresses. |
+| Fix | Treat them as catalog metadata only. |
 
 ```rust
-let catalog = device_range_catalog_for_plc_profile("keyence:kv-8000")?;
-println!("{:?}", catalog.entry("CTH"));
+use plc_comm_hostlink::device_range_catalog_for_plc_profile;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let catalog = device_range_catalog_for_plc_profile("keyence:kv-5000")?;
+    println!("{:?}", catalog.entry("CTH"));
+    Ok(())
+}
 ```
