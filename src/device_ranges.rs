@@ -775,18 +775,22 @@ mod tests {
     #[test]
     fn available_profiles_include_xym_profiles() {
         let profiles = available_plc_profiles();
-        assert!(profiles.iter().any(|profile| profile == "keyence:kv-3000"));
-        assert!(profiles.iter().any(|profile| profile == "keyence:kv-5000"));
-        assert!(profiles.iter().any(|profile| profile == "keyence:kv-7000"));
-        assert!(
-            profiles
-                .iter()
-                .any(|profile| profile == "keyence:kv-7000-xym")
-        );
-        assert!(
-            !profiles
-                .iter()
-                .any(|profile| profile == "keyence:kv-3000-5000")
+        assert_eq!(
+            profiles,
+            vec![
+                "keyence:kv-nano",
+                "keyence:kv-nano-xym",
+                "keyence:kv-3000",
+                "keyence:kv-3000-xym",
+                "keyence:kv-5000",
+                "keyence:kv-5000-xym",
+                "keyence:kv-7000",
+                "keyence:kv-7000-xym",
+                "keyence:kv-8000",
+                "keyence:kv-8000-xym",
+                "keyence:kv-x500",
+                "keyence:kv-x500-xym",
+            ]
         );
     }
 
@@ -955,6 +959,5 @@ mod tests {
         assert!(device_range_catalog_for_plc_profile("KV-X500").is_err());
         assert!(device_range_catalog_for_plc_profile("KEYENCE:KV-X500").is_err());
         assert!(device_range_catalog_for_plc_profile("keyence:kv-1000").is_err());
-        assert!(device_range_catalog_for_plc_profile("keyence:kv-3000-5000").is_err());
     }
 }

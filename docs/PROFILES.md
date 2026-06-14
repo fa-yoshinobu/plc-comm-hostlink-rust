@@ -42,7 +42,8 @@ let dm0 = client.read_typed("DM0", "U").await?;
 | Model or profile | Caution |
 | --- | --- |
 | KV-NANO | `EM`, `FM`, `ZF`, and `AT` are unsupported in the embedded catalog. |
-| KV-3000 / KV-5000 | `AT` is readable, but write helpers reject `AT` because it is not in the Host Link write-device table. |
+| KV-3000 | `AT` is readable, but write helpers reject `AT` because it is not in the Host Link write-device table. |
+| KV-5000 | `AT` is readable, but write helpers reject `AT` because it is not in the Host Link write-device table. |
 | KV-7000 | Timer/counter preset writes are supported by the KV-7000/8000 class only; use care when changing preset values. |
 | KV-8000 | Timer/counter preset writes are supported by the KV-7000/8000 class only; use care when changing preset values. |
 | KV-X500 | `VM`, `VB`, `CTH`, `CTC`, and `AT` are unsupported in the embedded catalog. |
