@@ -50,13 +50,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Page | Use it for |
 | --- | --- |
-| Getting started | [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) |
-| Usage guide | [docs/USAGE_GUIDE.md](docs/USAGE_GUIDE.md) |
-| Supported registers | [docs/SUPPORTED_REGISTERS.md](docs/SUPPORTED_REGISTERS.md) |
-| PLC profiles | [docs/PROFILES.md](docs/PROFILES.md) |
-| Gotchas | [docs/GOTCHAS.md](docs/GOTCHAS.md) |
-| Examples | [examples/README.md](examples/README.md) |
-| Full documentation site | [plc-comm-docs-site](https://fa-yoshinobu.github.io/plc-comm-docs-site/) |
+| [Full documentation site](https://fa-yoshinobu.github.io/plc-comm-docs-site/) | Unified docs for all PLC communication libraries. |
+| [Getting started](docs/GETTING_STARTED.md) | Install the crate, connect to your PLC, and run your first read/write. |
+| [Usage guide](docs/USAGE_GUIDE.md) | Use the high-level API and common Host Link workflows. |
+| [Supported registers](docs/SUPPORTED_REGISTERS.md) | Check supported device families and address forms. |
+| [PLC profiles](docs/PROFILES.md) | Choose the canonical KEYENCE KV profile for the target PLC. |
+| [Gotchas](docs/GOTCHAS.md) | Troubleshoot common profile, address, timer/counter, and transport issues. |
+| [Examples](examples/README.md) | Run maintained Rust examples. |
+| [API docs](https://docs.rs/plc-comm-hostlink-rust) | Browse the generated Rust API reference. |
 
 ## Hardware verified
 
@@ -70,4 +71,3 @@ See that page for verified PLC models, transports, dates, limitations, and retai
 | License | [MIT](LICENSE) |
 | Registry | [crates.io](https://crates.io/crates/plc-comm-hostlink-rust) |
 | Package | `plc-comm-hostlink-rust` |
-| API docs | [docs.rs/plc-comm-hostlink-rust](https://docs.rs/plc-comm-hostlink-rust) |
