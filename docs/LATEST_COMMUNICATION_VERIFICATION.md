@@ -1,4 +1,4 @@
-# Latest Communication Verification
+# Latest communication verification
 
 This page is the public index for retained live-device validation records.
 
