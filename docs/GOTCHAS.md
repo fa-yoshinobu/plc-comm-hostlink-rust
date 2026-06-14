@@ -96,12 +96,12 @@ fn main() {
 }
 ```
 
-## keyence:kv-3000-5000 rejected
+## KV-3000 and KV-5000 use separate profiles
 
 | Field | Detail |
 | --- | --- |
-| Symptom | `device_range_catalog_for_plc_profile("keyence:kv-3000-5000")` returns an error. |
-| Root cause | The old combined profile no longer exists. KV-3000 and KV-5000 are separate canonical profiles. |
+| Symptom | A KV-3000 or KV-5000 range lookup uses the wrong catalog. |
+| Root cause | KV-3000 and KV-5000 are separate canonical profiles. |
 | Fix | Use `keyence:kv-3000`, `keyence:kv-3000-xym`, `keyence:kv-5000`, or `keyence:kv-5000-xym`. |
 
 ```rust
