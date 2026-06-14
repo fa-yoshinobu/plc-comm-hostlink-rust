@@ -19,7 +19,7 @@ This file tracks active follow-up items for the Rust Host Link library.
   `T/C` read `E0`, `VB0/VB1` readback NG, raw `AT` write `E1` with current
   helpers rejecting AT before WR/WRS send, and `CTH/CTC` parser/client
   unsupported. See
-  `docs/KV5000_LIVE_VALIDATION_2026-05-03.md`.
+  maintainer archive.
 
 - [x] **KV-7000 class all-device sample compare**: On 2026-05-03, the live
   KEYENCE KV-7000 class target at `192.168.250.100:8501` reported model code
@@ -31,7 +31,7 @@ This file tracks active follow-up items for the Rust Host Link library.
   capability behavior: `CR2000` readback NG, `T/C` read `E0`, raw `AT` write
   `E1` with current helpers rejecting AT before WR/WRS send, and
   catalog-unsupported `CTH/CTC`. See
-  `docs/KV7000_LIVE_VALIDATION_2026-05-03.md`.
+  maintainer archive.
 
 ## 3. Cross-Stack API Alignment
 
