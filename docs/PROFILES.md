@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Model-specific cautions
 
-| Model or profile | Caution |
+| Scope | Caution |
 | --- | --- |
 | KV-NANO | `EM`, `FM`, `ZF`, and `AT` are unsupported in the embedded catalog. |
 | KV-3000 | `AT` is readable, but write helpers reject `AT` because it is not in the Host Link write-device table. |
