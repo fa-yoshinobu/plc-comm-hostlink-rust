@@ -79,6 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | PLC profiles | [docs/PROFILES.md](docs/PROFILES.md) |
 | Gotchas | [docs/GOTCHAS.md](docs/GOTCHAS.md) |
 | Examples | [examples/README.md](examples/README.md) |
+| Full documentation site | [plc-comm-docs-site](https://github.com/fa-yoshinobu/plc-comm-docs-site) |
 
 ## Hardware verified
 
