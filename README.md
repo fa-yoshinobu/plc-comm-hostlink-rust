@@ -1,6 +1,5 @@
 [![CI](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/plc-comm-hostlink-rust.svg)](https://crates.io/crates/plc-comm-hostlink-rust)
-[![docs.rs](https://img.shields.io/docsrs/plc-comm-hostlink-rust)](https://docs.rs/plc-comm-hostlink-rust)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 # KEYENCE KV Host Link for Rust
@@ -57,7 +56,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | [PLC profiles](docs/PROFILES.md) | Choose the canonical KEYENCE KV profile for the target PLC. |
 | [Gotchas](docs/GOTCHAS.md) | Troubleshoot common profile, address, timer/counter, and transport issues. |
 | [Examples](examples/README.md) | Run maintained Rust examples. |
-| [API docs](https://docs.rs/plc-comm-hostlink-rust) | Browse the generated Rust API reference. |
 
 ## Hardware verified
 
