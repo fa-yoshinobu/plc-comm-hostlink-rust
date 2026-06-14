@@ -1,5 +1,5 @@
 [![CI](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/actions/workflows/ci.yml)
-[![Crates.io](https://img.shields.io/crates/v/plc-comm-hostlink-rust.svg)](https://crates.io/crates/plc-comm-hostlink-rust)
+[![crates.io](https://img.shields.io/crates/v/plc-comm-hostlink-rust.svg)](https://crates.io/crates/plc-comm-hostlink-rust)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 # KEYENCE KV Host Link for Rust
