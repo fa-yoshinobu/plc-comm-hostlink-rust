@@ -96,24 +96,6 @@ fn main() {
 }
 ```
 
-## KV-3000 and KV-5000 use separate profiles
-
-| Field | Detail |
-| --- | --- |
-| Symptom | A KV-3000 or KV-5000 range lookup uses the wrong catalog. |
-| Root cause | KV-3000 and KV-5000 are separate canonical profiles. |
-| Fix | Use `keyence:kv-3000`, `keyence:kv-3000-xym`, `keyence:kv-5000`, or `keyence:kv-5000-xym`. |
-
-```rust
-use plc_comm_hostlink::device_range_catalog_for_plc_profile;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let catalog = device_range_catalog_for_plc_profile("keyence:kv-5000")?;
-    println!("{}", catalog.plc_profile);
-    Ok(())
-}
-```
-
 ## Non-canonical profile string rejected
 
 | Field | Detail |

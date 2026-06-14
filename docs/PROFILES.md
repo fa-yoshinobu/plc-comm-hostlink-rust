@@ -2,9 +2,9 @@
 
 PLC profiles select one embedded device-range catalog. They are useful when you build UI validation, address pickers, or model-specific checks before talking to the PLC. The library accepts only the exact canonical strings in this table.
 
-## Supported profiles
+## Supported PLC profiles
 
-| Canonical profile | Catalog profile | Runtime model |
+| Canonical profile | Human label | Runtime model |
 | --- | --- | --- |
 | `keyence:kv-nano` | `KV-NANO` | `KV-N24nn`, `KV-N40nn`, `KV-N60nn`, `KV-NC32T` |
 | `keyence:kv-nano-xym` | `KV-NANO(XYM)` | KV-NANO family with XYM aliases. |
