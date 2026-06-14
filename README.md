@@ -9,12 +9,14 @@ Rust async library for KEYENCE KV Host Link communication.
 
 ## Supported PLC models
 
-| PLC profile | Catalog column | Notes |
+| PLC profile | Catalog profile | Notes |
 | --- | --- | --- |
 | `keyence:kv-nano` | `KV-NANO` | Standard KV-NANO device ranges. |
 | `keyence:kv-nano-xym` | `KV-NANO(XYM)` | KV-NANO ranges with XYM alias notation. |
-| `keyence:kv-3000-5000` | `KV-3000/5000` | KV-3000, KV-5000, and KV-5500 family ranges. |
-| `keyence:kv-3000-5000-xym` | `KV-3000/5000(XYM)` | KV-3000/5000 ranges with XYM alias notation. |
+| `keyence:kv-3000` | `KV-3000` | KV-3000 device ranges. |
+| `keyence:kv-3000-xym` | `KV-3000(XYM)` | KV-3000 ranges with XYM alias notation. |
+| `keyence:kv-5000` | `KV-5000` | KV-5000 device ranges. |
+| `keyence:kv-5000-xym` | `KV-5000(XYM)` | KV-5000 ranges with XYM alias notation. |
 | `keyence:kv-7000` | `KV-7000` | KV-7000, KV-7300, and KV-7500 family ranges. |
 | `keyence:kv-7000-xym` | `KV-7000(XYM)` | KV-7000 ranges with XYM alias notation. |
 | `keyence:kv-8000` | `KV-8000` | KV-8000 and KV-8000A family ranges. |
@@ -77,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | PLC | Runtime result | Transport | Validation record |
 | --- | --- | --- | --- |
 | KEYENCE KV-7500 | Model code `55`, resolved as `KV-7000` | TCP and UDP | [KV-7000 live validation](docs/KV7000_LIVE_VALIDATION_2026-05-03.md) |
-| KEYENCE KV-5000 | Model code `52`, resolved as `KV-3000/5000` | TCP | [KV-5000 live validation](docs/KV5000_LIVE_VALIDATION_2026-05-03.md) |
+| KEYENCE KV-5000 | Model code `52`, configured as `keyence:kv-5000` | TCP | [KV-5000 live validation](docs/KV5000_LIVE_VALIDATION_2026-05-03.md) |
 
 ## License and registry
 

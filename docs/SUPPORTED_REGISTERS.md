@@ -17,7 +17,7 @@ The source of truth is the embedded catalog in `src/device_ranges.rs` plus the a
 | `Z` | Index | `D` | Native 32-bit index register. |
 | `T`, `TC`, `TS` | Timer/counter | `D` | Timer-related values. `T` is in the range catalog; `TC` and `TS` are accepted as input addresses. |
 | `C`, `CC`, `CS` | Timer/counter | `D` | Counter-related values. `C` is in the range catalog; `CC` and `CS` are accepted as input addresses. |
-| `AT` | Timer/counter | `D` | Digital trimmer values on KV-3000/5000, KV-7000, and KV-8000 profiles. |
+| `AT` | Timer/counter | `D` | Digital trimmer values on KV-3000, KV-5000, KV-7000, and KV-8000 profiles. |
 
 ## Bit device families
 
@@ -51,7 +51,7 @@ The source of truth is the embedded catalog in `src/device_ranges.rs` plus the a
 | --- | --- |
 | `X` and `Y` notation | Use decimal bank digits followed by one hex bit digit, such as `X10F`. Do not write the whole value as one decimal number like `X275`. |
 | `R`, `MR`, `LR`, and `CR` notation | Use two decimal bit digits for the low bit position, such as `R200`, `MR115`, or `CR7915`. The low two digits must be `00` through `15`. |
-| `AT` restriction | `AT` exists only on KV-3000/5000, KV-7000, and KV-8000 catalog profiles. It is not in the write-device table, so write helpers reject it. |
+| `AT` restriction | `AT` exists only on KV-3000, KV-5000, KV-7000, and KV-8000 catalog profiles. It is not in the write-device table, so write helpers reject it. |
 | Catalog-only rows | `CTH` and `CTC` appear in the range catalog but are not accepted by the current address parser. |
 | Default port | Use Host Link port `8501` unless your PLC configuration says otherwise. |
 

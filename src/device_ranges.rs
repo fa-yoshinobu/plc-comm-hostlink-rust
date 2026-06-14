@@ -2,29 +2,6 @@ use crate::address::{default_format_by_device_type, is_direct_bit_device_type};
 use crate::error::HostLinkError;
 use std::sync::OnceLock;
 
-const RANGE_CSV_DATA: &str = r#"DeviceType,Base,KV-NANO,KV-NANO(XYM),KV-3000/5000,KV-3000/5000(XYM),KV-7000,KV-7000(XYM),KV-8000,KV-8000(XYM),KV-X500,KV-X500(XYM)
-R,10,R00000-R59915,"X0-599F,Y0-599F",R00000-R99915,"X0-999F,Y0-999F",R00000-R199915,"X0-1999F,Y0-1999F",R00000-R199915,"X0-1999F,Y0-1999F",R00000-R199915,"X0-1999F,Y0-1999F"
-B,16,B0000-B1FFF,B0000-B1FFF,B0000-B3FFF,B0000-B3FFF,B0000-B7FFF,B0000-B7FFF,B0000-B7FFF,B0000-B7FFF,B0000-B7FFF,B0000-B7FFF
-MR,10,MR00000-MR59915,M0-9599,MR00000-MR99915,M0-15999,MR000000-MR399915,M000000-M63999,MR000000-MR399915,M000000-M63999,MR000000-MR399915,M000000-M63999
-LR,10,LR00000-LR19915,L0-3199,LR00000-LR99915,L0-15999,LR00000-LR99915,L00000-L15999,LR00000-LR99915,L00000-L15999,LR00000-LR99915,L00000-L15999
-CR,10,CR0000-CR8915,CR0000-CR8915,CR0000-CR3915,CR0000-CR3915,CR0000-CR7915,CR0000-CR7915,CR0000-CR7915,CR0000-CR7915,CR0000-CR7915,CR0000-CR7915
-CM,10,CM0000-CM8999,CM0000-CM8999,CM0000-CM5999,CM0000-CM5999,CM0000-CM5999,CM0000-CM5999,CM0000-CM7599,CM0000-CM7599,CM0000-CM7599,CM0000-CM7599
-T,10,T0000-T0511,T0000-T0511,T0000-T3999,T0000-T3999,T0000-T3999,T0000-T3999,T0000-T3999,T0000-T3999,T0000-T3999,T0000-T3999
-C,10,C0000-C0255,C0000-C0255,C0000-C3999,C0000-C3999,C0000-C3999,C0000-C3999,C0000-C3999,C0000-C3999,C0000-C3999,C0000-C3999
-DM,10,DM00000-DM32767,D0-32767,DM00000-DM65534,D0-65534,DM00000-DM65534,D00000-D65534,DM00000-DM65534,D00000-D65534,DM00000-DM65534,D00000-D65534
-EM,10,-,-,EM00000-EM65534,E0-65534,EM00000-EM65534,E00000-E65534,EM00000-EM65534,E00000-E65534,EM00000-EM65534,E00000-E65534
-FM,10,-,-,FM00000-FM32767,F0-32767,FM00000-FM32767,F00000-F32767,FM00000-FM32767,F00000-F32767,FM00000-FM32767,F00000-F32767
-ZF,10,-,-,ZF000000-ZF131071,ZF000000-ZF131071,ZF000000-ZF524287,ZF000000-ZF524287,ZF000000-ZF524287,ZF000000-ZF524287,ZF000000-ZF524287,ZF000000-ZF524287
-W,16,W0000-W3FFF,W0000-W3FFF,W0000-W3FFF,W0000-W3FFF,W0000-W7FFF,W0000-W7FFF,W0000-W7FFF,W0000-W7FFF,W0000-W7FFF,W0000-W7FFF
-TM,10,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511,TM000-TM511
-VM,10,VM0-9499,VM0-9499,VM0-49999,VM0-49999,VM0-63999,VM0-63999,VM0-589823,VM0-589823,-,-
-VB,16,VB0-1FFF,VB0-1FFF,VB0-3FFF,VB0-3FFF,VB0-F9FF,VB0-F9FF,VB0-F9FF,VB0-F9FF,-,-
-Z,10,Z1-12,Z1-12,Z1-12,Z1-12,Z1-12,Z1-12,Z1-12,Z1-12,Z1-10,Z1-10
-CTH,10,CTH0-3,CTH0-3,CTH0-1,CTH0-3,-,-,-,-,-,-
-CTC,10,CTC0-7,CTC0-7,CTC0-3,CTC0-3,-,-,-,-,-,-
-AT,10,-,-,AT0-7,AT0-7,AT0-7,AT0-7,AT0-7,AT0-7,-,-
-"#;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KvDeviceRangeNotation {
     Decimal,
@@ -117,30 +94,30 @@ fn build_catalog(
     }
 
     let table = range_table()?;
-    let resolved_model = model_header_for_profile(table, &requested_plc_profile)?;
-    let resolved_plc_profile = profile_for_model_header(resolved_model)?;
+    let resolved_profile = range_profile_for_plc_profile(table, &requested_plc_profile)?;
     let model_index = table
-        .model_headers
+        .profiles
         .iter()
-        .position(|header| header == resolved_model)
+        .position(|profile| profile.plc_profile == resolved_profile.plc_profile)
         .ok_or_else(|| {
             HostLinkError::protocol(format!(
-                "Resolved model column '{resolved_model}' was not found in the embedded device range table."
+                "Resolved PLC profile '{}' was not found in the embedded device range table.",
+                resolved_profile.plc_profile
             ))
         })?;
 
     let entries = table
         .rows
         .iter()
-        .map(|row| build_entry(row, model_index, resolved_model))
+        .map(|row| build_entry(row, model_index, resolved_profile.display_name))
         .collect::<Vec<_>>();
 
     Ok(KvDeviceRangeCatalog {
-        plc_profile: resolved_plc_profile.clone(),
+        plc_profile: resolved_profile.plc_profile.to_owned(),
         model_code: model_code.unwrap_or_default().to_owned(),
         has_model_code: model_code.is_some(),
         requested_plc_profile,
-        resolved_plc_profile,
+        resolved_plc_profile: resolved_profile.plc_profile.to_owned(),
         entries,
     })
 }
@@ -149,9 +126,9 @@ pub fn available_plc_profiles() -> Vec<String> {
     range_table()
         .map(|table| {
             table
-                .model_headers
+                .profiles
                 .iter()
-                .filter_map(|header| profile_for_model_header(header).ok())
+                .map(|profile| profile.plc_profile.to_owned())
                 .collect()
         })
         .unwrap_or_default()
@@ -159,8 +136,14 @@ pub fn available_plc_profiles() -> Vec<String> {
 
 #[derive(Debug, Clone)]
 struct RangeTable {
-    model_headers: Vec<String>,
+    profiles: Vec<RangeProfile>,
     rows: Vec<RangeRow>,
+}
+
+#[derive(Debug, Clone)]
+struct RangeProfile {
+    display_name: &'static str,
+    plc_profile: &'static str,
 }
 
 #[derive(Debug, Clone)]
@@ -170,105 +153,384 @@ struct RangeRow {
     ranges: Vec<String>,
 }
 
-static RANGE_TABLE: OnceLock<Result<RangeTable, String>> = OnceLock::new();
+static RANGE_TABLE: OnceLock<RangeTable> = OnceLock::new();
 
 fn range_table() -> Result<&'static RangeTable, HostLinkError> {
-    RANGE_TABLE
-        .get_or_init(|| parse_range_table().map_err(|error| error.to_string()))
-        .as_ref()
-        .map_err(|error| HostLinkError::protocol(error.clone()))
+    Ok(RANGE_TABLE.get_or_init(create_range_table))
 }
 
-fn parse_range_table() -> Result<RangeTable, HostLinkError> {
-    let mut lines = RANGE_CSV_DATA
-        .lines()
-        .filter(|line| !line.trim().is_empty());
-    let header_line = lines
-        .next()
-        .ok_or_else(|| HostLinkError::protocol("Embedded device range table is empty"))?;
-    let headers = parse_csv_line(header_line)?;
-    if headers.len() < 3 {
-        return Err(HostLinkError::protocol(
-            "Embedded device range table must contain at least DeviceType, Base, and one model column",
-        ));
+fn create_range_table() -> RangeTable {
+    RangeTable {
+        profiles: vec![
+            RangeProfile {
+                display_name: "KV-NANO",
+                plc_profile: "keyence:kv-nano",
+            },
+            RangeProfile {
+                display_name: "KV-NANO(XYM)",
+                plc_profile: "keyence:kv-nano-xym",
+            },
+            RangeProfile {
+                display_name: "KV-3000",
+                plc_profile: "keyence:kv-3000",
+            },
+            RangeProfile {
+                display_name: "KV-3000(XYM)",
+                plc_profile: "keyence:kv-3000-xym",
+            },
+            RangeProfile {
+                display_name: "KV-5000",
+                plc_profile: "keyence:kv-5000",
+            },
+            RangeProfile {
+                display_name: "KV-5000(XYM)",
+                plc_profile: "keyence:kv-5000-xym",
+            },
+            RangeProfile {
+                display_name: "KV-7000",
+                plc_profile: "keyence:kv-7000",
+            },
+            RangeProfile {
+                display_name: "KV-7000(XYM)",
+                plc_profile: "keyence:kv-7000-xym",
+            },
+            RangeProfile {
+                display_name: "KV-8000",
+                plc_profile: "keyence:kv-8000",
+            },
+            RangeProfile {
+                display_name: "KV-8000(XYM)",
+                plc_profile: "keyence:kv-8000-xym",
+            },
+            RangeProfile {
+                display_name: "KV-X500",
+                plc_profile: "keyence:kv-x500",
+            },
+            RangeProfile {
+                display_name: "KV-X500(XYM)",
+                plc_profile: "keyence:kv-x500-xym",
+            },
+        ],
+        rows: vec![
+            row(
+                "R",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "R00000-R59915",
+                    "X0-599F,Y0-599F",
+                    "R00000-R99915",
+                    "X0-999F,Y0-999F",
+                    "R00000-R99915",
+                    "X0-999F,Y0-999F",
+                    "R00000-R199915",
+                    "X0-1999F,Y0-1999F",
+                    "R00000-R199915",
+                    "X0-1999F,Y0-1999F",
+                    "R00000-R199915",
+                    "X0-1999F,Y0-1999F",
+                ],
+            ),
+            row(
+                "B",
+                KvDeviceRangeNotation::Hexadecimal,
+                &[
+                    "B0000-B1FFF",
+                    "B0000-B1FFF",
+                    "B0000-B3FFF",
+                    "B0000-B3FFF",
+                    "B0000-B3FFF",
+                    "B0000-B3FFF",
+                    "B0000-B7FFF",
+                    "B0000-B7FFF",
+                    "B0000-B7FFF",
+                    "B0000-B7FFF",
+                    "B0000-B7FFF",
+                    "B0000-B7FFF",
+                ],
+            ),
+            row(
+                "MR",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "MR00000-MR59915",
+                    "M0-9599",
+                    "MR00000-MR99915",
+                    "M0-15999",
+                    "MR00000-MR99915",
+                    "M0-15999",
+                    "MR000000-MR399915",
+                    "M000000-M63999",
+                    "MR000000-MR399915",
+                    "M000000-M63999",
+                    "MR000000-MR399915",
+                    "M000000-M63999",
+                ],
+            ),
+            row(
+                "LR",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "LR00000-LR19915",
+                    "L0-3199",
+                    "LR00000-LR99915",
+                    "L0-15999",
+                    "LR00000-LR99915",
+                    "L0-15999",
+                    "LR00000-LR99915",
+                    "L00000-L15999",
+                    "LR00000-LR99915",
+                    "L00000-L15999",
+                    "LR00000-LR99915",
+                    "L00000-L15999",
+                ],
+            ),
+            row(
+                "CR",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "CR0000-CR8915",
+                    "CR0000-CR8915",
+                    "CR0000-CR3915",
+                    "CR0000-CR3915",
+                    "CR0000-CR3915",
+                    "CR0000-CR3915",
+                    "CR0000-CR7915",
+                    "CR0000-CR7915",
+                    "CR0000-CR7915",
+                    "CR0000-CR7915",
+                    "CR0000-CR7915",
+                    "CR0000-CR7915",
+                ],
+            ),
+            row(
+                "CM",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "CM0000-CM8999",
+                    "CM0000-CM8999",
+                    "CM0000-CM5999",
+                    "CM0000-CM5999",
+                    "CM0000-CM5999",
+                    "CM0000-CM5999",
+                    "CM0000-CM5999",
+                    "CM0000-CM5999",
+                    "CM0000-CM7599",
+                    "CM0000-CM7599",
+                    "CM0000-CM7599",
+                    "CM0000-CM7599",
+                ],
+            ),
+            row(
+                "T",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "T0000-T0511",
+                    "T0000-T0511",
+                    "T0000-T3999",
+                    "T0000-T3999",
+                    "T0000-T3999",
+                    "T0000-T3999",
+                    "T0000-T3999",
+                    "T0000-T3999",
+                    "T0000-T3999",
+                    "T0000-T3999",
+                    "T0000-T3999",
+                    "T0000-T3999",
+                ],
+            ),
+            row(
+                "C",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "C0000-C0255",
+                    "C0000-C0255",
+                    "C0000-C3999",
+                    "C0000-C3999",
+                    "C0000-C3999",
+                    "C0000-C3999",
+                    "C0000-C3999",
+                    "C0000-C3999",
+                    "C0000-C3999",
+                    "C0000-C3999",
+                    "C0000-C3999",
+                    "C0000-C3999",
+                ],
+            ),
+            row(
+                "DM",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "DM00000-DM32767",
+                    "D0-32767",
+                    "DM00000-DM65534",
+                    "D0-65534",
+                    "DM00000-DM65534",
+                    "D0-65534",
+                    "DM00000-DM65534",
+                    "D00000-D65534",
+                    "DM00000-DM65534",
+                    "D00000-D65534",
+                    "DM00000-DM65534",
+                    "D00000-D65534",
+                ],
+            ),
+            row(
+                "EM",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "-",
+                    "-",
+                    "EM00000-EM65534",
+                    "E0-65534",
+                    "EM00000-EM65534",
+                    "E0-65534",
+                    "EM00000-EM65534",
+                    "E00000-E65534",
+                    "EM00000-EM65534",
+                    "E00000-E65534",
+                    "EM00000-EM65534",
+                    "E00000-E65534",
+                ],
+            ),
+            row(
+                "FM",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "-",
+                    "-",
+                    "FM00000-FM32767",
+                    "F0-32767",
+                    "FM00000-FM32767",
+                    "F0-32767",
+                    "FM00000-FM32767",
+                    "F00000-F32767",
+                    "FM00000-FM32767",
+                    "F00000-F32767",
+                    "FM00000-FM32767",
+                    "F00000-F32767",
+                ],
+            ),
+            row(
+                "ZF",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "-",
+                    "-",
+                    "ZF000000-ZF131071",
+                    "ZF000000-ZF131071",
+                    "ZF000000-ZF131071",
+                    "ZF000000-ZF131071",
+                    "ZF000000-ZF524287",
+                    "ZF000000-ZF524287",
+                    "ZF000000-ZF524287",
+                    "ZF000000-ZF524287",
+                    "ZF000000-ZF524287",
+                    "ZF000000-ZF524287",
+                ],
+            ),
+            row(
+                "W",
+                KvDeviceRangeNotation::Hexadecimal,
+                &[
+                    "W0000-W3FFF",
+                    "W0000-W3FFF",
+                    "W0000-W3FFF",
+                    "W0000-W3FFF",
+                    "W0000-W3FFF",
+                    "W0000-W3FFF",
+                    "W0000-W7FFF",
+                    "W0000-W7FFF",
+                    "W0000-W7FFF",
+                    "W0000-W7FFF",
+                    "W0000-W7FFF",
+                    "W0000-W7FFF",
+                ],
+            ),
+            row(
+                "TM",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "TM000-TM511",
+                    "TM000-TM511",
+                    "TM000-TM511",
+                    "TM000-TM511",
+                    "TM000-TM511",
+                    "TM000-TM511",
+                    "TM000-TM511",
+                    "TM000-TM511",
+                    "TM000-TM511",
+                    "TM000-TM511",
+                    "TM000-TM511",
+                    "TM000-TM511",
+                ],
+            ),
+            row(
+                "VM",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "VM0-9499",
+                    "VM0-9499",
+                    "VM0-49999",
+                    "VM0-49999",
+                    "VM0-49999",
+                    "VM0-49999",
+                    "VM0-63999",
+                    "VM0-63999",
+                    "VM0-589823",
+                    "VM0-589823",
+                    "-",
+                    "-",
+                ],
+            ),
+            row(
+                "VB",
+                KvDeviceRangeNotation::Hexadecimal,
+                &[
+                    "VB0-1FFF", "VB0-1FFF", "VB0-3FFF", "VB0-3FFF", "VB0-3FFF", "VB0-3FFF",
+                    "VB0-F9FF", "VB0-F9FF", "VB0-F9FF", "VB0-F9FF", "-", "-",
+                ],
+            ),
+            row(
+                "Z",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "Z1-12", "Z1-12", "Z1-12", "Z1-12", "Z1-12", "Z1-12", "Z1-12", "Z1-12",
+                    "Z1-12", "Z1-12", "Z1-10", "Z1-10",
+                ],
+            ),
+            row(
+                "CTH",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "CTH0-3", "CTH0-3", "CTH0-1", "CTH0-3", "CTH0-1", "CTH0-3", "-", "-", "-", "-",
+                    "-", "-",
+                ],
+            ),
+            row(
+                "CTC",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "CTC0-7", "CTC0-7", "CTC0-3", "CTC0-3", "CTC0-3", "CTC0-3", "-", "-", "-", "-",
+                    "-", "-",
+                ],
+            ),
+            row(
+                "AT",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "-", "-", "AT0-7", "AT0-7", "AT0-7", "AT0-7", "AT0-7", "AT0-7", "AT0-7",
+                    "AT0-7", "-", "-",
+                ],
+            ),
+        ],
     }
-
-    let model_headers = headers[2..]
-        .iter()
-        .map(|header| header.trim().to_owned())
-        .collect::<Vec<_>>();
-    let mut rows = Vec::new();
-
-    for line in lines {
-        let fields = parse_csv_line(line)?;
-        if fields.len() != headers.len() {
-            return Err(HostLinkError::protocol(format!(
-                "Embedded device range row has {} columns but {} were expected: {line}",
-                fields.len(),
-                headers.len()
-            )));
-        }
-
-        rows.push(RangeRow {
-            device_type: fields[0].trim().to_owned(),
-            notation: notation_from_base(&fields[1])?,
-            ranges: fields[2..]
-                .iter()
-                .map(|value| value.trim().to_owned())
-                .collect(),
-        });
-    }
-
-    Ok(RangeTable {
-        model_headers,
-        rows,
-    })
 }
 
-fn parse_csv_line(line: &str) -> Result<Vec<String>, HostLinkError> {
-    let mut fields = Vec::new();
-    let mut current = String::new();
-    let mut chars = line.trim_end_matches('\r').chars().peekable();
-    let mut in_quotes = false;
-
-    while let Some(ch) = chars.next() {
-        match ch {
-            '"' => {
-                if in_quotes && chars.peek() == Some(&'"') {
-                    current.push('"');
-                    chars.next();
-                } else {
-                    in_quotes = !in_quotes;
-                }
-            }
-            ',' if !in_quotes => {
-                fields.push(current);
-                current = String::new();
-            }
-            _ => current.push(ch),
-        }
-    }
-
-    if in_quotes {
-        return Err(HostLinkError::protocol(format!(
-            "Embedded device range table contains an unterminated quoted field: {line}"
-        )));
-    }
-
-    fields.push(current);
-    Ok(fields)
-}
-
-fn notation_from_base(base_text: &str) -> Result<KvDeviceRangeNotation, HostLinkError> {
-    let normalized = base_text.trim();
-    if normalized.starts_with("10") {
-        Ok(KvDeviceRangeNotation::Decimal)
-    } else if normalized.starts_with("16") {
-        Ok(KvDeviceRangeNotation::Hexadecimal)
-    } else {
-        Err(HostLinkError::protocol(format!(
-            "Unsupported base cell '{base_text}' in the embedded device range table"
-        )))
+fn row(device_type: &str, notation: KvDeviceRangeNotation, ranges: &[&str]) -> RangeRow {
+    RangeRow {
+        device_type: device_type.to_owned(),
+        notation,
+        ranges: ranges.iter().map(|range| (*range).to_owned()).collect(),
     }
 }
 
@@ -483,14 +745,14 @@ fn notation_for_device(
     }
 }
 
-fn model_header_for_profile<'a>(
+fn range_profile_for_plc_profile<'a>(
     table: &'a RangeTable,
     plc_profile: &str,
-) -> Result<&'a str, HostLinkError> {
+) -> Result<&'a RangeProfile, HostLinkError> {
     let normalized = normalize_plc_profile(plc_profile);
-    for header in &table.model_headers {
-        if profile_for_model_header(header)? == normalized {
-            return Ok(header);
+    for profile in &table.profiles {
+        if profile.plc_profile == normalized {
+            return Ok(profile);
         }
     }
     let supported = available_plc_profiles().join(", ");
@@ -499,59 +761,37 @@ fn model_header_for_profile<'a>(
     )))
 }
 
-fn profile_for_model_header(model_header: &str) -> Result<String, HostLinkError> {
-    let normalized = normalize_model_key(model_header);
-    let wants_xym = normalized.ends_with("(XYM)");
-    let base_model = normalized.strip_suffix("(XYM)").unwrap_or(&normalized);
-    let profile_key = match base_model {
-        "KV-NANO" => "kv-nano",
-        "KV-3000/5000" => "kv-3000-5000",
-        "KV-7000" => "kv-7000",
-        "KV-8000" => "kv-8000",
-        "KV-X500" => "kv-x500",
-        _ => {
-            return Err(HostLinkError::protocol(format!(
-                "Cannot map model header '{model_header}' to a PLC profile."
-            )));
-        }
-    };
-    let suffix = if wants_xym { "-xym" } else { "" };
-    Ok(format!("keyence:{profile_key}{suffix}"))
-}
-
 fn normalize_plc_profile(text: &str) -> String {
     text.trim().trim_end_matches('\0').to_owned()
-}
-
-fn normalize_model_key(text: &str) -> String {
-    text.trim()
-        .trim_end_matches('\0')
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect::<String>()
-        .to_ascii_uppercase()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         KvDeviceRangeCategory, KvDeviceRangeNotation, available_plc_profiles,
-        device_range_catalog_for_plc_profile, normalize_model_key,
+        device_range_catalog_for_plc_profile,
     };
 
     #[test]
-    fn available_profiles_include_xym_columns_from_csv() {
+    fn available_profiles_include_xym_profiles() {
         let profiles = available_plc_profiles();
+        assert!(profiles.iter().any(|profile| profile == "keyence:kv-3000"));
+        assert!(profiles.iter().any(|profile| profile == "keyence:kv-5000"));
         assert!(profiles.iter().any(|profile| profile == "keyence:kv-7000"));
         assert!(
             profiles
                 .iter()
                 .any(|profile| profile == "keyence:kv-7000-xym")
         );
+        assert!(
+            !profiles
+                .iter()
+                .any(|profile| profile == "keyence:kv-3000-5000")
+        );
     }
 
     #[test]
-    fn resolves_plc_profiles_to_csv_family_columns() {
+    fn resolves_plc_profiles_to_range_catalogs() {
         let catalog = device_range_catalog_for_plc_profile("keyence:kv-8000").unwrap();
         assert_eq!(catalog.plc_profile, "keyence:kv-8000");
         assert_eq!(catalog.model_code, "");
@@ -577,7 +817,7 @@ mod tests {
 
     #[test]
     fn xym_catalog_splits_multi_device_ranges_into_segments() {
-        let catalog = device_range_catalog_for_plc_profile("keyence:kv-3000-5000-xym").unwrap();
+        let catalog = device_range_catalog_for_plc_profile("keyence:kv-3000-xym").unwrap();
         let entry = catalog.entry("R").unwrap();
 
         assert_eq!(entry.device, "R");
@@ -650,7 +890,7 @@ mod tests {
             Some("CM0000-CM8999")
         );
 
-        let xym = device_range_catalog_for_plc_profile("keyence:kv-3000-5000-xym").unwrap();
+        let xym = device_range_catalog_for_plc_profile("keyence:kv-5000-xym").unwrap();
         assert_eq!(
             xym.entry("CR").unwrap().address_range.as_deref(),
             Some("CR0000-CR3915")
@@ -679,13 +919,23 @@ mod tests {
             Some("CTC0-7")
         );
 
-        let kv3000 = device_range_catalog_for_plc_profile("keyence:kv-3000-5000").unwrap();
+        let kv3000 = device_range_catalog_for_plc_profile("keyence:kv-3000").unwrap();
         assert_eq!(
             kv3000.entry("AT").unwrap().address_range.as_deref(),
             Some("AT0-7")
         );
         assert_eq!(
             kv3000.entry("CTH").unwrap().address_range.as_deref(),
+            Some("CTH0-1")
+        );
+
+        let kv5000 = device_range_catalog_for_plc_profile("keyence:kv-5000").unwrap();
+        assert_eq!(
+            kv5000.entry("AT").unwrap().address_range.as_deref(),
+            Some("AT0-7")
+        );
+        assert_eq!(
+            kv5000.entry("CTH").unwrap().address_range.as_deref(),
             Some("CTH0-1")
         );
     }
@@ -701,14 +951,10 @@ mod tests {
     }
 
     #[test]
-    fn normalize_model_key_removes_whitespace_and_uppercases() {
-        assert_eq!(normalize_model_key(" kv-x500 (xym) "), "KV-X500(XYM)");
-    }
-
-    #[test]
     fn public_profile_input_rejects_legacy_model_names() {
         assert!(device_range_catalog_for_plc_profile("KV-X500").is_err());
         assert!(device_range_catalog_for_plc_profile("KEYENCE:KV-X500").is_err());
         assert!(device_range_catalog_for_plc_profile("keyence:kv-1000").is_err());
+        assert!(device_range_catalog_for_plc_profile("keyence:kv-3000-5000").is_err());
     }
 }

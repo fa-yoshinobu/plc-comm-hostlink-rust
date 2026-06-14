@@ -21,7 +21,7 @@ target/debug/hostlink_verify_client 192.168.250.100 8501 read-named DM0 DM1:S DM
 Observed:
 
 - `query-model`: OK, model code `52`, model `KV-5000`
-- `range-catalog`: OK, resolved embedded table `KV-3000/5000`
+- `range-catalog`: OK, configured embedded catalog `keyence:kv-5000`
 - Named read: OK
   - `DM0=64959`
   - `DM1:S=32`
@@ -66,7 +66,7 @@ KV_SAMPLE_POINTS=10 cargo run --features cli --example kv_device_range_sample_co
 
 Behavior:
 
-- Uses the live range catalog resolved from `?M` (`KV-3000/5000`, model code `52`).
+- Uses the explicit `keyence:kv-5000` range catalog for model code `52`.
 - Samples up to 10 addresses per device: first, second, middle/quarter points, and last.
 - Performs read, write A, readback A, write B, readback B, and restore.
 - `R` write samples start at `R200` to avoid the current PLC's real I/O at `R0`.
