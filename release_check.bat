@@ -12,10 +12,10 @@ if %errorlevel% neq 0 (
     exit /b %errorlevel%
 )
 
-echo [2/3] Running tests...
-cargo test --all-features
+echo [2/3] Running CI...
+call run_ci.bat
 if %errorlevel% neq 0 (
-    echo [ERROR] Tests failed.
+    echo [ERROR] CI failed.
     exit /b %errorlevel%
 )
 
