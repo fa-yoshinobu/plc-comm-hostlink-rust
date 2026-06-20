@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.0] - 2026-06-21
+
+### Changed
+- Require an explicit canonical PLC profile when creating Host Link connection options, aligning standard connection behavior with the cross-language libraries.
+- Updated examples to pass the PLC profile argument explicitly.
+
 ## [0.8.0] - 2026-06-14
 
 ### Changed
