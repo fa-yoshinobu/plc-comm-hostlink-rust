@@ -2,6 +2,9 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use time::{Month, OffsetDateTime};
 
+use crate::device_ranges::device_range_catalog_for_plc_profile;
+use crate::error::HostLinkError;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostLinkTransportMode {
     Tcp,
@@ -85,7 +88,7 @@ fn month_to_number(month: Month) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::HostLinkClock;
+    use super::{HostLinkClock, HostLinkConnectionOptions};
     use time::{Date, Month, Time};
 
     fn clock_for(year: i32, month: Month, day: u8) -> HostLinkClock {
@@ -100,6 +103,15 @@ mod tests {
         assert_eq!(clock_for(2026, Month::March, 16).week, 1);
         assert_eq!(clock_for(2026, Month::March, 21).week, 6);
     }
+
+    #[test]
+    fn connection_options_require_canonical_plc_profile() {
+        let options = HostLinkConnectionOptions::new("127.0.0.1", "keyence:kv-8000").unwrap();
+
+        assert_eq!(options.plc_profile(), "keyence:kv-8000");
+        assert!(HostLinkConnectionOptions::new("127.0.0.1", "").is_err());
+        assert!(HostLinkConnectionOptions::new("127.0.0.1", "KV-8000").is_err());
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -109,16 +121,34 @@ pub struct HostLinkConnectionOptions {
     pub timeout: std::time::Duration,
     pub transport: HostLinkTransportMode,
     pub append_lf_on_send: bool,
+    pub(crate) plc_profile: String,
 }
 
 impl HostLinkConnectionOptions {
-    pub fn new(host: impl Into<String>) -> Self {
-        Self {
+    pub fn new(
+        host: impl Into<String>,
+        plc_profile: impl AsRef<str>,
+    ) -> Result<Self, HostLinkError> {
+        Ok(Self {
             host: host.into(),
             port: 8501,
             timeout: std::time::Duration::from_secs(3),
             transport: HostLinkTransportMode::Tcp,
             append_lf_on_send: false,
-        }
+            plc_profile: normalize_plc_profile(plc_profile)?,
+        })
     }
+
+    pub fn plc_profile(&self) -> &str {
+        &self.plc_profile
+    }
+
+    pub fn set_plc_profile(&mut self, plc_profile: impl AsRef<str>) -> Result<(), HostLinkError> {
+        self.plc_profile = normalize_plc_profile(plc_profile)?;
+        Ok(())
+    }
+}
+
+fn normalize_plc_profile(plc_profile: impl AsRef<str>) -> Result<String, HostLinkError> {
+    Ok(device_range_catalog_for_plc_profile(plc_profile)?.plc_profile)
 }

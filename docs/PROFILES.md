@@ -38,7 +38,7 @@ use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut options = HostLinkConnectionOptions::new("192.168.250.100");
+    let mut options = HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?;
     options.port = 8501;
     let client = HostLinkClient::connect(options).await?;
 

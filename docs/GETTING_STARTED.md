@@ -38,14 +38,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Connect
 
-`HostLinkConnectionOptions::new("192.168.250.100")` uses TCP port `8501` by default.
+`HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?` uses TCP port `8501` by default.
 
 ```rust
 use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let options = HostLinkConnectionOptions::new("192.168.250.100");
+    let options = HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?;
     let client = HostLinkClient::connect(options).await?;
 
     println!("{:?}", client.is_open().await);
@@ -65,7 +65,7 @@ use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client =
-        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100")).await?;
+        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
 
     let dm0 = client.read_typed("DM0", "U").await?;
     println!("{:?}", dm0);
@@ -93,7 +93,7 @@ use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client =
-        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100")).await?;
+        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
 
     client.write_typed("DM120", "U", 1234_u16).await?;
     let dm120 = client.read_typed("DM120", "U").await?;

@@ -37,6 +37,7 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
     let mut count = 1usize;
     let mut interval_ms = 10u64;
     let mut transport = String::from("tcp");
+    let mut plc_profile = String::new();
     let mut extra = Vec::new();
     let mut index = 5usize;
     while index < args.len() {
@@ -57,6 +58,10 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                 transport = args[index + 1].clone();
                 index += 2;
             }
+            "--plc-profile" if index + 1 < args.len() => {
+                plc_profile = args[index + 1].clone();
+                index += 2;
+            }
             _ => {
                 extra.push(args[index].clone());
                 index += 1;
@@ -64,7 +69,14 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
         }
     }
 
-    let mut options = HostLinkConnectionOptions::new(host.clone());
+    if plc_profile.trim().is_empty() {
+        return Ok(json!({
+            "status": "error",
+            "message": "PLC profile is required. Pass --plc-profile with a canonical value such as keyence:kv-8000."
+        }));
+    }
+
+    let mut options = HostLinkConnectionOptions::new(host.clone(), &plc_profile)?;
     options.port = port;
     options.transport = parse_transport(&transport)?;
     let client = open_and_connect(options).await?;
@@ -235,7 +247,10 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
         }
         "range-catalog" | "read-device-range-catalog" => {
             let plc_profile = if address.trim().is_empty() {
-                extra.first().cloned().unwrap_or_default()
+                extra
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| plc_profile.clone())
             } else {
                 address.clone()
             };
