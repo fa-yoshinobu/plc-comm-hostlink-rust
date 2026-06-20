@@ -32,7 +32,7 @@ use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut options = HostLinkConnectionOptions::new("192.168.250.100");
+    let mut options = HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?;
     options.port = 8501;
     options.timeout = Duration::from_secs(3);
     options.transport = HostLinkTransportMode::Tcp;
@@ -62,7 +62,7 @@ use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client =
-        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100")).await?;
+        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
 
     let value = client.read_typed("DM0", "U").await?;
     println!("{:?}", value);
@@ -80,7 +80,7 @@ use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client =
-        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100")).await?;
+        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
 
     client.write_typed("DM120", "U", 1234_u16).await?;
     let value = client.read_typed("DM120", "U").await?;
@@ -99,7 +99,7 @@ use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client =
-        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100")).await?;
+        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
 
     let snapshot = client
         .read_named(&["DM0", "DM1:S", "DM2:D", "DM4:F", "DM120.0"])
@@ -128,7 +128,7 @@ use plc_comm_hostlink::{
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client =
-        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100")).await?;
+        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
 
     let words = read_words_single_request(&client, "DM0", 4).await?;
     let dwords = read_dwords_chunked(&client, "DM100", 8, 2).await?;
@@ -150,7 +150,7 @@ use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client =
-        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100")).await?;
+        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
 
     let bit = client.read_named(&["DM120.0"]).await?;
     println!("{:?}", bit);
@@ -174,7 +174,7 @@ use std::time::Duration;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client =
-        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100")).await?;
+        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
     let addresses = ["DM0", "DM1:S", "DM2:D"];
     let mut stream = Box::pin(poll(&client, &addresses, Duration::from_millis(500)));
 
@@ -197,7 +197,7 @@ use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client =
-        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100")).await?;
+        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
 
     let timer = client.read_timer_counter("T0").await?;
     let timer_checked = client.read_timer("T0").await?;
@@ -221,7 +221,7 @@ use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client =
-        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100")).await?;
+        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
 
     let comment = client.read_comments("DM20", true).await?;
     println!("{comment}");

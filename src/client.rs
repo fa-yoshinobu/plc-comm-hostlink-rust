@@ -191,6 +191,10 @@ impl HostLinkClient {
         self.inner.lock().await.options.timeout
     }
 
+    pub async fn plc_profile(&self) -> String {
+        self.inner.lock().await.options.plc_profile.clone()
+    }
+
     pub async fn set_timeout(&self, timeout: Duration) {
         self.inner.lock().await.options.timeout = timeout;
     }

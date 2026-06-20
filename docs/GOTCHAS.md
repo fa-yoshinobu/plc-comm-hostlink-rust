@@ -14,7 +14,7 @@ use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client =
-        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100")).await?;
+        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
 
     let value = client.read_timer_counter("T0").await?;
     println!("{:?}", value);
@@ -90,7 +90,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 use plc_comm_hostlink::HostLinkConnectionOptions;
 
 fn main() {
-    let mut options = HostLinkConnectionOptions::new("192.168.250.100");
+    let mut options = HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?;
     options.port = 8501;
     println!("{}", options.port);
 }
@@ -128,7 +128,7 @@ use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client =
-        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100")).await?;
+        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
 
     let value = client.read_typed("DM100", "D").await?;
     println!("{:?}", value);

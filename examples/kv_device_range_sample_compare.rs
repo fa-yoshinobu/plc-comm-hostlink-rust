@@ -3,6 +3,9 @@
 //! This intentionally writes test values to sampled addresses and restores the
 //! original values. Run it only against a PLC and address range prepared for
 //! validation.
+//!
+//! Usage:
+//!   cargo run --features cli --example kv_device_range_sample_compare -- <host> <port> <plc-profile>
 
 use plc_comm_hostlink::{
     HostLinkConnectionOptions, HostLinkError, HostLinkValue, KvDeviceAddress, KvDeviceRangeEntry,
@@ -96,29 +99,24 @@ impl DeviceReport {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    // The default target follows the public docs: 192.168.250.100:8501.
     let args = std::env::args().collect::<Vec<_>>();
-    let host = args
-        .get(1)
-        .cloned()
-        .or_else(|| std::env::var("HOSTLINK_HOST").ok())
-        .unwrap_or_else(|| "192.168.250.100".to_owned());
-    let port = args
-        .get(2)
-        .cloned()
-        .or_else(|| std::env::var("HOSTLINK_PORT").ok())
-        .unwrap_or_else(|| "8501".to_owned())
-        .parse::<u16>()?;
+    if args.len() < 4 {
+        return Err(make_error(
+            "Usage: cargo run --features cli --example kv_device_range_sample_compare -- <host> <port> <plc-profile>",
+        ));
+    }
+
+    let host = args[1].clone();
+    let port = args[2].parse::<u16>()?;
+    let plc_profile = args[3].clone();
     let sample_points = env_usize("KV_SAMPLE_POINTS", 10);
     let only = env_csv("KV_SAMPLE_ONLY");
     let only_set = only.iter().cloned().collect::<BTreeSet<_>>();
 
-    let mut options = HostLinkConnectionOptions::new(host);
+    let mut options = HostLinkConnectionOptions::new(host, &plc_profile)?;
     options.port = port;
     let client = open_and_connect(options).await?;
 
-    let plc_profile =
-        std::env::var("KV_PLC_PROFILE").unwrap_or_else(|_| "keyence:kv-8000".to_owned());
     let catalog = device_range_catalog_for_plc_profile(&plc_profile)?;
 
     println!(

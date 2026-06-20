@@ -1,25 +1,23 @@
 //! Basic high-level Host Link example using the queued client.
 //!
-//! The default target is `192.168.250.100:8501`. The write uses a DM test
-//! address; change it before running against a PLC program that owns that range.
+//! Usage:
+//!   cargo run --features cli --example basic_high_level -- <host> <port> <plc-profile>
+//!
+//! The write uses a DM test address; change it before running against a PLC
+//! program that owns that range.
 
 use plc_comm_hostlink::{
     HostLinkConnectionOptions, device_range_catalog_for_plc_profile, open_and_connect,
 };
+use std::error::Error;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let host = std::env::var("HOSTLINK_HOST").unwrap_or_else(|_| "192.168.250.100".to_owned());
-    let mut options = HostLinkConnectionOptions::new(host);
-    if let Ok(port) = std::env::var("HOSTLINK_PORT") {
-        options.port = port.parse()?;
-    }
-
-    // `HostLinkConnectionOptions::new` defaults to Host Link port 8501.
+async fn main() -> Result<(), Box<dyn Error>> {
+    let (host, port, plc_profile) = parse_args()?;
+    let mut options = HostLinkConnectionOptions::new(host, &plc_profile)?;
+    options.port = port;
     let client = open_and_connect(options).await?;
 
-    let plc_profile =
-        std::env::var("HOSTLINK_PLC_PROFILE").unwrap_or_else(|_| "keyence:kv-8000".to_owned());
     let catalog = device_range_catalog_for_plc_profile(&plc_profile)?;
     println!("{:?}", catalog.plc_profile);
 
@@ -32,4 +30,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     println!("{snapshot:?}");
     Ok(())
+}
+
+fn parse_args() -> Result<(String, u16, String), Box<dyn Error>> {
+    let args = std::env::args().collect::<Vec<_>>();
+    if args.len() < 4 {
+        return Err("Usage: cargo run --features cli --example basic_high_level -- <host> <port> <plc-profile>".into());
+    }
+    Ok((args[1].clone(), args[2].parse()?, args[3].clone()))
 }

@@ -37,7 +37,7 @@ async fn frame_vectors_send_expected_bodies() {
 
     for vector in vectors {
         let (port, received) = start_echo_server(vector.response.clone()).await;
-        let mut options = HostLinkConnectionOptions::new("127.0.0.1");
+        let mut options = HostLinkConnectionOptions::new("127.0.0.1", "keyence:kv-8000").unwrap();
         options.port = port;
         let client = HostLinkClient::connect(options).await.unwrap();
         let _ = run_vector(&client, &vector).await;
