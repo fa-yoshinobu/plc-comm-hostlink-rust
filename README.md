@@ -31,7 +31,7 @@ use plc_comm_hostlink::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let catalog = device_range_catalog_for_plc_profile("keyence:kv-7000")?;
+    let catalog = device_range_catalog_for_plc_profile("keyence:kv-8000")?;
 
     let mut options = HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?;
     options.port = 8501;

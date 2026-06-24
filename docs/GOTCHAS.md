@@ -89,10 +89,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```rust
 use plc_comm_hostlink::HostLinkConnectionOptions;
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut options = HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?;
     options.port = 8501;
     println!("{}", options.port);
+    Ok(())
 }
 ```
 

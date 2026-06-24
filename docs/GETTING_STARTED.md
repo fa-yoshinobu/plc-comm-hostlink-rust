@@ -2,7 +2,7 @@
 
 ## Start here
 
-Use this page to make your first KEYENCE KV Host Link connection from Rust. The examples select the canonical profile `keyence:kv-7000`, use the high-level async API, and read from `DM0` before any write.
+Use this page to make your first KEYENCE KV Host Link connection from Rust. The examples select the canonical profile `keyence:kv-8000`, use the high-level async API, and read from `DM0` before any write.
 
 ## Prerequisites
 
@@ -30,7 +30,7 @@ Use the exact canonical profile string that matches your PLC model when you need
 use plc_comm_hostlink::device_range_catalog_for_plc_profile;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let catalog = device_range_catalog_for_plc_profile("keyence:kv-7000")?;
+    let catalog = device_range_catalog_for_plc_profile("keyence:kv-8000")?;
     println!("{}", catalog.plc_profile);
     Ok(())
 }
@@ -95,9 +95,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client =
         HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
 
+    let original = client.read_typed("DM120", "U").await?;
     client.write_typed("DM120", "U", 1234_u16).await?;
     let dm120 = client.read_typed("DM120", "U").await?;
     println!("{:?}", dm120);
+    client.write_typed("DM120", "U", original).await?;
 
     client.close().await?;
     Ok(())
@@ -110,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 2. Confirm the connection example prints `true`.
 3. Confirm the first read prints a `HostLinkValue`, such as `U16(...)`.
 4. Confirm any write uses a test-only `DM` address.
-5. Restore the test register if your procedure requires a known value.
+5. Confirm the write example restores the original test-register value.
 
 ## If it does not work
 

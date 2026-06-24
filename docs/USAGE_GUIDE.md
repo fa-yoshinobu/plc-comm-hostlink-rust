@@ -13,7 +13,7 @@
 | `HostLinkClient::read_typed` | `pub async fn read_typed(&self, device: &str, dtype: &str) -> Result<HostLinkValue, HostLinkError>` | Read one typed value through the client method. |
 | `write_typed` | `pub async fn write_typed<T: HostLinkPayloadValue>(client: &HostLinkClient, device: &str, dtype: &str, value: &T) -> Result<(), HostLinkError>` | Write one typed value through the helper function. |
 | `HostLinkClient::write_typed` | `pub async fn write_typed<T: HostLinkPayloadValue>(&self, device: &str, dtype: &str, value: T) -> Result<(), HostLinkError>` | Write one typed value through the client method. |
-| `read_named` | `pub async fn read_named<S: AsRef<str>>(client: &HostLinkClient, addresses: &[S]) -> Result<NamedSnapshot, HostLinkError>` | Read a named snapshot from several addresses. |
+| `read_named` | `pub async fn read_named<S: AsRef<str>>(client: &HostLinkClient, addresses: &[S]) -> Result<NamedSnapshot, HostLinkError>` | Read a named snapshot from several addresses, including `:COMMENT` strings. |
 | `poll` | `pub fn poll<'a, S: AsRef<str> + 'a>(client: &'a HostLinkClient, addresses: &'a [S], interval: Duration) -> impl Stream<Item = Result<NamedSnapshot, HostLinkError>> + 'a` | Poll a named snapshot on an interval. |
 
 ## Connection
@@ -82,9 +82,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client =
         HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
 
+    let original = client.read_typed("DM120", "U").await?;
     client.write_typed("DM120", "U", 1234_u16).await?;
     let value = client.read_typed("DM120", "U").await?;
     println!("{:?}", value);
+    client.write_typed("DM120", "U", original).await?;
 
     client.close().await?;
     Ok(())
@@ -94,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Named snapshot
 
 ```rust
-use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
+use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions, HostLinkValue};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -102,7 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
 
     let snapshot = client
-        .read_named(&["DM0", "DM1:S", "DM2:D", "DM4:F", "DM120.0"])
+        .read_named(&["DM0", "DM1:S", "DM2:D", "DM4:F", "DM120.0", "DM0:COMMENT"])
         .await?;
     println!("{:?}", snapshot);
 
@@ -154,8 +156,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let bit = client.read_named(&["DM120.0"]).await?;
     println!("{:?}", bit);
+    let original_bit = matches!(bit.get("DM120.0"), Some(HostLinkValue::Bool(true)));
 
     client.write_bit_in_word("DM120", 0, true).await?;
+    client.write_bit_in_word("DM120", 0, original_bit).await?;
 
     client.close().await?;
     Ok(())
@@ -241,4 +245,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `:D` | Unsigned 32-bit value. | `DM2:D` |
 | `:L` | Signed 32-bit value. | `DM2:L` |
 | `:F` | 32-bit floating point value. | `DM4:F` |
+| `:COMMENT` | PLC device comment text as `HostLinkValue::Text`. | `DM0:COMMENT` |
 | `.n` | Bit-in-word index `0` through `F`. | `DM120.0`, `DM120.F` |
