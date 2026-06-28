@@ -15,11 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Tooling`: Developer/operator command-line tools and helper utilities.
 - `CI`: Release checks, workflow scripts, or automation-only changes.
 
-## [Unreleased] - 2026-06-25
+## [Unreleased] - 2026-06-28
 
 ### Changed
 - Docs: Refreshed Host Link getting-started, gotchas, supported-register, and usage guidance.
 - Samples: Updated Host Link examples to use safer write/restore patterns.
+
+### Fixed
+- Library: Reject malformed embedded device-range segments while building the KV range catalog instead of silently defaulting invalid lower bounds to `0`.
+- Library: `BIT_IN_WORD` now requires an explicit `.0` through `.F` bit index instead of treating a missing bit index as bit 0.
+
+### Tests
+- Tests: Added coverage for invalid embedded device-range segment parsing.
+- Tests: Added coverage for rejecting bit-in-word logical addresses without an explicit bit index.
 
 ## [1.0.0] - 2026-06-24
 

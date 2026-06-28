@@ -439,6 +439,7 @@ pub(crate) async fn read_named_sequential(
     for address in addresses {
         let (base_address, dtype, bit_index) = parse_named_address_parts(address)?;
         if dtype == "BIT_IN_WORD" {
+            let bit_index = require_bit_in_word_index(address, bit_index)?;
             let word = read_single_parsed::<u16>(
                 client,
                 &base_address,
@@ -446,7 +447,6 @@ pub(crate) async fn read_named_sequential(
                 "Invalid unsigned 16-bit response",
             )
             .await?;
-            let bit_index = bit_index.unwrap_or(0);
             result.insert(
                 address.clone(),
                 HostLinkValue::Bool(((word >> bit_index) & 1) != 0),
@@ -464,6 +464,14 @@ pub(crate) async fn read_named_sequential(
         }
     }
     Ok(result)
+}
+
+fn require_bit_in_word_index(address: &str, bit_index: Option<u8>) -> Result<u8, HostLinkError> {
+    bit_index.ok_or_else(|| {
+        HostLinkError::protocol(format!(
+            "Address '{address}' uses BIT_IN_WORD but no bit index was specified. Use '.0' through '.F' notation."
+        ))
+    })
 }
 
 pub(crate) async fn execute_read_named_plan(

@@ -143,7 +143,7 @@ fn try_parse_optimizable_read_named_request(
         if dtype.is_empty() && is_direct_bit_device_type(&base_address.device_type) {
             (ReadPlanValueKind::DirectBit, 0)
         } else if dtype == "BIT_IN_WORD" {
-            (ReadPlanValueKind::BitInWord, bit_index.unwrap_or(0))
+            (ReadPlanValueKind::BitInWord, bit_index?)
         } else {
             (try_map_read_plan_value_kind(&dtype)?, 0)
         };

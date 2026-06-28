@@ -793,6 +793,15 @@ mod tests {
     }
 
     #[test]
+    fn parse_logical_rejects_bit_in_word_without_bit_index() {
+        let error = parse_logical_address("dm100:bit_in_word").unwrap_err();
+        assert!(
+            error.to_string().contains("Unsupported logical data type"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn normalize_plain_address_keeps_default_r_omission_rule() {
         assert_eq!(HostLinkAddress::normalize("100").unwrap(), "R100");
     }
