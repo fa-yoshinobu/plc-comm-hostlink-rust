@@ -110,7 +110,7 @@ fn build_catalog(
         .rows
         .iter()
         .map(|row| build_entry(row, model_index, resolved_profile.display_name))
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(KvDeviceRangeCatalog {
         plc_profile: resolved_profile.plc_profile.to_owned(),
@@ -534,21 +534,25 @@ fn row(device_type: &str, notation: KvDeviceRangeNotation, ranges: &[&str]) -> R
     }
 }
 
-fn build_entry(row: &RangeRow, model_index: usize, resolved_model: &str) -> KvDeviceRangeEntry {
+fn build_entry(
+    row: &RangeRow,
+    model_index: usize,
+    resolved_model: &str,
+) -> Result<KvDeviceRangeEntry, HostLinkError> {
     let range_text = row.ranges[model_index].trim();
     let supported = !range_text.is_empty() && range_text != "-";
     let address_range = supported.then(|| range_text.to_owned());
-    let segments = address_range
-        .as_deref()
-        .map(|text| parse_segments(row, text))
-        .unwrap_or_default();
+    let segments = match address_range.as_deref() {
+        Some(text) => parse_segments(row, text)?,
+        None => Vec::new(),
+    };
     let primary_device = primary_device_name(row, &segments);
     let (category, is_bit_device) = device_metadata(&primary_device);
     let notation = entry_notation(row.notation, &segments);
     let (lower_bound, upper_bound, point_count) = summarize_entry_bounds(&segments);
     let notes = entry_notes(&segments);
 
-    KvDeviceRangeEntry {
+    Ok(KvDeviceRangeEntry {
         device: primary_device,
         device_type: row.device_type.clone(),
         category,
@@ -562,10 +566,13 @@ fn build_entry(row: &RangeRow, model_index: usize, resolved_model: &str) -> KvDe
         source: format!("Embedded device range table ({resolved_model})"),
         notes,
         segments,
-    }
+    })
 }
 
-fn parse_segments(row: &RangeRow, range_text: &str) -> Vec<KvDeviceRangeSegment> {
+fn parse_segments(
+    row: &RangeRow,
+    range_text: &str,
+) -> Result<Vec<KvDeviceRangeSegment>, HostLinkError> {
     range_text
         .split(',')
         .map(str::trim)
@@ -580,8 +587,8 @@ fn parse_segments(row: &RangeRow, range_text: &str) -> Vec<KvDeviceRangeSegment>
             let (category, is_bit_device) = device_metadata(&device);
             let notation = notation_for_device(row.notation, &device);
             let (lower_bound, upper_bound, point_count) =
-                parse_segment_bounds(segment, notation, &device);
-            KvDeviceRangeSegment {
+                parse_segment_bounds(segment, notation, &device)?;
+            Ok(KvDeviceRangeSegment {
                 device,
                 category,
                 is_bit_device,
@@ -590,7 +597,7 @@ fn parse_segments(row: &RangeRow, range_text: &str) -> Vec<KvDeviceRangeSegment>
                 upper_bound,
                 point_count,
                 address_range: segment.to_owned(),
-            }
+            })
         })
         .collect()
 }
@@ -666,17 +673,31 @@ fn parse_segment_bounds(
     segment: &str,
     notation: KvDeviceRangeNotation,
     default_device: &str,
-) -> (u32, Option<u32>, Option<u32>) {
+) -> Result<(u32, Option<u32>, Option<u32>), HostLinkError> {
     let Some((start_text, end_text)) = segment.split_once('-') else {
-        return (0, None, None);
+        return Err(HostLinkError::protocol(format!(
+            "Invalid device range segment '{segment}': missing '-' separator."
+        )));
     };
-    let start = parse_segment_number(start_text, notation, default_device);
-    let end = parse_segment_number(end_text, notation, default_device);
-    let point_count = start
-        .zip(end)
-        .and_then(|(lower, upper)| upper.checked_sub(lower))
-        .and_then(|distance| distance.checked_add(1));
-    (start.unwrap_or(0), end, point_count)
+    let start = parse_segment_number(start_text, notation, default_device).ok_or_else(|| {
+        HostLinkError::protocol(format!(
+            "Invalid device range start '{start_text}' in segment '{segment}'."
+        ))
+    })?;
+    let end = parse_segment_number(end_text, notation, default_device).ok_or_else(|| {
+        HostLinkError::protocol(format!(
+            "Invalid device range end '{end_text}' in segment '{segment}'."
+        ))
+    })?;
+    let point_count = end
+        .checked_sub(start)
+        .and_then(|distance| distance.checked_add(1))
+        .ok_or_else(|| {
+            HostLinkError::protocol(format!(
+                "Invalid device range bounds in segment '{segment}'."
+            ))
+        })?;
+    Ok((start, Some(end), Some(point_count)))
 }
 
 fn parse_segment_number(
@@ -769,7 +790,7 @@ fn normalize_plc_profile(text: &str) -> String {
 mod tests {
     use super::{
         KvDeviceRangeCategory, KvDeviceRangeNotation, available_plc_profiles,
-        device_range_catalog_for_plc_profile,
+        device_range_catalog_for_plc_profile, parse_segment_bounds,
     };
 
     #[test]
@@ -952,6 +973,18 @@ mod tests {
         assert!(!em.supported);
         assert!(em.address_range.is_none());
         assert!(em.segments.is_empty());
+    }
+
+    #[test]
+    fn invalid_range_segment_numbers_are_rejected() {
+        let error =
+            parse_segment_bounds("DMX-DM10", KvDeviceRangeNotation::Decimal, "DM").unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Invalid device range start 'DMX'")
+        );
     }
 
     #[test]
