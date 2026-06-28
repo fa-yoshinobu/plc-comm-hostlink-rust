@@ -52,11 +52,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .await;
 
     let restore_result: Result<(), Box<dyn Error>> = async {
-        client.write_typed("DM120", "U", original_unsigned_word).await?;
-        client.write_typed("DM121", "S", original_signed_word).await?;
-        client.write_typed("DM122", "D", original_unsigned_dword).await?;
-        client.write_typed("DM124", "L", original_signed_dword).await?;
-        client.write_typed("DM126", "F", original_float_value).await?;
+        client
+            .write_typed("DM120", "U", original_unsigned_word)
+            .await?;
+        client
+            .write_typed("DM121", "S", original_signed_word)
+            .await?;
+        client
+            .write_typed("DM122", "D", original_unsigned_dword)
+            .await?;
+        client
+            .write_typed("DM124", "L", original_signed_dword)
+            .await?;
+        client
+            .write_typed("DM126", "F", original_float_value)
+            .await?;
         println!("Restored DM120/DM121/DM122/DM124/DM126");
         Ok(())
     }
