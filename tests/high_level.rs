@@ -254,8 +254,7 @@ async fn read_named_batches_contiguous_direct_bit_reads() {
 
     let result = client
         .read_named(&[
-            "R0:BIT", "R1:BIT", "R2:BIT", "R3:BIT", "CR0:BIT", "CR1:BIT", "CR2:BIT",
-            "CR3:BIT",
+            "R0:BIT", "R1:BIT", "R2:BIT", "R3:BIT", "CR0:BIT", "CR1:BIT", "CR2:BIT", "CR3:BIT",
         ])
         .await
         .unwrap();
@@ -303,8 +302,7 @@ async fn read_named_batches_bit_bank_direct_bits_across_display_bank_boundary() 
 
 #[tokio::test]
 async fn read_typed_empty_dtype_is_rejected() {
-    let (port, received) = start_scripted_server(|_| "E1".to_owned())
-    .await;
+    let (port, received) = start_scripted_server(|_| "E1".to_owned()).await;
 
     let mut options = HostLinkConnectionOptions::new("127.0.0.1", "keyence:kv-8000").unwrap();
     options.port = port;

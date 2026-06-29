@@ -1,6 +1,6 @@
 use crate::address::{
-    KvDeviceAddress, offset_device, parse_device, parse_named_address_parts, require_explicit_format,
-    validate_device_count, validate_device_span,
+    KvDeviceAddress, offset_device, parse_device, parse_named_address_parts,
+    require_explicit_format, validate_device_count, validate_device_span,
 };
 use crate::client::{HostLinkClient, HostLinkPayloadValue};
 use crate::error::HostLinkError;
