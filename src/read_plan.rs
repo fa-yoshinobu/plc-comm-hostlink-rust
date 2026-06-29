@@ -140,7 +140,7 @@ fn try_parse_optimizable_read_named_request(
     base_address.suffix.clear();
 
     let (kind, bit_index) =
-        if dtype.is_empty() && is_direct_bit_device_type(&base_address.device_type) {
+        if dtype == "BIT" && is_direct_bit_device_type(&base_address.device_type) {
             (ReadPlanValueKind::DirectBit, 0)
         } else if dtype == "BIT_IN_WORD" {
             (ReadPlanValueKind::BitInWord, bit_index?)

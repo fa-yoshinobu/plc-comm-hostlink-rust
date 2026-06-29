@@ -37,14 +37,16 @@ The source of truth is the embedded catalog in `src/device_ranges.rs` plus the a
 
 | Form | Value kind | Notes |
 | --- | --- | --- |
-| Plain | Device default | Direct bit devices return bools, word devices default to `U`, and native timer/counter devices default to `D`. |
 | `:U` | Unsigned 16-bit | One word. |
 | `:S` | Signed 16-bit | One word. |
 | `:D` | Unsigned 32-bit | Two words for word devices; one native point for `T`, `C`, `Z`, and `AT`. |
 | `:L` | Signed 32-bit | Two words for word devices; one native point for `T`, `C`, `Z`, and `AT`. |
 | `:F` | 32-bit float | Two words. |
+| `:BIT` | Direct bit | Use with bit-device families such as `R`, `MR`, `LR`, `CR`, `X`, `Y`, `M`, and `L`. |
 | `:COMMENT` | Device comment text | Returned by `read_named` as `HostLinkValue::Text`. |
 | `.n` | Bit in word | One hexadecimal bit index from `0` through `F`. |
+
+Helper-layer address text must include the intended type. Use `DM100:U`, not plain `DM100`, when reading an unsigned word through `read_named`.
 
 ## Addressing notes
 

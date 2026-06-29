@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] - 2026-06-28
 
 ### Changed
+- Library: Made Host Link device parsing require explicit device areas and value-format suffixes; numeric-only devices no longer default to `R`, and suffixless named addresses no longer infer a default format.
 - Docs: Refreshed Host Link getting-started, gotchas, supported-register, and usage guidance.
 - Samples: Updated Host Link examples to use safer write/restore patterns.
 
@@ -28,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Tests
 - Tests: Added coverage for invalid embedded device-range segment parsing.
 - Tests: Added coverage for rejecting bit-in-word logical addresses without an explicit bit index.
+- Tests: Updated high-level and shared frame-vector coverage for explicit device/value-format requirements.
 
 ## [1.0.0] - 2026-06-24
 

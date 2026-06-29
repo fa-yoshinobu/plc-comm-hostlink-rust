@@ -1,6 +1,6 @@
 use crate::address::{
     force_consecutive_device_types, force_device_types, mbs_device_types, model_name_for_code,
-    mws_device_types, parse_device, rdc_device_types, resolve_effective_format,
+    mws_device_types, parse_device, rdc_device_types, require_explicit_format,
     validate_device_count, validate_device_span, validate_device_type,
     validate_expansion_buffer_count, validate_expansion_buffer_span, wr_device_types,
     ws_device_types,
@@ -286,12 +286,7 @@ impl HostLinkClient {
         data_format: Option<&str>,
     ) -> Result<Vec<String>, HostLinkError> {
         let mut address = parse_device(device)?;
-        let suffix = if let Some(data_format) = data_format {
-            crate::address::normalize_suffix(data_format)?
-        } else {
-            address.suffix.clone()
-        };
-        let suffix = resolve_effective_format(&address.device_type, &suffix);
+        let suffix = require_explicit_format(&address, data_format)?;
         validate_device_span(&address.device_type, address.number, &suffix, 1)?;
         address.suffix = suffix;
         let response = self.send_raw(&format!("RD {}", address.to_text()?)).await?;
@@ -305,12 +300,7 @@ impl HostLinkClient {
         data_format: Option<&str>,
     ) -> Result<Vec<String>, HostLinkError> {
         let mut address = parse_device(device)?;
-        let suffix = if let Some(data_format) = data_format {
-            crate::address::normalize_suffix(data_format)?
-        } else {
-            address.suffix.clone()
-        };
-        let suffix = resolve_effective_format(&address.device_type, &suffix);
+        let suffix = require_explicit_format(&address, data_format)?;
         validate_device_count(&address.device_type, &suffix, count)?;
         validate_device_span(&address.device_type, address.number, &suffix, count)?;
         address.suffix = suffix;
@@ -327,12 +317,7 @@ impl HostLinkClient {
         data_format: Option<&str>,
     ) -> Result<(), HostLinkError> {
         let mut address = parse_device(device)?;
-        let suffix = if let Some(data_format) = data_format {
-            crate::address::normalize_suffix(data_format)?
-        } else {
-            address.suffix.clone()
-        };
-        let suffix = resolve_effective_format(&address.device_type, &suffix);
+        let suffix = require_explicit_format(&address, data_format)?;
         validate_device_type("WR", &address.device_type, wr_device_types())?;
         validate_device_span(&address.device_type, address.number, &suffix, 1)?;
         address.suffix = suffix.clone();
@@ -354,12 +339,7 @@ impl HostLinkClient {
         }
 
         let mut address = parse_device(device)?;
-        let suffix = if let Some(data_format) = data_format {
-            crate::address::normalize_suffix(data_format)?
-        } else {
-            address.suffix.clone()
-        };
-        let suffix = resolve_effective_format(&address.device_type, &suffix);
+        let suffix = require_explicit_format(&address, data_format)?;
         validate_device_type("WRS", &address.device_type, wr_device_types())?;
         validate_device_count(&address.device_type, &suffix, values.len())?;
         validate_device_span(&address.device_type, address.number, &suffix, values.len())?;
@@ -415,7 +395,7 @@ impl HostLinkClient {
         for device in devices {
             let mut address = parse_device(device.as_ref())?;
             validate_device_type("MWS", &address.device_type, mws_device_types())?;
-            let suffix = resolve_effective_format(&address.device_type, &address.suffix);
+            let suffix = require_explicit_format(&address, None)?;
             validate_device_span(&address.device_type, address.number, &suffix, 1)?;
             address.suffix = suffix;
             command.push(' ');
@@ -479,12 +459,7 @@ impl HostLinkClient {
         data_format: Option<&str>,
     ) -> Result<Vec<String>, HostLinkError> {
         let mut address = parse_device(device)?;
-        let suffix = if let Some(data_format) = data_format {
-            crate::address::normalize_suffix(data_format)?
-        } else {
-            address.suffix.clone()
-        };
-        let suffix = resolve_effective_format(&address.device_type, &suffix);
+        let suffix = require_explicit_format(&address, data_format)?;
         validate_device_count(&address.device_type, &suffix, count)?;
         validate_device_span(&address.device_type, address.number, &suffix, count)?;
         address.suffix = suffix;
@@ -504,12 +479,7 @@ impl HostLinkClient {
             return Err(HostLinkError::protocol("values must not be empty"));
         }
         let mut address = parse_device(device)?;
-        let suffix = if let Some(data_format) = data_format {
-            crate::address::normalize_suffix(data_format)?
-        } else {
-            address.suffix.clone()
-        };
-        let suffix = resolve_effective_format(&address.device_type, &suffix);
+        let suffix = require_explicit_format(&address, data_format)?;
         validate_device_type("WRE", &address.device_type, wr_device_types())?;
         validate_device_count(&address.device_type, &suffix, values.len())?;
         validate_device_span(&address.device_type, address.number, &suffix, values.len())?;
@@ -532,11 +502,7 @@ impl HostLinkClient {
     ) -> Result<(), HostLinkError> {
         let mut address = parse_device(device)?;
         validate_device_type("WS", &address.device_type, ws_device_types())?;
-        let suffix = if let Some(data_format) = data_format {
-            crate::address::normalize_suffix(data_format)?
-        } else {
-            resolve_effective_format(&address.device_type, &address.suffix)
-        };
+        let suffix = require_explicit_format(&address, data_format)?;
         validate_device_count(&address.device_type, &suffix, 1)?;
         validate_device_span(&address.device_type, address.number, &suffix, 1)?;
         address.suffix = suffix.clone();
@@ -558,11 +524,7 @@ impl HostLinkClient {
         }
         let mut address = parse_device(device)?;
         validate_device_type("WSS", &address.device_type, ws_device_types())?;
-        let suffix = if let Some(data_format) = data_format {
-            crate::address::normalize_suffix(data_format)?
-        } else {
-            resolve_effective_format(&address.device_type, &address.suffix)
-        };
+        let suffix = require_explicit_format(&address, data_format)?;
         validate_device_count(&address.device_type, &suffix, values.len())?;
         validate_device_span(&address.device_type, address.number, &suffix, values.len())?;
         address.suffix = suffix.clone();

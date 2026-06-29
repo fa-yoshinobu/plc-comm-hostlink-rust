@@ -88,7 +88,7 @@ impl KvLogicalAddress {
             return Ok(format!("{base_text}.{bit_index:X}"));
         }
 
-        if self.data_type == logical_default_dtype_by_device_type(&self.base_address.device_type) {
+        if self.data_type.is_empty() {
             Ok(base_text)
         } else {
             Ok(format!("{base_text}:{}", self.data_type))
@@ -191,10 +191,6 @@ pub(crate) fn default_format_by_device_type(device_type: &str) -> &'static str {
     }
 }
 
-pub(crate) fn logical_default_dtype_by_device_type(device_type: &str) -> &'static str {
-    default_format_by_device_type(device_type).trim_start_matches('.')
-}
-
 pub(crate) fn is_direct_bit_device_type(device_type: &str) -> bool {
     matches!(
         device_type,
@@ -293,13 +289,10 @@ pub fn normalize_suffix(suffix: impl AsRef<str>) -> Result<String, HostLinkError
 }
 
 pub fn parse_device(text: &str) -> Result<KvDeviceAddress, HostLinkError> {
-    parse_device_internal(text, true)
+    parse_device_internal(text)
 }
 
-fn parse_device_internal(
-    text: &str,
-    allow_omitted_type: bool,
-) -> Result<KvDeviceAddress, HostLinkError> {
+fn parse_device_internal(text: &str) -> Result<KvDeviceAddress, HostLinkError> {
     let raw = text.trim().to_ascii_uppercase();
     if raw.is_empty() {
         return Err(HostLinkError::protocol("Device string must not be empty"));
@@ -314,8 +307,6 @@ fn parse_device_internal(
             (*device_type).to_owned(),
             core[device_type.len()..].to_owned(),
         )
-    } else if allow_omitted_type && core.bytes().all(|byte| byte.is_ascii_digit()) {
-        ("R".to_owned(), core.to_owned())
     } else {
         return Err(HostLinkError::protocol(format!(
             "Invalid device string '{text}'. Valid device types: {}.",
@@ -398,12 +389,14 @@ pub fn parse_logical_address(text: &str) -> Result<KvLogicalAddress, HostLinkErr
         )));
     }
 
-    let mut base = parse_device(raw)?;
-    let data_type = if base.suffix.is_empty() {
-        logical_default_dtype_by_device_type(&base.device_type).to_owned()
-    } else {
-        normalize_dtype(&base.suffix)?
-    };
+    let base = parse_device(raw)?;
+    if base.suffix.is_empty() {
+        return Err(HostLinkError::protocol(format!(
+            "Address '{text}' requires an explicit data type such as ':U', ':D', or ':BIT'."
+        )));
+    }
+    let mut base = base;
+    let data_type = normalize_dtype(&base.suffix)?;
     base.suffix.clear();
     Ok(KvLogicalAddress {
         base_address: base,
@@ -418,6 +411,27 @@ pub fn resolve_effective_format(device_type: &str, suffix: &str) -> String {
     } else {
         suffix.to_owned()
     }
+}
+
+pub(crate) fn require_explicit_format(
+    address: &KvDeviceAddress,
+    data_format: Option<&str>,
+) -> Result<String, HostLinkError> {
+    let suffix = if let Some(data_format) = data_format {
+        normalize_suffix(data_format)?
+    } else {
+        address.suffix.clone()
+    };
+    if !suffix.is_empty() {
+        return Ok(suffix);
+    }
+    if default_format_by_device_type(&address.device_type).is_empty() {
+        return Ok(String::new());
+    }
+    Err(HostLinkError::protocol(format!(
+        "Device '{}' requires an explicit data format suffix such as '.U', '.S', '.D', '.L', or '.H'.",
+        address.to_text()?
+    )))
 }
 
 pub fn validate_device_type(
@@ -578,6 +592,7 @@ fn normalize_dtype(text: &str) -> Result<String, HostLinkError> {
         "D" => Ok("D".to_owned()),
         "L" => Ok("L".to_owned()),
         "F" => Ok("F".to_owned()),
+        "BIT" => Ok("BIT".to_owned()),
         "COMMENT" => Ok("COMMENT".to_owned()),
         _ => Err(HostLinkError::protocol(format!(
             "Unsupported logical data type '{text}'."
@@ -802,8 +817,9 @@ mod tests {
     }
 
     #[test]
-    fn normalize_plain_address_keeps_default_r_omission_rule() {
-        assert_eq!(HostLinkAddress::normalize("100").unwrap(), "R100");
+    fn normalize_plain_address_rejects_omitted_device_type() {
+        assert!(HostLinkAddress::normalize("100").is_err());
+        assert!(parse_device("100").is_err());
     }
 
     #[test]
@@ -814,10 +830,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_logical_direct_bit_defaults_to_bool_read() {
-        let logical = parse_logical_address("cr0").unwrap();
-        assert_eq!(logical.to_text().unwrap(), "CR000");
-        assert_eq!(logical.data_type, "");
+    fn parse_logical_direct_bit_requires_explicit_bit_dtype() {
+        assert!(parse_logical_address("cr0").is_err());
+        let logical = parse_logical_address("cr0:bit").unwrap();
+        assert_eq!(logical.to_text().unwrap(), "CR000:BIT");
+        assert_eq!(logical.data_type, "BIT");
     }
 
     #[test]
@@ -940,16 +957,18 @@ mod tests {
     }
 
     #[test]
-    fn parse_logical_counter_defaults_to_dword_read() {
-        let logical = parse_logical_address("t0").unwrap();
-        assert_eq!(logical.to_text().unwrap(), "T0");
+    fn parse_logical_counter_requires_explicit_dword_read() {
+        assert!(parse_logical_address("t0").is_err());
+        let logical = parse_logical_address("t0:d").unwrap();
+        assert_eq!(logical.to_text().unwrap(), "T0:D");
         assert_eq!(logical.data_type, "D");
     }
 
     #[test]
-    fn parse_logical_at_defaults_to_dword_read() {
-        let logical = parse_logical_address("at7").unwrap();
-        assert_eq!(logical.to_text().unwrap(), "AT7");
+    fn parse_logical_at_requires_explicit_dword_read() {
+        assert!(parse_logical_address("at7").is_err());
+        let logical = parse_logical_address("at7:d").unwrap();
+        assert_eq!(logical.to_text().unwrap(), "AT7:D");
         assert_eq!(logical.data_type, "D");
     }
 

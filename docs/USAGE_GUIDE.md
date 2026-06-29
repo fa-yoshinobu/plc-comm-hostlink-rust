@@ -104,7 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
 
     let snapshot = client
-        .read_named(&["DM0", "DM1:S", "DM2:D", "DM4:F", "DM120.0", "DM0:COMMENT"])
+        .read_named(&["DM0:U", "DM1:S", "DM2:D", "DM4:F", "DM120.0", "DM0:COMMENT"])
         .await?;
     println!("{:?}", snapshot);
 
@@ -179,7 +179,7 @@ use std::time::Duration;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client =
         HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
-    let addresses = ["DM0", "DM1:S", "DM2:D"];
+    let addresses = ["DM0:U", "DM1:S", "DM2:D"];
     let mut stream = Box::pin(poll(&client, &addresses, Duration::from_millis(500)));
 
     if let Some(snapshot) = stream.next().await {
@@ -239,11 +239,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Form | Meaning | Example |
 | --- | --- | --- |
-| Plain | Default type for the device family. Direct bit devices read bools; word devices read unsigned words; timers/counters read double words. | `DM0`, `R200`, `T0` |
 | `:U` | Unsigned 16-bit word. | `DM0:U` |
 | `:S` | Signed 16-bit word. | `DM1:S` |
 | `:D` | Unsigned 32-bit value. | `DM2:D` |
 | `:L` | Signed 32-bit value. | `DM2:L` |
 | `:F` | 32-bit floating point value. | `DM4:F` |
+| `:BIT` | Direct bit device value. | `R200:BIT`, `CR000:BIT` |
 | `:COMMENT` | PLC device comment text as `HostLinkValue::Text`. | `DM0:COMMENT` |
 | `.n` | Bit-in-word index `0` through `F`. | `DM120.0`, `DM120.F` |
+
+For `read_named` and `poll`, include the intended type. Use `DM0:U` instead of plain `DM0`.

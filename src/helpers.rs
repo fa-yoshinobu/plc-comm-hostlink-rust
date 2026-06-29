@@ -1,6 +1,6 @@
 use crate::address::{
-    KvDeviceAddress, offset_device, parse_device, parse_logical_address, parse_named_address_parts,
-    resolve_effective_format, validate_device_count, validate_device_span,
+    KvDeviceAddress, offset_device, parse_device, parse_named_address_parts, require_explicit_format,
+    validate_device_count, validate_device_span,
 };
 use crate::client::{HostLinkClient, HostLinkPayloadValue};
 use crate::error::HostLinkError;
@@ -75,15 +75,13 @@ pub async fn read_typed(
     device: &str,
     dtype: &str,
 ) -> Result<HostLinkValue, HostLinkError> {
-    let (device, dtype) = if dtype.trim().is_empty() {
-        let logical = parse_logical_address(device)?;
-        (logical.base_address.to_text()?, logical.data_type)
-    } else {
-        (
-            device.trim().to_ascii_uppercase(),
-            dtype.trim_start_matches('.').to_ascii_uppercase(),
-        )
-    };
+    let dtype = dtype.trim_start_matches('.').to_ascii_uppercase();
+    if dtype.trim().is_empty() {
+        return Err(HostLinkError::protocol(
+            "dtype is required; specify U, S, D, L, F, or BIT.",
+        ));
+    }
+    let device = device.trim().to_ascii_uppercase();
 
     match dtype.as_str() {
         "F" => {
@@ -167,7 +165,7 @@ pub async fn read_typed(
                 ))
             }
         }
-        "" => Ok(HostLinkValue::Bool(
+        "BIT" => Ok(HostLinkValue::Bool(
             read_single_bool(client, &device, None).await?,
         )),
         other => Err(HostLinkError::protocol(format!(
@@ -232,7 +230,13 @@ pub async fn write_typed<T: HostLinkPayloadValue>(
     dtype: &str,
     value: &T,
 ) -> Result<(), HostLinkError> {
-    match dtype.trim_start_matches('.').to_ascii_uppercase().as_str() {
+    let dtype = dtype.trim_start_matches('.').to_ascii_uppercase();
+    if dtype.trim().is_empty() {
+        return Err(HostLinkError::protocol(
+            "dtype is required; specify U, S, D, L, F, or BIT.",
+        ));
+    }
+    match dtype.as_str() {
         "F" => {
             let single = value
                 .format_for_suffix("")
@@ -242,8 +246,8 @@ pub async fn write_typed<T: HostLinkPayloadValue>(
             let words = [(bits & 0xFFFF) as u16, (bits >> 16) as u16];
             client.write_consecutive(device, &words, Some("U")).await
         }
-        "" => client.write(device, value, None).await,
-        "S" | "D" | "L" | "U" => client.write(device, value, Some(dtype)).await,
+        "BIT" => client.write(device, value, None).await,
+        "S" | "D" | "L" | "U" => client.write(device, value, Some(dtype.as_str())).await,
         other => Err(HostLinkError::protocol(format!(
             "Unsupported logical data type '{other}'."
         ))),
@@ -331,12 +335,7 @@ fn prepare_read_address(
     count: usize,
 ) -> Result<KvDeviceAddress, HostLinkError> {
     let mut address = parse_device(device)?;
-    let suffix = if let Some(data_format) = data_format {
-        crate::address::normalize_suffix(data_format)?
-    } else {
-        address.suffix.clone()
-    };
-    let suffix = resolve_effective_format(&address.device_type, &suffix);
+    let suffix = require_explicit_format(&address, data_format)?;
     if count > 1 {
         validate_device_count(&address.device_type, &suffix, count)?;
     }

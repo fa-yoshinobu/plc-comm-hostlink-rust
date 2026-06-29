@@ -22,12 +22,12 @@ async fn read_named_batches_contiguous_word_reads() {
 
     let result = client
         .read_named(&[
-            "DM100", "DM100.0", "DM100.A", "DM101:S", "DM102:D", "DM104:L", "DM106:F",
+            "DM100:U", "DM100.0", "DM100.A", "DM101:S", "DM102:D", "DM104:L", "DM106:F",
         ])
         .await
         .unwrap();
 
-    assert_eq!(result["DM100"], HostLinkValue::U16(1025));
+    assert_eq!(result["DM100:U"], HostLinkValue::U16(1025));
     assert_eq!(result["DM100.0"], HostLinkValue::Bool(true));
     assert_eq!(result["DM100.A"], HostLinkValue::Bool(true));
     assert_eq!(result["DM101:S"], HostLinkValue::I16(-1));
@@ -142,10 +142,10 @@ async fn read_named_timer_counter_composite_read_returns_set_value() {
     options.port = port;
     let client = HostLinkClient::connect(options).await.unwrap();
 
-    let result = client.read_named(&["T10", "C10"]).await.unwrap();
+    let result = client.read_named(&["T10:D", "C10:D"]).await.unwrap();
 
-    assert_eq!(result["T10"], HostLinkValue::U32(20));
-    assert_eq!(result["C10"], HostLinkValue::U32(30));
+    assert_eq!(result["T10:D"], HostLinkValue::U32(20));
+    assert_eq!(result["C10:D"], HostLinkValue::U32(30));
     assert_eq!(
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
         vec!["RD T10.D", "RD C10.D"]
@@ -209,9 +209,9 @@ async fn read_named_direct_bits_use_unsuffixed_rd_commands() {
     options.port = port;
     let client = HostLinkClient::connect(options).await.unwrap();
 
-    let result = client.read_named(&["R0", "CR0"]).await.unwrap();
-    assert_eq!(result["R0"], HostLinkValue::Bool(true));
-    assert_eq!(result["CR0"], HostLinkValue::Bool(false));
+    let result = client.read_named(&["R0:BIT", "CR0:BIT"]).await.unwrap();
+    assert_eq!(result["R0:BIT"], HostLinkValue::Bool(true));
+    assert_eq!(result["CR0:BIT"], HostLinkValue::Bool(false));
     assert_eq!(
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
         vec!["RDS R000 1", "RDS CR000 1"]
@@ -230,9 +230,9 @@ async fn read_named_batches_xym_direct_bits_with_hostlink_notation() {
     options.port = port;
     let client = HostLinkClient::connect(options).await.unwrap();
 
-    let result = client.read_named(&["X100", "X101"]).await.unwrap();
-    assert_eq!(result["X100"], HostLinkValue::Bool(true));
-    assert_eq!(result["X101"], HostLinkValue::Bool(false));
+    let result = client.read_named(&["X100:BIT", "X101:BIT"]).await.unwrap();
+    assert_eq!(result["X100:BIT"], HostLinkValue::Bool(true));
+    assert_eq!(result["X101:BIT"], HostLinkValue::Bool(false));
     assert_eq!(
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
         vec!["RDS X100 2"]
@@ -253,18 +253,21 @@ async fn read_named_batches_contiguous_direct_bit_reads() {
     let client = HostLinkClient::connect(options).await.unwrap();
 
     let result = client
-        .read_named(&["R0", "R1", "R2", "R3", "CR0", "CR1", "CR2", "CR3"])
+        .read_named(&[
+            "R0:BIT", "R1:BIT", "R2:BIT", "R3:BIT", "CR0:BIT", "CR1:BIT", "CR2:BIT",
+            "CR3:BIT",
+        ])
         .await
         .unwrap();
 
-    assert_eq!(result["R0"], HostLinkValue::Bool(true));
-    assert_eq!(result["R1"], HostLinkValue::Bool(false));
-    assert_eq!(result["R2"], HostLinkValue::Bool(true));
-    assert_eq!(result["R3"], HostLinkValue::Bool(false));
-    assert_eq!(result["CR0"], HostLinkValue::Bool(false));
-    assert_eq!(result["CR1"], HostLinkValue::Bool(true));
-    assert_eq!(result["CR2"], HostLinkValue::Bool(false));
-    assert_eq!(result["CR3"], HostLinkValue::Bool(true));
+    assert_eq!(result["R0:BIT"], HostLinkValue::Bool(true));
+    assert_eq!(result["R1:BIT"], HostLinkValue::Bool(false));
+    assert_eq!(result["R2:BIT"], HostLinkValue::Bool(true));
+    assert_eq!(result["R3:BIT"], HostLinkValue::Bool(false));
+    assert_eq!(result["CR0:BIT"], HostLinkValue::Bool(false));
+    assert_eq!(result["CR1:BIT"], HostLinkValue::Bool(true));
+    assert_eq!(result["CR2:BIT"], HostLinkValue::Bool(false));
+    assert_eq!(result["CR3:BIT"], HostLinkValue::Bool(true));
     assert_eq!(
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
         vec!["RDS R000 4", "RDS CR000 4"]
@@ -284,14 +287,14 @@ async fn read_named_batches_bit_bank_direct_bits_across_display_bank_boundary() 
     let client = HostLinkClient::connect(options).await.unwrap();
 
     let result = client
-        .read_named(&["CR3614", "CR3615", "CR3700", "CR3701"])
+        .read_named(&["CR3614:BIT", "CR3615:BIT", "CR3700:BIT", "CR3701:BIT"])
         .await
         .unwrap();
 
-    assert_eq!(result["CR3614"], HostLinkValue::Bool(false));
-    assert_eq!(result["CR3615"], HostLinkValue::Bool(true));
-    assert_eq!(result["CR3700"], HostLinkValue::Bool(false));
-    assert_eq!(result["CR3701"], HostLinkValue::Bool(true));
+    assert_eq!(result["CR3614:BIT"], HostLinkValue::Bool(false));
+    assert_eq!(result["CR3615:BIT"], HostLinkValue::Bool(true));
+    assert_eq!(result["CR3700:BIT"], HostLinkValue::Bool(false));
+    assert_eq!(result["CR3701:BIT"], HostLinkValue::Bool(true));
     assert_eq!(
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
         vec!["RDS CR3614 4"]
@@ -299,30 +302,17 @@ async fn read_named_batches_bit_bank_direct_bits_across_display_bank_boundary() 
 }
 
 #[tokio::test]
-async fn read_typed_empty_dtype_uses_device_default_format() {
-    let (port, received) = start_scripted_server(|command| match command.as_str() {
-        "RD CR000" => "1".to_owned(),
-        "RD DM200.S" => "-12".to_owned(),
-        _ => "E1".to_owned(),
-    })
+async fn read_typed_empty_dtype_is_rejected() {
+    let (port, received) = start_scripted_server(|_| "E1".to_owned())
     .await;
 
     let mut options = HostLinkConnectionOptions::new("127.0.0.1", "keyence:kv-8000").unwrap();
     options.port = port;
     let client = HostLinkClient::connect(options).await.unwrap();
 
-    assert_eq!(
-        read_typed(&client, "CR0", "").await.unwrap(),
-        HostLinkValue::Bool(true)
-    );
-    assert_eq!(
-        read_typed(&client, "DM200:S", "").await.unwrap(),
-        HostLinkValue::I16(-12)
-    );
-    assert_eq!(
-        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
-        vec!["RD CR000", "RD DM200.S"]
-    );
+    assert!(read_typed(&client, "CR0", "").await.is_err());
+    assert!(read_typed(&client, "DM200", "").await.is_err());
+    assert!(received.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -343,10 +333,10 @@ async fn read_comments_helper_and_named_snapshot_support_comment_values() {
     assert_eq!(comment, "MAIN COMMENT");
 
     let result = client
-        .read_named(&["DM100", "DM101:COMMENT"])
+        .read_named(&["DM100:U", "DM101:COMMENT"])
         .await
         .unwrap();
-    assert_eq!(result["DM100"], HostLinkValue::U16(321));
+    assert_eq!(result["DM100:U"], HostLinkValue::U16(321));
     assert_eq!(
         result["DM101:COMMENT"],
         HostLinkValue::Text("ALARM COMMENT".to_owned())
@@ -482,7 +472,7 @@ async fn command_device_sets_follow_manual_and_xym_aliases() {
     client.forced_reset("M100").await.unwrap();
     client.forced_set_consecutive("L100", 4).await.unwrap();
     client
-        .register_monitor_words(&["D100", "E100", "F100", "MR100", "LR100"])
+        .register_monitor_words(&["D100.U", "E100.U", "F100.U", "MR100", "LR100"])
         .await
         .unwrap();
     assert!(client.register_monitor_words(&["M100"]).await.is_err());
@@ -541,17 +531,17 @@ async fn poll_reuses_compiled_plan_for_each_cycle() {
 
     let stream = plc_comm_hostlink::poll(
         &client,
-        &["DM100", "DM100.0", "DM101:F"],
+        &["DM100:U", "DM100.0", "DM101:F"],
         std::time::Duration::from_millis(1),
     );
     pin_mut!(stream);
     let first = stream.next().await.unwrap().unwrap();
     let second = stream.next().await.unwrap().unwrap();
 
-    assert_eq!(first["DM100"], HostLinkValue::U16(1));
+    assert_eq!(first["DM100:U"], HostLinkValue::U16(1));
     assert_eq!(first["DM100.0"], HostLinkValue::Bool(true));
     assert_eq!(first["DM101:F"], HostLinkValue::F32(1.5));
-    assert_eq!(second["DM100"], HostLinkValue::U16(3));
+    assert_eq!(second["DM100:U"], HostLinkValue::U16(3));
     assert_eq!(second["DM100.0"], HostLinkValue::Bool(true));
     assert_eq!(second["DM101:F"], HostLinkValue::F32(2.5));
     assert_eq!(
