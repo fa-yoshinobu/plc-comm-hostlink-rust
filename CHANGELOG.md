@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Library: Made Host Link device parsing require explicit device areas and value-format suffixes; numeric-only devices no longer default to `R`, and suffixless named addresses no longer infer a default format.
+- Library: Removed the unused public `resolve_effective_format` helper so suffixless devices are not exposed through an implicit-format API.
 - Docs: Refreshed Host Link getting-started, gotchas, supported-register, and usage guidance.
 - Samples: Updated Host Link examples to use safer write/restore patterns.
 

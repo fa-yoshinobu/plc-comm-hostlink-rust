@@ -14,8 +14,8 @@ mod read_plan;
 
 pub use address::{
     HostLinkAddress, KvDeviceAddress, KvLogicalAddress, normalize_suffix, parse_device,
-    parse_logical_address, resolve_effective_format, validate_device_count, validate_device_span,
-    validate_device_type, validate_expansion_buffer_count, validate_expansion_buffer_span,
+    parse_logical_address, validate_device_count, validate_device_span, validate_device_type,
+    validate_expansion_buffer_count, validate_expansion_buffer_span,
 };
 pub use client::{
     HostLinkClient, HostLinkClientFactory, HostLinkPayloadValue, QueuedHostLinkClient,

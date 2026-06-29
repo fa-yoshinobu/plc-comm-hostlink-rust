@@ -405,14 +405,6 @@ pub fn parse_logical_address(text: &str) -> Result<KvLogicalAddress, HostLinkErr
     })
 }
 
-pub fn resolve_effective_format(device_type: &str, suffix: &str) -> String {
-    if suffix.is_empty() {
-        default_format_by_device_type(device_type).to_owned()
-    } else {
-        suffix.to_owned()
-    }
-}
-
 pub(crate) fn require_explicit_format(
     address: &KvDeviceAddress,
     data_format: Option<&str>,
