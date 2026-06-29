@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         client.write_typed("DM120", "U", dm0).await?;
 
         let snapshot = client
-            .read_named(&["DM0", "DM1:S", "DM2:D", "DM4:F", "DM120.0"])
+            .read_named(&["DM0:U", "DM1:S", "DM2:D", "DM4:F", "DM120.0"])
             .await?;
         println!("{snapshot:?}");
         Ok(())

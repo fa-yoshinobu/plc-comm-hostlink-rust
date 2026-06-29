@@ -66,13 +66,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | --- | --- |
 | Symptom | `R`, `MR`, `LR`, or `CR` raises an address parse or PLC device-number error. |
 | Root cause | These families use KEYENCE two-digit bit notation. |
-| Fix | Use forms such as `R200` or `MR100`; do not treat the full suffix as one hexadecimal number. |
+| Fix | Use forms such as `R200:BIT` or `MR100:BIT`; do not treat the full suffix as one hexadecimal number. |
 
 ```rust
 use plc_comm_hostlink::HostLinkAddress;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let address = HostLinkAddress::normalize("MR100")?;
+    let address = HostLinkAddress::normalize("MR100:BIT")?;
     println!("{address}");
     Ok(())
 }

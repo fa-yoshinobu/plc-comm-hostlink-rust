@@ -53,7 +53,7 @@ Helper-layer address text must include the intended type. Use `DM100:U`, not pla
 | Topic | Rule |
 | --- | --- |
 | `X` and `Y` notation | Use decimal bank digits followed by one hex bit digit, such as `X10F`. Do not write the whole value as one decimal number like `X275`. |
-| `R`, `MR`, `LR`, and `CR` notation | Use two decimal bit digits for the low bit position, such as `R200`, `MR115`, or `CR7915`. The low two digits must be `00` through `15`. |
+| `R`, `MR`, `LR`, and `CR` notation | Use two decimal bit digits for the low bit position, such as `R200:BIT`, `MR115:BIT`, or `CR7915:BIT`. The low two digits must be `00` through `15`. |
 | `AT` restriction | `AT` exists only on KV-3000, KV-5000, KV-7000, and KV-8000 catalog profiles. It is not in the write-device table, so write helpers reject it. |
 | Catalog-only rows | `CTH` and `CTC` appear in the range catalog but are not accepted by the current address parser. |
 | Default port | Use Host Link port `8501` unless your PLC configuration says otherwise. |
