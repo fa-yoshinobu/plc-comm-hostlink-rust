@@ -147,7 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Use `.n` notation for bit-in-word reads and `write_bit_in_word` for masked writes.
 
 ```rust
-use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
+use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions, HostLinkValue};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
