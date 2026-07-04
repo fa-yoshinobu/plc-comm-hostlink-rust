@@ -44,6 +44,16 @@ path = "examples/polling_reconnect.rs"
 required-features = ["cli"]
 
 [[example]]
+name = "multi_plc_monitor"
+path = "examples/multi_plc_monitor.rs"
+required-features = ["cli"]
+
+[[example]]
+name = "config_polling"
+path = "examples/config_polling.rs"
+required-features = ["cli"]
+
+[[example]]
 name = "kv_device_range_sample_compare"
 path = "examples/kv_device_range_sample_compare.rs"
 required-features = ["cli"]
