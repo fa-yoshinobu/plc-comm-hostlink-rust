@@ -26,7 +26,7 @@ name = "plc_comm_hostlink"
 
 [features]
 default = []
-cli = ["dep:futures-util", "dep:serde_json", "tokio/macros", "tokio/rt-multi-thread"]
+cli = ["dep:futures-util", "dep:serde_json", "tokio/macros", "tokio/rt-multi-thread", "tokio/signal"]
 
 [[bin]]
 name = "hostlink_verify_client"
@@ -36,6 +36,11 @@ required-features = ["cli"]
 [[example]]
 name = "basic_high_level"
 path = "examples/basic_high_level.rs"
+required-features = ["cli"]
+
+[[example]]
+name = "polling_reconnect"
+path = "examples/polling_reconnect.rs"
 required-features = ["cli"]
 
 [[example]]

@@ -124,3 +124,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | Reads fail on special devices | Start with `DM` reads first, then move to timers, counters, aliases, or comments. |
 
 Common connection, profile, address, write-permission, and PLC error-code symptoms are in the shared [KV Host Link Troubleshooting & Codes](https://fa-yoshinobu.github.io/plc-comm-docs-site/plc-setup/kv/troubleshooting-codes/) page.
+
+## Next steps
+
+- Open the runnable samples: [examples README](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/tree/main/examples).
+- Continue with the [Usage guide](USAGE_GUIDE.md) and [Gotchas](GOTCHAS.md).
