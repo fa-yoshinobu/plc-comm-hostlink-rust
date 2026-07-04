@@ -816,6 +816,41 @@ mod tests {
     }
 
     #[test]
+    fn embedded_range_catalog_matches_canonical_fixture() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/kv_device_ranges.json")).unwrap();
+        let profiles = fixture["profiles"].as_object().unwrap();
+        let profile_ids = available_plc_profiles();
+
+        assert_eq!(profiles.len(), profile_ids.len());
+        for profile_id in &profile_ids {
+            assert!(profiles.contains_key(profile_id));
+            assert!(
+                profiles[profile_id]["display_name"]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty())
+            );
+        }
+
+        for row in fixture["device_range_rows"].as_array().unwrap() {
+            let device_type = row["device_type"].as_str().unwrap();
+            let ranges = row["ranges"].as_object().unwrap();
+            for profile_id in &profile_ids {
+                let expected_range = ranges[profile_id].as_str().unwrap();
+                let catalog = device_range_catalog_for_plc_profile(profile_id).unwrap();
+                let entry = catalog.entry(device_type).unwrap();
+                if expected_range == "-" {
+                    assert!(!entry.supported);
+                    assert!(entry.address_range.is_none());
+                } else {
+                    assert!(entry.supported);
+                    assert_eq!(entry.address_range.as_deref(), Some(expected_range));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn resolves_plc_profiles_to_range_catalogs() {
         let catalog = device_range_catalog_for_plc_profile("keyence:kv-8000").unwrap();
         assert_eq!(catalog.plc_profile, "keyence:kv-8000");
