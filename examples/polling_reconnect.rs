@@ -10,38 +10,26 @@ use tokio::time::sleep;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let (host, port, plc_profile, device, dtype, interval) = parse_args()?;
+    let config = parse_args()?;
     let initial_backoff = Duration::from_secs(1);
     let max_backoff = Duration::from_secs(30);
-    let mut backoff = initial_backoff;
-    let mut client: Option<HostLinkClient> = None;
-    let mut connected_once = false;
+    let mut state = PollState {
+        client: None,
+        backoff: initial_backoff,
+        connected_once: false,
+    };
 
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
-                if let Some(client) = client.take() {
+                if let Some(client) = state.client.take() {
                     let _ = client.close().await;
                 }
                 log_state("closed", "interrupted by Ctrl+C");
                 break;
             }
-            result = poll_step(
-                &host,
-                port,
-                &plc_profile,
-                &device,
-                &dtype,
-                interval,
-                &mut client,
-                &mut backoff,
-                initial_backoff,
-                max_backoff,
-                &mut connected_once,
-            ) => {
-                if let Err(error) = result {
-                    return Err(error);
-                }
+            result = poll_step(&config, &mut state, initial_backoff, max_backoff) => {
+                result?;
             }
         }
     }
@@ -49,80 +37,95 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn poll_step(
-    host: &str,
+struct PollConfig {
+    host: String,
     port: u16,
-    plc_profile: &str,
-    device: &str,
-    dtype: &str,
+    plc_profile: String,
+    device: String,
+    dtype: String,
     interval: Duration,
-    client: &mut Option<HostLinkClient>,
-    backoff: &mut Duration,
+}
+
+struct PollState {
+    client: Option<HostLinkClient>,
+    backoff: Duration,
+    connected_once: bool,
+}
+
+async fn poll_step(
+    config: &PollConfig,
+    state: &mut PollState,
     initial_backoff: Duration,
     max_backoff: Duration,
-    connected_once: &mut bool,
 ) -> Result<(), Box<dyn Error>> {
-    if client.is_none() {
+    if state.client.is_none() {
         log_state(
             "reconnecting",
-            &format!("tcp {host}:{port} profile={plc_profile}"),
+            &format!(
+                "tcp {}:{} profile={}",
+                config.host, config.port, config.plc_profile
+            ),
         );
-        let mut options = HostLinkConnectionOptions::new(host.to_string(), plc_profile)?;
-        options.port = port;
+        let mut options =
+            HostLinkConnectionOptions::new(config.host.clone(), config.plc_profile.as_str())?;
+        options.port = config.port;
         match HostLinkClient::connect(options).await {
             Ok(new_client) => {
-                *client = Some(new_client);
+                state.client = Some(new_client);
                 log_state(
-                    if *connected_once {
+                    if state.connected_once {
                         "recovered"
                     } else {
                         "connected"
                     },
-                    &format!("{device}:{dtype}"),
+                    &format!("{}:{}", config.device, config.dtype),
                 );
-                *connected_once = true;
-                *backoff = initial_backoff;
+                state.connected_once = true;
+                state.backoff = initial_backoff;
             }
             Err(error) if is_retryable_hostlink(&error) => {
                 log_state(
                     "reconnecting",
                     &format!(
                         "connect failed: {error}; retry in {:.1}s",
-                        backoff.as_secs_f64()
+                        state.backoff.as_secs_f64()
                     ),
                 );
-                sleep(*backoff).await;
-                *backoff = next_backoff(*backoff, max_backoff);
+                sleep(state.backoff).await;
+                state.backoff = next_backoff(state.backoff, max_backoff);
                 return Ok(());
             }
             Err(error) => return Err(Box::new(error)),
         }
     }
 
-    let active = client.as_ref().expect("client was just connected");
-    match active.read_typed(device, dtype).await {
+    let active = state.client.as_ref().expect("client was just connected");
+    match active.read_typed(&config.device, &config.dtype).await {
         Ok(value) => {
-            log_state("read", &format!("{device}:{dtype}={value:?}"));
-            sleep(interval).await;
+            log_state(
+                "read",
+                &format!("{}:{}={value:?}", config.device, config.dtype),
+            );
+            sleep(config.interval).await;
         }
         Err(error) if is_retryable_hostlink(&error) => {
             log_state("lost", &error.to_string());
-            if let Some(client) = client.take() {
+            if let Some(client) = state.client.take() {
                 let _ = client.close().await;
             }
             log_state(
                 "reconnecting",
-                &format!("retry in {:.1}s", backoff.as_secs_f64()),
+                &format!("retry in {:.1}s", state.backoff.as_secs_f64()),
             );
-            sleep(*backoff).await;
-            *backoff = next_backoff(*backoff, max_backoff);
+            sleep(state.backoff).await;
+            state.backoff = next_backoff(state.backoff, max_backoff);
         }
         Err(error) => return Err(Box::new(error)),
     }
     Ok(())
 }
 
-fn parse_args() -> Result<(String, u16, String, String, String, Duration), Box<dyn Error>> {
+fn parse_args() -> Result<PollConfig, Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();
     if args.len() < 4 {
         return Err("Usage: cargo run --features cli --example polling_reconnect -- <host> <port> <plc-profile> [device] [dtype] [interval-seconds]".into());
@@ -132,14 +135,14 @@ fn parse_args() -> Result<(String, u16, String, String, String, Duration), Box<d
         .map(|value| value.parse::<f64>())
         .transpose()?
         .unwrap_or(1.0);
-    Ok((
-        args[1].clone(),
-        args[2].parse()?,
-        args[3].clone(),
-        args.get(4).cloned().unwrap_or_else(|| "DM100".to_string()),
-        args.get(5).cloned().unwrap_or_else(|| "U".to_string()),
-        Duration::from_secs_f64(interval),
-    ))
+    Ok(PollConfig {
+        host: args[1].clone(),
+        port: args[2].parse()?,
+        plc_profile: args[3].clone(),
+        device: args.get(4).cloned().unwrap_or_else(|| "DM100".to_string()),
+        dtype: args.get(5).cloned().unwrap_or_else(|| "U".to_string()),
+        interval: Duration::from_secs_f64(interval),
+    })
 }
 
 fn is_retryable_hostlink(error: &HostLinkError) -> bool {
