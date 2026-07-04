@@ -123,4 +123,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | You need the verification binary | Build it with `cargo build --features cli --bin hostlink_verify_client`. |
 | Reads fail on special devices | Start with `DM` reads first, then move to timers, counters, aliases, or comments. |
 
-Common connection, profile, address, write-permission, and PLC error-code symptoms are in the shared [KV Host Link Error Codes](https://fa-yoshinobu.github.io/plc-comm-docs-site/plc-setup/kv/error-codes/) page.
+Common connection, profile, address, write-permission, and PLC error-code symptoms are in the shared [KV Host Link Troubleshooting & Codes](https://fa-yoshinobu.github.io/plc-comm-docs-site/plc-setup/kv/troubleshooting-codes/) page.

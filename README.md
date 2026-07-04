@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | [Usage guide](docs/USAGE_GUIDE.md) | Use the high-level API and common Host Link workflows. |
 | [PLC profiles](docs/PROFILES.md) | Choose the canonical KEYENCE KV profile for the target PLC. |
 | [KV Host Link Device Ranges](https://fa-yoshinobu.github.io/plc-comm-docs-site/plc-setup/kv/device-ranges/) | Check shared device families, address notation, and range tables. |
-| [KV Host Link Error Codes](https://fa-yoshinobu.github.io/plc-comm-docs-site/plc-setup/kv/error-codes/) | Troubleshoot common port, profile, address, write-permission, and PLC error-code symptoms. |
+| [KV Host Link Troubleshooting & Codes](https://fa-yoshinobu.github.io/plc-comm-docs-site/plc-setup/kv/troubleshooting-codes/) | Troubleshoot common port, profile, address, write-permission, and PLC error-code symptoms. |
 | [Gotchas](docs/GOTCHAS.md) | Check whether this library has any current library-specific caveats. |
 | [Examples](examples/README.md) | Run maintained Rust examples. |
 
