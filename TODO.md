@@ -1,3 +1,5 @@
 # TODO: Host Link Communication Rust
 
-No active TODOs are currently tracked for the Rust Host Link library.
+## Live verification
+
+- Verify high-level `:H` / `H` hexadecimal word read and write on a live KEYENCE KV PLC.

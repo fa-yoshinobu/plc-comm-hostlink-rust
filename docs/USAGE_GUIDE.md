@@ -45,6 +45,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Performance notes
+
+For stable local networks, UDP usually has the lowest latency. TCP is the safer
+default for remote or less predictable networks because the OS handles
+retransmission. The TCP transport disables Nagle buffering for small Host Link
+command frames.
+
+Reuse one connected client for repeated reads and writes. Prefer
+`read_words_single_request`, `read_dwords_single_request`, or `read_named` over
+many individual `read_typed` calls when one application snapshot can be read as
+one request.
+
+## Connection reuse and concurrent requests
+
+Use `open_and_connect` when a client will be shared by multiple tasks. It returns
+a `QueuedHostLinkClient`, which serializes operations so Host Link frames do not
+interleave on one PLC connection.
+
+If you use `HostLinkClient::connect` directly, keep access to that client under
+your own operation boundary. Use `close` followed by `open` for an intentional
+reconnect; after a persistent connection failure, create a new client from the
+same `HostLinkConnectionOptions`.
+
 ## Read a single value
 
 | Suffix | Value returned by `read_typed` | Words consumed |
@@ -54,6 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `D` | `HostLinkValue::U32` | 2 for word devices; 1 native timer/counter point. |
 | `L` | `HostLinkValue::I32` | 2 for word devices; 1 native timer/counter point. |
 | `F` | `HostLinkValue::F32` | 2 |
+| `H` | `HostLinkValue::Text` | 1 |
 | Empty string | `HostLinkValue::Bool` | 1 direct bit point. |
 
 ```rust

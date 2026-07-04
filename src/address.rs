@@ -583,6 +583,7 @@ fn normalize_dtype(text: &str) -> Result<String, HostLinkError> {
         "S" => Ok("S".to_owned()),
         "D" => Ok("D".to_owned()),
         "L" => Ok("L".to_owned()),
+        "H" => Ok("H".to_owned()),
         "F" => Ok("F".to_owned()),
         "BIT" => Ok("BIT".to_owned()),
         "COMMENT" => Ok("COMMENT".to_owned()),
@@ -819,6 +820,13 @@ mod tests {
         let logical = parse_logical_address("dm100:comment").unwrap();
         assert_eq!(logical.to_text().unwrap(), "DM100:COMMENT");
         assert_eq!(logical.data_type, "COMMENT");
+    }
+
+    #[test]
+    fn parse_logical_hex_text_address_round_trips() {
+        let logical = parse_logical_address("dm100:h").unwrap();
+        assert_eq!(logical.to_text().unwrap(), "DM100:H");
+        assert_eq!(logical.data_type, "H");
     }
 
     #[test]

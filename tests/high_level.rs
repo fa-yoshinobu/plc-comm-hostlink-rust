@@ -88,6 +88,39 @@ async fn read_typed_and_write_typed_support_float_suffix() {
 }
 
 #[tokio::test]
+async fn read_typed_write_typed_and_read_named_support_hex_suffix() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RD DM210.H" => "00ff".to_owned(),
+        "WR DM210.H FF" => "OK".to_owned(),
+        "WR DM211.H 00AA" => "OK".to_owned(),
+        "RD DM212.H" => "ABCD".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1", "keyence:kv-8000").unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let value = read_typed(&client, "DM210", "H").await.unwrap();
+    client.write_typed("DM210", "H", 0x00FF_u16).await.unwrap();
+    client.write_typed("DM211", "H", "00AA").await.unwrap();
+    let named = client.read_named(&["DM212:H"]).await.unwrap();
+
+    assert_eq!(value, HostLinkValue::Text("00FF".to_owned()));
+    assert_eq!(named["DM212:H"], HostLinkValue::Text("ABCD".to_owned()));
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec![
+            "RD DM210.H",
+            "WR DM210.H FF",
+            "WR DM211.H 00AA",
+            "RD DM212.H"
+        ]
+    );
+}
+
+#[tokio::test]
 async fn read_typed_timer_counter_composite_read_returns_set_value() {
     let (port, received) = start_scripted_server(|command| match command.as_str() {
         "RD T0.D" => "0,0000000010,0000000020".to_owned(),

@@ -42,6 +42,7 @@ The source of truth is the embedded catalog in `src/device_ranges.rs` plus the a
 | `:D` | Unsigned 32-bit | Two words for word devices; one native point for `T`, `C`, `Z`, and `AT`. |
 | `:L` | Signed 32-bit | Two words for word devices; one native point for `T`, `C`, `Z`, and `AT`. |
 | `:F` | 32-bit float | Two words. |
+| `:H` | Hexadecimal 16-bit word text | Returned by `read_typed` and `read_named` as `HostLinkValue::Text`. |
 | `:BIT` | Direct bit | Use with bit-device families such as `R`, `MR`, `LR`, `CR`, `X`, `Y`, `M`, and `L`. |
 | `:COMMENT` | Device comment text | Returned by `read_named` as `HostLinkValue::Text`. |
 | `.n` | Bit in word | One hexadecimal bit index from `0` through `F`. |

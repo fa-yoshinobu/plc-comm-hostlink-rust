@@ -165,6 +165,15 @@ pub async fn read_typed(
                 ))
             }
         }
+        "H" => {
+            let response = read_single_response(client, &device, Some("H")).await?;
+            let token = if is_timer_counter_composite_device(&device)? {
+                last_response_token(&response)?
+            } else {
+                first_response_token(&response)?
+            };
+            Ok(HostLinkValue::Text(token.trim().to_ascii_uppercase()))
+        }
         "BIT" => Ok(HostLinkValue::Bool(
             read_single_bool(client, &device, None).await?,
         )),
@@ -247,7 +256,7 @@ pub async fn write_typed<T: HostLinkPayloadValue>(
             client.write_consecutive(device, &words, Some("U")).await
         }
         "BIT" => client.write(device, value, None).await,
-        "S" | "D" | "L" | "U" => client.write(device, value, Some(dtype.as_str())).await,
+        "S" | "D" | "L" | "U" | "H" => client.write(device, value, Some(dtype.as_str())).await,
         other => Err(HostLinkError::protocol(format!(
             "Unsupported logical data type '{other}'."
         ))),
