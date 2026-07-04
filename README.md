@@ -12,7 +12,7 @@ The maintained profile table is in [PLC profiles](docs/PROFILES.md). Choose one 
 
 ## Supported device types
 
-The maintained device and range tables are in [Supported registers](docs/SUPPORTED_REGISTERS.md). Use that page for supported device families, address syntax, and profile-specific notes.
+The shared device and range tables are in the [KV Host Link Device Ranges](https://fa-yoshinobu.github.io/plc-comm-docs-site/plc-setup/kv/device-ranges/) page. Use that page for supported device families, address syntax, and profile-specific notes.
 
 ## Installation
 
@@ -52,9 +52,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | [Full documentation site](https://fa-yoshinobu.github.io/plc-comm-docs-site/) | Unified docs for all PLC communication libraries. |
 | [Getting started](docs/GETTING_STARTED.md) | Install the crate, connect to your PLC, and run your first read/write. |
 | [Usage guide](docs/USAGE_GUIDE.md) | Use the high-level API and common Host Link workflows. |
-| [Supported registers](docs/SUPPORTED_REGISTERS.md) | Check supported device families and address forms. |
 | [PLC profiles](docs/PROFILES.md) | Choose the canonical KEYENCE KV profile for the target PLC. |
-| [Gotchas](docs/GOTCHAS.md) | Troubleshoot common profile, address, timer/counter, and transport issues. |
+| [KV Host Link Device Ranges](https://fa-yoshinobu.github.io/plc-comm-docs-site/plc-setup/kv/device-ranges/) | Check shared device families, address notation, and range tables. |
+| [KV Host Link Error Codes](https://fa-yoshinobu.github.io/plc-comm-docs-site/plc-setup/kv/error-codes/) | Troubleshoot common port, profile, address, write-permission, and PLC error-code symptoms. |
+| [Gotchas](docs/GOTCHAS.md) | Check whether this library has any current library-specific caveats. |
 | [Examples](examples/README.md) | Run maintained Rust examples. |
 
 ## License and registry

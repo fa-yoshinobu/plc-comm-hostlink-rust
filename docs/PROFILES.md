@@ -1,6 +1,12 @@
-# Profiles
+# PLC profiles
 
 PLC profiles select one embedded device-range catalog. They are useful when you build UI validation, address pickers, or model-specific checks before talking to the PLC. The library accepts only the exact canonical strings in this table.
+
+## Device families and ranges
+
+Device-family notation, type suffixes, XYM aliases, and static range tables are shared across the KV Host Link libraries. Use the common [KV Host Link Device Ranges](https://fa-yoshinobu.github.io/plc-comm-docs-site/plc-setup/kv/device-ranges/) page for those details.
+
+The tables below only identify the canonical profile names and the intended KV families.
 
 ## Supported PLC profiles
 
