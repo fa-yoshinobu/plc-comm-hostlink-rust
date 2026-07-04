@@ -127,5 +127,6 @@ Common connection, profile, address, write-permission, and PLC error-code sympto
 
 ## Next steps
 
+- Open the API reference: [docs.rs/plc-comm-hostlink-rust](https://docs.rs/plc-comm-hostlink-rust/).
 - Open the runnable samples: [examples README](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/tree/main/examples).
 - Continue with the [Usage guide](USAGE_GUIDE.md) and [Gotchas](GOTCHAS.md).
