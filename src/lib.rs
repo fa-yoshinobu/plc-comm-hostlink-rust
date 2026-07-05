@@ -24,6 +24,7 @@ pub use client::{
 pub use device_ranges::{
     KvDeviceRangeCatalog, KvDeviceRangeCategory, KvDeviceRangeEntry, KvDeviceRangeNotation,
     KvDeviceRangeSegment, available_plc_profiles, device_range_catalog_for_plc_profile,
+    display_name,
 };
 pub use error::{HostLinkError, decode_error_code};
 pub use helpers::{

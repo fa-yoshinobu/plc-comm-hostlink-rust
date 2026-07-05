@@ -134,6 +134,33 @@ pub fn available_plc_profiles() -> Vec<String> {
         .unwrap_or_default()
 }
 
+pub fn display_name(plc_profile: impl AsRef<str>) -> Result<&'static str, HostLinkError> {
+    let normalized = normalize_plc_profile(plc_profile.as_ref());
+    if normalized.is_empty() {
+        return Err(HostLinkError::protocol("PLC profile must not be empty"));
+    }
+    let table = range_table()?;
+    let _ = range_profile_for_plc_profile(table, &normalized)?;
+    match normalized.as_str() {
+        "keyence:kv-nano" => Ok("KEYENCE KV-NANO"),
+        "keyence:kv-nano-xym" => Ok("KEYENCE KV-NANO (XYM)"),
+        "keyence:kv-3000" => Ok("KEYENCE KV-3000"),
+        "keyence:kv-3000-xym" => Ok("KEYENCE KV-3000 (XYM)"),
+        "keyence:kv-5000" => Ok("KEYENCE KV-5000"),
+        "keyence:kv-5000-xym" => Ok("KEYENCE KV-5000 (XYM)"),
+        "keyence:kv-7000" => Ok("KEYENCE KV-7000"),
+        "keyence:kv-7000-xym" => Ok("KEYENCE KV-7000 (XYM)"),
+        "keyence:kv-8000" => Ok("KEYENCE KV-8000"),
+        "keyence:kv-8000-xym" => Ok("KEYENCE KV-8000 (XYM)"),
+        "keyence:kv-x500" => Ok("KEYENCE KV-X500"),
+        "keyence:kv-x500-xym" => Ok("KEYENCE KV-X500 (XYM)"),
+        _ => Err(HostLinkError::protocol(format!(
+            "Unsupported PLC profile '{}'.",
+            plc_profile.as_ref()
+        ))),
+    }
+}
+
 #[derive(Debug, Clone)]
 struct RangeTable {
     profiles: Vec<RangeProfile>,
@@ -790,7 +817,7 @@ fn normalize_plc_profile(text: &str) -> String {
 mod tests {
     use super::{
         KvDeviceRangeCategory, KvDeviceRangeNotation, available_plc_profiles,
-        device_range_catalog_for_plc_profile, parse_segment_bounds,
+        device_range_catalog_for_plc_profile, display_name, parse_segment_bounds,
     };
 
     #[test]
@@ -829,6 +856,10 @@ mod tests {
                 profiles[profile_id]["display_name"]
                     .as_str()
                     .is_some_and(|value| !value.is_empty())
+            );
+            assert_eq!(
+                display_name(profile_id).unwrap(),
+                profiles[profile_id]["display_name"].as_str().unwrap()
             );
         }
 

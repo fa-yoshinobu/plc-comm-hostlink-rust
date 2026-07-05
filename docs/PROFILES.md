@@ -1,6 +1,8 @@
 # PLC profiles
 
 PLC profiles select one embedded device-range catalog. They are useful when you build UI validation, address pickers, or model-specific checks before talking to the PLC. The library accepts only the exact canonical strings in this table.
+Use `display_name(plc_profile)` for UI labels. Store the canonical profile
+string, not the display name.
 
 ## Device families and ranges
 
@@ -10,20 +12,20 @@ The tables below only identify the canonical profile names and the intended KV f
 
 ## Supported PLC profiles
 
-| Canonical profile | Human label | Runtime model |
+| Canonical profile | Display name | Runtime model |
 | --- | --- | --- |
-| `keyence:kv-nano` | `KV-NANO` | `KV-N24nn`, `KV-N40nn`, `KV-N60nn`, `KV-NC32T` |
-| `keyence:kv-nano-xym` | `KV-NANO(XYM)` | KV-NANO family with XYM aliases. |
-| `keyence:kv-3000` | `KV-3000` | `KV-3000` |
-| `keyence:kv-3000-xym` | `KV-3000(XYM)` | KV-3000 with XYM aliases. |
-| `keyence:kv-5000` | `KV-5000` | `KV-5000`, `KV-5500` |
-| `keyence:kv-5000-xym` | `KV-5000(XYM)` | KV-5000 family with XYM aliases. |
-| `keyence:kv-7000` | `KV-7000` | `KV-7000`, `KV-7300`, `KV-7500` |
-| `keyence:kv-7000-xym` | `KV-7000(XYM)` | KV-7000 family with XYM aliases. |
-| `keyence:kv-8000` | `KV-8000` | `KV-8000`, `KV-8000A` |
-| `keyence:kv-8000-xym` | `KV-8000(XYM)` | KV-8000 family with XYM aliases. |
-| `keyence:kv-x500` | `KV-X500` | `KV-X310`, `KV-X500`, `KV-X520`, `KV-X530`, `KV-X550` |
-| `keyence:kv-x500-xym` | `KV-X500(XYM)` | KV-X500 family with XYM aliases. |
+| `keyence:kv-nano` | `KEYENCE KV-NANO` | `KV-N24nn`, `KV-N40nn`, `KV-N60nn`, `KV-NC32T` |
+| `keyence:kv-nano-xym` | `KEYENCE KV-NANO (XYM)` | KV-NANO family with XYM aliases. |
+| `keyence:kv-3000` | `KEYENCE KV-3000` | `KV-3000` |
+| `keyence:kv-3000-xym` | `KEYENCE KV-3000 (XYM)` | KV-3000 with XYM aliases. |
+| `keyence:kv-5000` | `KEYENCE KV-5000` | `KV-5000`, `KV-5500` |
+| `keyence:kv-5000-xym` | `KEYENCE KV-5000 (XYM)` | KV-5000 family with XYM aliases. |
+| `keyence:kv-7000` | `KEYENCE KV-7000` | `KV-7000`, `KV-7300`, `KV-7500` |
+| `keyence:kv-7000-xym` | `KEYENCE KV-7000 (XYM)` | KV-7000 family with XYM aliases. |
+| `keyence:kv-8000` | `KEYENCE KV-8000` | `KV-8000`, `KV-8000A` |
+| `keyence:kv-8000-xym` | `KEYENCE KV-8000 (XYM)` | KV-8000 family with XYM aliases. |
+| `keyence:kv-x500` | `KEYENCE KV-X500` | `KV-X310`, `KV-X500`, `KV-X520`, `KV-X530`, `KV-X550` |
+| `keyence:kv-x500-xym` | `KEYENCE KV-X500 (XYM)` | KV-X500 family with XYM aliases. |
 
 ## How to select
 
