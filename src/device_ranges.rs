@@ -122,16 +122,18 @@ fn build_catalog(
     })
 }
 
+/// # Panics
+///
+/// Panics if the embedded device range table cannot be parsed. The embedded
+/// JSON is validated against the canonical fixture by tests, so this cannot
+/// happen with a released build.
 pub fn available_plc_profiles() -> Vec<String> {
     range_table()
-        .map(|table| {
-            table
-                .profiles
-                .iter()
-                .map(|profile| profile.plc_profile.to_owned())
-                .collect()
-        })
-        .unwrap_or_default()
+        .expect("embedded KV device range table must parse")
+        .profiles
+        .iter()
+        .map(|profile| profile.plc_profile.to_owned())
+        .collect()
 }
 
 pub fn display_name(plc_profile: impl AsRef<str>) -> Result<&'static str, HostLinkError> {
