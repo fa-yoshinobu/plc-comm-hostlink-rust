@@ -2,8 +2,8 @@ use crate::error::HostLinkError;
 use std::fmt;
 
 const DEVICE_TYPES_PARSE_ORDER: &[&str] = &[
-    "CTH", "CTC", "MR", "LR", "CR", "VB", "DM", "EM", "FM", "ZF", "TM", "TC", "TS", "CC", "CS", "AT",
-    "CM", "VM", "R", "B", "W", "Z", "T", "C", "X", "Y", "M", "L", "D", "E", "F",
+    "CTH", "CTC", "MR", "LR", "CR", "VB", "DM", "EM", "FM", "ZF", "TM", "TC", "TS", "CC", "CS",
+    "AT", "CM", "VM", "R", "B", "W", "Z", "T", "C", "X", "Y", "M", "L", "D", "E", "F",
 ];
 const FORCE_SINGLE_DEVICE_TYPES: &[&str] = &[
     "R", "B", "MR", "LR", "CR", "T", "C", "CTH", "CTC", "VB", "X", "Y", "M", "L",
@@ -18,8 +18,8 @@ const MWS_DEVICE_TYPES: &[&str] = &[
     "TC", "TS", "CC", "CS", "CM", "VM",
 ];
 const RDC_DEVICE_TYPES: &[&str] = &[
-    "R", "B", "MR", "LR", "CR", "DM", "EM", "FM", "ZF", "W", "TM", "Z", "T", "C", "CTH", "CTC", "CM",
-    "X", "Y", "M", "L", "D", "E", "F",
+    "R", "B", "MR", "LR", "CR", "DM", "EM", "FM", "ZF", "W", "TM", "Z", "T", "C", "CTH", "CTC",
+    "CM", "X", "Y", "M", "L", "D", "E", "F",
 ];
 const WR_DEVICE_TYPES: &[&str] = &[
     "R", "B", "MR", "LR", "CR", "VB", "DM", "EM", "FM", "ZF", "W", "TM", "Z", "T", "TC", "TS", "C",
