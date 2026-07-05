@@ -2,30 +2,30 @@ use crate::error::HostLinkError;
 use std::fmt;
 
 const DEVICE_TYPES_PARSE_ORDER: &[&str] = &[
-    "MR", "LR", "CR", "VB", "DM", "EM", "FM", "ZF", "TM", "TC", "TS", "CC", "CS", "AT", "CM", "VM",
-    "R", "B", "W", "Z", "T", "C", "X", "Y", "M", "L", "D", "E", "F",
+    "CTH", "CTC", "MR", "LR", "CR", "VB", "DM", "EM", "FM", "ZF", "TM", "TC", "TS", "CC", "CS", "AT",
+    "CM", "VM", "R", "B", "W", "Z", "T", "C", "X", "Y", "M", "L", "D", "E", "F",
 ];
 const FORCE_SINGLE_DEVICE_TYPES: &[&str] = &[
-    "R", "B", "MR", "LR", "CR", "T", "C", "VB", "X", "Y", "M", "L",
+    "R", "B", "MR", "LR", "CR", "T", "C", "CTH", "CTC", "VB", "X", "Y", "M", "L",
 ];
 const FORCE_CONSECUTIVE_DEVICE_TYPES: &[&str] =
     &["R", "B", "MR", "LR", "CR", "VB", "X", "Y", "M", "L"];
 const MBS_DEVICE_TYPES: &[&str] = &[
-    "R", "B", "MR", "LR", "CR", "T", "C", "VB", "X", "Y", "M", "L",
+    "R", "B", "MR", "LR", "CR", "T", "C", "CTH", "CTC", "VB", "X", "Y", "M", "L",
 ];
 const MWS_DEVICE_TYPES: &[&str] = &[
     "R", "B", "MR", "LR", "CR", "VB", "X", "Y", "DM", "EM", "FM", "D", "E", "F", "W", "TM", "Z",
     "TC", "TS", "CC", "CS", "CM", "VM",
 ];
 const RDC_DEVICE_TYPES: &[&str] = &[
-    "R", "B", "MR", "LR", "CR", "DM", "EM", "FM", "ZF", "W", "TM", "Z", "T", "C", "CM", "X", "Y",
-    "M", "L", "D", "E", "F",
+    "R", "B", "MR", "LR", "CR", "DM", "EM", "FM", "ZF", "W", "TM", "Z", "T", "C", "CTH", "CTC", "CM",
+    "X", "Y", "M", "L", "D", "E", "F",
 ];
 const WR_DEVICE_TYPES: &[&str] = &[
     "R", "B", "MR", "LR", "CR", "VB", "DM", "EM", "FM", "ZF", "W", "TM", "Z", "T", "TC", "TS", "C",
-    "CC", "CS", "CM", "VM", "X", "Y", "M", "L", "D", "E", "F",
+    "CC", "CS", "CTH", "CTC", "CM", "VM", "X", "Y", "M", "L", "D", "E", "F",
 ];
-const WS_DEVICE_TYPES: &[&str] = &["T", "C"];
+const WS_DEVICE_TYPES: &[&str] = &["T", "C", "CTH", "CTC"];
 
 #[derive(Debug, Clone, Copy)]
 struct DeviceRange {
@@ -186,7 +186,7 @@ pub(crate) fn default_format_by_device_type(device_type: &str) -> &'static str {
         "R" | "B" | "MR" | "LR" | "CR" | "VB" | "X" | "Y" | "M" | "L" => "",
         "DM" | "EM" | "FM" | "ZF" | "W" | "TM" | "Z" | "CM" | "VM" | "D" | "E" | "F" => ".U",
         "AT" => ".D",
-        "T" | "TC" | "TS" | "C" | "CC" | "CS" => ".D",
+        "T" | "TC" | "TS" | "C" | "CC" | "CS" | "CTH" | "CTC" => ".D",
         _ => "",
     }
 }
@@ -201,7 +201,7 @@ pub(crate) fn is_direct_bit_device_type(device_type: &str) -> bool {
 pub(crate) fn is_native_32bit_device_type(device_type: &str) -> bool {
     matches!(
         device_type,
-        "T" | "TC" | "TS" | "C" | "CC" | "CS" | "Z" | "AT"
+        "T" | "TC" | "TS" | "C" | "CC" | "CS" | "CTH" | "CTC" | "Z" | "AT"
     )
 }
 
@@ -451,7 +451,7 @@ pub fn validate_device_count(
         "TM" => (1, if is_32_bit { 256 } else { 512 }),
         "Z" => (1, 12),
         "AT" => (1, 8),
-        "T" | "TC" | "TS" | "C" | "CC" | "CS" => (1, 120),
+        "T" | "TC" | "TS" | "C" | "CC" | "CS" | "CTH" | "CTC" => (1, 120),
         _ => (1, if is_32_bit { 500 } else { 1000 }),
     };
 
@@ -721,6 +721,16 @@ fn device_range(device_type: &str) -> Option<DeviceRange> {
         "T" | "TC" | "TS" | "C" | "CC" | "CS" => DeviceRange {
             lo: 0,
             hi: 3_999,
+            base: 10,
+        },
+        "CTH" => DeviceRange {
+            lo: 0,
+            hi: 3,
+            base: 10,
+        },
+        "CTC" => DeviceRange {
+            lo: 0,
+            hi: 7,
             base: 10,
         },
         "AT" => DeviceRange {

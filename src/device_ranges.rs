@@ -14,7 +14,7 @@ pub enum KvDeviceRangeCategory {
     Word,
     TimerCounter,
     Index,
-    FileRefresh,
+    FileRegister,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -368,6 +368,42 @@ fn create_range_table() -> RangeTable {
                 ],
             ),
             row(
+                "TC",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "TC0000-TC0511",
+                    "TC0000-TC0511",
+                    "TC0000-TC3999",
+                    "TC0000-TC3999",
+                    "TC0000-TC3999",
+                    "TC0000-TC3999",
+                    "TC0000-TC3999",
+                    "TC0000-TC3999",
+                    "TC0000-TC3999",
+                    "TC0000-TC3999",
+                    "TC0000-TC3999",
+                    "TC0000-TC3999",
+                ],
+            ),
+            row(
+                "TS",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "TS0000-TS0511",
+                    "TS0000-TS0511",
+                    "TS0000-TS3999",
+                    "TS0000-TS3999",
+                    "TS0000-TS3999",
+                    "TS0000-TS3999",
+                    "TS0000-TS3999",
+                    "TS0000-TS3999",
+                    "TS0000-TS3999",
+                    "TS0000-TS3999",
+                    "TS0000-TS3999",
+                    "TS0000-TS3999",
+                ],
+            ),
+            row(
                 "C",
                 KvDeviceRangeNotation::Decimal,
                 &[
@@ -383,6 +419,42 @@ fn create_range_table() -> RangeTable {
                     "C0000-C3999",
                     "C0000-C3999",
                     "C0000-C3999",
+                ],
+            ),
+            row(
+                "CC",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "CC0000-CC0255",
+                    "CC0000-CC0255",
+                    "CC0000-CC3999",
+                    "CC0000-CC3999",
+                    "CC0000-CC3999",
+                    "CC0000-CC3999",
+                    "CC0000-CC3999",
+                    "CC0000-CC3999",
+                    "CC0000-CC3999",
+                    "CC0000-CC3999",
+                    "CC0000-CC3999",
+                    "CC0000-CC3999",
+                ],
+            ),
+            row(
+                "CS",
+                KvDeviceRangeNotation::Decimal,
+                &[
+                    "CS0000-CS0255",
+                    "CS0000-CS0255",
+                    "CS0000-CS3999",
+                    "CS0000-CS3999",
+                    "CS0000-CS3999",
+                    "CS0000-CS3999",
+                    "CS0000-CS3999",
+                    "CS0000-CS3999",
+                    "CS0000-CS3999",
+                    "CS0000-CS3999",
+                    "CS0000-CS3999",
+                    "CS0000-CS3999",
                 ],
             ),
             row(
@@ -770,7 +842,7 @@ fn device_metadata(device_type: &str) -> (KvDeviceRangeCategory, bool) {
         return (KvDeviceRangeCategory::Index, false);
     }
     if matches!(device_type, "ZF") {
-        return (KvDeviceRangeCategory::FileRefresh, false);
+        return (KvDeviceRangeCategory::FileRegister, false);
     }
     if matches!(device_type, "T" | "C" | "AT" | "CTH" | "CTC") {
         return (KvDeviceRangeCategory::TimerCounter, false);

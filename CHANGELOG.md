@@ -15,7 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Tooling`: Developer/operator command-line tools and helper utilities.
 - `CI`: Release checks, workflow scripts, or automation-only changes.
 
-## [Unreleased]
+## [1.3.0] - 2026-07-06
+
+### Added
+- Release: Bumped package metadata to `1.3.0` and synced the embedded profile fixture to `plc-comm-hostlink-profiles` `v1.1.0`.
+- Library: Added `CTH`/`CTC` (high-speed counter / comparator, codes 04H/05H) device support to the address parser and command device-type sets, treated like the counter (`C`) device. Availability is model/unit dependent (governed by the canonical catalog).
+- Library: Synced the embedded KV Host Link device-range catalog with the canonical `TC`/`TS`/`CC`/`CS` (timer/counter current and set value) rows and official `device_name` labels.
+
+### Fixed
+- Library: Corrected the misspelled `KvDeviceRangeCategory::FileRefresh` variant to `FileRegister`. The category is a descriptive label only; device identification uses `device_type`/device code and bit/word width uses `is_bit_device`.
 
 ### Changed
 - CI: Added a tag-driven release workflow that re-runs checks and attaches the packaged crate to the GitHub release.
