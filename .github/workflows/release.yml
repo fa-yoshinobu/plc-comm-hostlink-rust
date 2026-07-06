@@ -63,7 +63,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${{ steps.version.outputs.tag }}"
-          asset="target/package/plc-comm-hostlink-rust-${{ steps.version.outputs.version }}.crate"
+          asset="target/package/plc-comm-kv-hostlink-${{ steps.version.outputs.version }}.crate"
           test -f "${asset}"
           if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
             gh release upload "${tag}" "${asset}" --clobber --repo "${GITHUB_REPOSITORY}"
