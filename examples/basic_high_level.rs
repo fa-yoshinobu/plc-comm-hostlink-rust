@@ -6,7 +6,7 @@
 //! The write uses a DM test address; change it before running against a PLC
 //! program that owns that range. The original value is restored before exit.
 
-use plc_comm_hostlink::{
+use plc_comm_kv_hostlink::{
     HostLinkConnectionOptions, device_range_catalog_for_plc_profile, open_and_connect,
 };
 use std::error::Error;

@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use plc_comm_hostlink::{
+use plc_comm_kv_hostlink::{
     HostLinkClient, HostLinkConnectionOptions, HostLinkError, HostLinkTransportMode,
 };
 use std::collections::BTreeMap;

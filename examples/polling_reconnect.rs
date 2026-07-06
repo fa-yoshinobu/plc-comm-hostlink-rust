@@ -3,7 +3,7 @@
 //! Usage:
 //!   cargo run --features cli --example polling_reconnect -- <host> <port> <plc-profile> [device] [dtype] [interval-seconds]
 
-use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions, HostLinkError};
+use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions, HostLinkError};
 use std::error::Error;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;

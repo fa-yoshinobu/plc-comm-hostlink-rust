@@ -1,4 +1,4 @@
-use plc_comm_hostlink::{HostLinkClient, HostLinkClock, HostLinkConnectionOptions, KvPlcMode};
+use plc_comm_kv_hostlink::{HostLinkClient, HostLinkClock, HostLinkConnectionOptions, KvPlcMode};
 use serde::Deserialize;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -90,7 +90,7 @@ async fn start_echo_server(response: Option<String>) -> (u16, Arc<Mutex<VecDeque
 async fn run_vector(
     client: &HostLinkClient,
     vector: &FrameVector,
-) -> Result<(), plc_comm_hostlink::HostLinkError> {
+) -> Result<(), plc_comm_kv_hostlink::HostLinkError> {
     match vector.command.as_str() {
         "check_error_no" => {
             let _ = client.check_error_no().await?;

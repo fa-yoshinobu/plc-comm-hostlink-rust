@@ -17,17 +17,17 @@ Use this page to make your first KEYENCE KV Host Link connection from Rust. The 
 ## Add dependency
 
 ```bash
-cargo add plc-comm-hostlink-rust
+cargo add plc-comm-kv-hostlink
 ```
 
-The package name is `plc-comm-hostlink-rust`; the import path in Rust code is `plc_comm_hostlink`.
+The package name is `plc-comm-kv-hostlink`; the import path in Rust code is `plc_comm_kv_hostlink`.
 
 ## Choose profile
 
 Use the exact canonical profile string that matches your PLC model when you need the device range catalog. The library does not infer the catalog from the PLC model response.
 
 ```rust
-use plc_comm_hostlink::device_range_catalog_for_plc_profile;
+use plc_comm_kv_hostlink::device_range_catalog_for_plc_profile;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let catalog = device_range_catalog_for_plc_profile("keyence:kv-8000")?;
@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 `HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?` uses TCP port `8501` by default.
 
 ```rust
-use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
+use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Start with a `DM` read because it is the simplest word-register path on most KV setups.
 
 ```rust
-use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
+use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -88,7 +88,7 @@ The numeric value depends on your PLC state.
 Use a dedicated test address only. The example uses `DM120` because the existing validation notes reserve nearby `DM` addresses for smoke checks on one test setup; choose an address that is safe on your PLC program.
 
 ```rust
-use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
+use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -127,6 +127,6 @@ Common connection, profile, address, write-permission, and PLC error-code sympto
 
 ## Next steps
 
-- Open the API reference: [docs.rs/plc-comm-hostlink-rust](https://docs.rs/plc-comm-hostlink-rust/).
+- Open the API reference: [docs.rs/plc-comm-kv-hostlink](https://docs.rs/plc-comm-kv-hostlink/).
 - Open the runnable samples: [examples README](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/tree/main/examples).
 - Continue with the [Usage guide](USAGE_GUIDE.md) and [Gotchas](GOTCHAS.md).

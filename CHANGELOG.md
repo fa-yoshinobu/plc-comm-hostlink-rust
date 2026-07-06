@@ -17,8 +17,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-07-06
+
+### BREAKING
+- Release: Renamed the crates.io package and Rust import path.
+
+| Old crate/use | New crate/use |
+| --- | --- |
+| `plc-comm-hostlink-rust` | `plc-comm-kv-hostlink` |
+| `use plc_comm_hostlink::...` | `use plc_comm_kv_hostlink::...` |
+
 ### Added
 - Docs: Added `docs/API_REFERENCE.md` as the standard user-facing API index and linked it from the README.
+
+### Changed
+- Release: Bumped package metadata to `2.0.0`.
+- Docs: Updated README, Getting Started, docs.rs links, examples, tests, and release duplicate checks for `plc-comm-kv-hostlink` / `plc_comm_kv_hostlink`.
+- CI: Kept the tag-driven release workflow for the renamed crate package.
 
 ## [1.3.0] - 2026-07-06
 

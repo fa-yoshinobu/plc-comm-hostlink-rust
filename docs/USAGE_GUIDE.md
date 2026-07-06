@@ -27,7 +27,7 @@
 | `append_lf_on_send` | `bool` | `false` |
 
 ```rust
-use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions, HostLinkTransportMode};
+use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions, HostLinkTransportMode};
 use std::time::Duration;
 
 #[tokio::main]
@@ -81,7 +81,7 @@ same `HostLinkConnectionOptions`.
 | Empty string | `HostLinkValue::Bool` | 1 direct bit point. |
 
 ```rust
-use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
+use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -99,7 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Write a single value
 
 ```rust
-use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
+use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -120,7 +120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Named snapshot
 
 ```rust
-use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions, HostLinkValue};
+use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions, HostLinkValue};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -147,7 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `read_dwords_chunked` | `pub async fn read_dwords_chunked(client: &HostLinkClient, device: &str, count: usize, max_dwords_per_request: usize) -> Result<Vec<u32>, HostLinkError>` | Read many double words split into smaller requests. |
 
 ```rust
-use plc_comm_hostlink::{
+use plc_comm_kv_hostlink::{
     HostLinkClient, HostLinkConnectionOptions, read_dwords_chunked, read_words_single_request,
 };
 
@@ -171,7 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Use `.n` notation for bit-in-word reads and `write_bit_in_word` for masked writes.
 
 ```rust
-use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions, HostLinkValue};
+use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions, HostLinkValue};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -196,7 +196,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```rust
 use futures_util::StreamExt;
-use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions, poll};
+use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions, poll};
 use std::time::Duration;
 
 #[tokio::main]
@@ -231,7 +231,7 @@ available in the Python recipes; the Rust recipe intentionally accepts JSON.
 `read_timer_counter` returns `TimerCounterValue { status, current, preset }`. Use `read_timer` for `T` devices and `read_counter` for `C` devices when you want the same shape with device-type validation.
 
 ```rust
-use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
+use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -255,7 +255,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Device comments
 
 ```rust
-use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
+use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -1,5 +1,5 @@
 use futures_util::{StreamExt, pin_mut};
-use plc_comm_hostlink::{
+use plc_comm_kv_hostlink::{
     HostLinkConnectionOptions, HostLinkTransportMode, HostLinkValue, KvDeviceRangeCatalog,
     KvDeviceRangeEntry, KvDeviceRangeSegment, KvPlcMode, TimerCounterValue,
     device_range_catalog_for_plc_profile, open_and_connect, read_comments, read_counter,
@@ -536,7 +536,7 @@ fn normalize_timer_counter(value: &TimerCounterValue) -> Value {
     })
 }
 
-fn normalize_named(values: &plc_comm_hostlink::NamedSnapshot) -> Value {
+fn normalize_named(values: &plc_comm_kv_hostlink::NamedSnapshot) -> Value {
     let mut map = serde_json::Map::new();
     for (key, value) in values {
         map.insert(key.clone(), normalize_value(value));

@@ -8,7 +8,7 @@
 //! Usage:
 //!   cargo run --example 02_typed_read_write -- <host> <port> <plc-profile>
 
-use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
+use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 use std::error::Error;
 
 #[tokio::main]

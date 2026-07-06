@@ -1,10 +1,14 @@
 [![CI](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/plc-comm-hostlink-rust.svg)](https://crates.io/crates/plc-comm-hostlink-rust)
+[![crates.io](https://img.shields.io/crates/v/plc-comm-kv-hostlink.svg)](https://crates.io/crates/plc-comm-kv-hostlink)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 # KEYENCE KV Host Link for Rust
 
 Rust library for KEYENCE KV Host Link PLC communication.
+
+## PLC Comm Family
+
+This library is part of the plc-comm family. See the [package matrix](https://fa-yoshinobu.github.io/plc-comm-docs-site/package-matrix/) for protocol, language, registry, and install-command mapping.
 
 ## Supported PLC profiles
 
@@ -17,15 +21,15 @@ The shared device and range tables are in the [KV Host Link Device Ranges](https
 ## Installation
 
 ```bash
-cargo add plc-comm-hostlink-rust
+cargo add plc-comm-kv-hostlink
 ```
 
-The package name is `plc-comm-hostlink-rust`; the Rust import path is `plc_comm_hostlink`.
+The package name is `plc-comm-kv-hostlink`; the Rust import path is `plc_comm_kv_hostlink`.
 
 ## Quick example
 
 ```rust
-use plc_comm_hostlink::{
+use plc_comm_kv_hostlink::{
     HostLinkClient, HostLinkConnectionOptions, device_range_catalog_for_plc_profile,
 };
 
@@ -64,8 +68,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | Item | Value |
 | --- | --- |
 | License | [MIT](LICENSE) |
-| Registry | [crates.io](https://crates.io/crates/plc-comm-hostlink-rust) |
-| Package | `plc-comm-hostlink-rust` |
+| Registry | [crates.io](https://crates.io/crates/plc-comm-kv-hostlink) |
+| Package | `plc-comm-kv-hostlink` |
 
 ## Commercial support
 

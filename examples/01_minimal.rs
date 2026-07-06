@@ -3,7 +3,7 @@
 //! Usage:
 //!   cargo run --example 01_minimal -- <host> <port> <plc-profile>
 
-use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
+use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 use std::error::Error;
 
 #[tokio::main]
