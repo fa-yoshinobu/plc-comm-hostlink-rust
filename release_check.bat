@@ -6,7 +6,7 @@ echo [RELEASE] Host Link Rust release check
 echo ===================================================
 
 echo [1/4] Checking registry version...
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check_registry_duplicate.ps1 -Registry crates -Package plc-comm-hostlink-rust -VersionSource cargo -ManifestPath Cargo.toml
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check_registry_duplicate.ps1 -Registry crates -Package plc-comm-kv-hostlink -VersionSource cargo -ManifestPath Cargo.toml
 if %errorlevel% neq 0 (
     echo [ERROR] Release version check failed.
     exit /b %errorlevel%

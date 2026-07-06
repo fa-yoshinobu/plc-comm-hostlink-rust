@@ -7,7 +7,7 @@
 //! Usage:
 //!   cargo run --features cli --example kv_device_range_sample_compare -- <host> <port> <plc-profile>
 
-use plc_comm_hostlink::{
+use plc_comm_kv_hostlink::{
     HostLinkConnectionOptions, HostLinkError, HostLinkValue, KvDeviceAddress, KvDeviceRangeEntry,
     KvDeviceRangeSegment, QueuedHostLinkClient, device_range_catalog_for_plc_profile,
     open_and_connect,

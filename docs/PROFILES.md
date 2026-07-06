@@ -30,7 +30,7 @@ The tables below only identify the canonical profile names and the intended KV f
 ## How to select
 
 ```rust
-use plc_comm_hostlink::device_range_catalog_for_plc_profile;
+use plc_comm_kv_hostlink::device_range_catalog_for_plc_profile;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let catalog = device_range_catalog_for_plc_profile("keyence:kv-7000")?;
@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Connection setup is separate from catalog selection:
 
 ```rust
-use plc_comm_hostlink::{HostLinkClient, HostLinkConnectionOptions};
+use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

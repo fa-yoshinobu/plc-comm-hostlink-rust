@@ -1,6 +1,6 @@
 use encoding_rs::SHIFT_JIS;
 use futures_util::{StreamExt, pin_mut};
-use plc_comm_hostlink::{
+use plc_comm_kv_hostlink::{
     HostLinkClient, HostLinkConnectionOptions, HostLinkTransportMode, HostLinkValue,
     open_and_connect, read_comments, read_dwords_chunked, read_typed, write_dwords_chunked,
 };
@@ -560,7 +560,7 @@ async fn poll_reuses_compiled_plan_for_each_cycle() {
     options.port = port;
     let client = HostLinkClient::connect(options).await.unwrap();
 
-    let stream = plc_comm_hostlink::poll(
+    let stream = plc_comm_kv_hostlink::poll(
         &client,
         &["DM100:U", "DM100.0", "DM101:F"],
         std::time::Duration::from_millis(1),
@@ -695,7 +695,7 @@ async fn read_expansion_unit_buffer_rejects_32_bit_buffer_end_crossing_before_se
 #[test]
 fn device_range_catalog_uses_explicit_plc_profile() {
     let catalog =
-        plc_comm_hostlink::device_range_catalog_for_plc_profile("keyence:kv-8000").unwrap();
+        plc_comm_kv_hostlink::device_range_catalog_for_plc_profile("keyence:kv-8000").unwrap();
     assert_eq!(catalog.plc_profile, "keyence:kv-8000");
     assert_eq!(catalog.model_code, "");
     assert!(!catalog.has_model_code);
