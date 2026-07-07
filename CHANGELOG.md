@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### BREAKING
 - Library: Moved PLC profile lookup APIs out of `device_ranges` and re-exported them from the crate root; `device_ranges` now owns only the device-range catalog entry point.
 
+### Changed
+- Docs: Updated PLC profile documentation and API reference entries for the profile API re-export.
+- Tests: Updated PLC profile display-name coverage to use the crate-root profile API.
+
 ## [2.0.0] - 2026-07-06
 
 ### BREAKING
