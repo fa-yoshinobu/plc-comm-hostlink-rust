@@ -9,6 +9,7 @@ mod device_ranges;
 mod error;
 mod helpers;
 mod model;
+mod plc_profiles;
 mod protocol;
 mod read_plan;
 
@@ -23,8 +24,7 @@ pub use client::{
 };
 pub use device_ranges::{
     KvDeviceRangeCatalog, KvDeviceRangeCategory, KvDeviceRangeEntry, KvDeviceRangeNotation,
-    KvDeviceRangeSegment, available_plc_profiles, device_range_catalog_for_plc_profile,
-    display_name,
+    KvDeviceRangeSegment, device_range_catalog_for_plc_profile,
 };
 pub use error::{HostLinkError, decode_error_code};
 pub use helpers::{
@@ -37,4 +37,8 @@ pub use helpers::{
 pub use model::{
     HostLinkClock, HostLinkConnectionOptions, HostLinkTraceDirection, HostLinkTraceFrame,
     HostLinkTransportMode, KvModelInfo, KvPlcMode, TraceHook,
+};
+pub use plc_profiles::{
+    KvHostLinkPlcProfile, available_plc_profiles, display_name, normalize_plc_profile,
+    profile_from_name,
 };

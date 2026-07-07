@@ -54,7 +54,8 @@ sessions, use `QueuedHostLinkClient` or `open_and_connect`.
 | Operation | Public API |
 | --- | --- |
 | Device range catalog | `KvDeviceRangeCatalog`, `KvDeviceRangeEntry`, `KvDeviceRangeSegment`, `KvDeviceRangeCategory`, `KvDeviceRangeNotation` |
-| Profile lookup | `available_plc_profiles`, `device_range_catalog_for_plc_profile`, `display_name` |
+| Profile lookup | `KvHostLinkPlcProfile`, `available_plc_profiles`, `normalize_plc_profile`, `profile_from_name`, `display_name` |
+| Device range catalog lookup | `device_range_catalog_for_plc_profile` |
 | Transport and mode enums | `HostLinkTransportMode`, `KvPlcMode` |
 | Value formatting | `HostLinkPayloadValue` |
 | Error handling | `HostLinkError`, `decode_error_code` |
@@ -70,8 +71,9 @@ The crate re-exports these public names from `src/lib.rs`:
 `HostLinkClient`, `HostLinkClientFactory`, `HostLinkPayloadValue`,
 `QueuedHostLinkClient`, `open_and_connect`, `KvDeviceRangeCatalog`,
 `KvDeviceRangeCategory`, `KvDeviceRangeEntry`, `KvDeviceRangeNotation`,
-`KvDeviceRangeSegment`, `available_plc_profiles`,
-`device_range_catalog_for_plc_profile`, `display_name`, `HostLinkError`,
+`KvDeviceRangeSegment`, `KvHostLinkPlcProfile`, `available_plc_profiles`,
+`device_range_catalog_for_plc_profile`, `display_name`,
+`normalize_plc_profile`, `profile_from_name`, `HostLinkError`,
 `decode_error_code`, `HostLinkValue`, `NamedSnapshot`, `TimerCounterValue`,
 `poll`, `read_comments`, `read_counter`, `read_dwords`,
 `read_dwords_chunked`, `read_dwords_single_request`, `read_named`,

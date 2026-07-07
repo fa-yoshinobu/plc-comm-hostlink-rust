@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use time::{Month, OffsetDateTime};
 
-use crate::device_ranges::device_range_catalog_for_plc_profile;
 use crate::error::HostLinkError;
+use crate::plc_profiles;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostLinkTransportMode {
@@ -150,5 +150,5 @@ impl HostLinkConnectionOptions {
 }
 
 fn normalize_plc_profile(plc_profile: impl AsRef<str>) -> Result<String, HostLinkError> {
-    Ok(device_range_catalog_for_plc_profile(plc_profile)?.plc_profile)
+    plc_profiles::normalize_plc_profile(plc_profile)
 }

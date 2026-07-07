@@ -1,5 +1,8 @@
 use crate::address::{default_format_by_device_type, is_direct_bit_device_type};
 use crate::error::HostLinkError;
+use crate::plc_profiles::{
+    KvHostLinkPlcProfile, normalize_plc_profile, profile_from_name, profiles as plc_profiles,
+};
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,91 +91,41 @@ fn build_catalog(
     requested_plc_profile: &str,
     model_code: Option<&str>,
 ) -> Result<KvDeviceRangeCatalog, HostLinkError> {
-    let requested_plc_profile = normalize_plc_profile(requested_plc_profile);
-    if requested_plc_profile.is_empty() {
-        return Err(HostLinkError::protocol("PLC profile must not be empty"));
-    }
+    let requested_plc_profile = normalize_plc_profile(requested_plc_profile)?;
 
     let table = range_table()?;
     let resolved_profile = range_profile_for_plc_profile(table, &requested_plc_profile)?;
     let model_index = table
         .profiles
         .iter()
-        .position(|profile| profile.plc_profile == resolved_profile.plc_profile)
+        .position(|profile| profile.name == resolved_profile.name)
         .ok_or_else(|| {
             HostLinkError::protocol(format!(
                 "Resolved PLC profile '{}' was not found in the embedded device range table.",
-                resolved_profile.plc_profile
+                resolved_profile.name
             ))
         })?;
 
     let entries = table
         .rows
         .iter()
-        .map(|row| build_entry(row, model_index, resolved_profile.display_name))
+        .map(|row| build_entry(row, model_index, resolved_profile.source_label))
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(KvDeviceRangeCatalog {
-        plc_profile: resolved_profile.plc_profile.to_owned(),
+        plc_profile: resolved_profile.name.to_owned(),
         model_code: model_code.unwrap_or_default().to_owned(),
         has_model_code: model_code.is_some(),
         requested_plc_profile,
-        resolved_plc_profile: resolved_profile.plc_profile.to_owned(),
+        resolved_plc_profile: resolved_profile.name.to_owned(),
         entries,
     })
 }
 
-/// # Panics
-///
-/// Panics if the embedded device range table cannot be parsed. The embedded
-/// JSON is validated against the canonical fixture by tests, so this cannot
-/// happen with a released build.
-pub fn available_plc_profiles() -> Vec<String> {
-    range_table()
-        .expect("embedded KV device range table must parse")
-        .profiles
-        .iter()
-        .map(|profile| profile.plc_profile.to_owned())
-        .collect()
-}
-
-pub fn display_name(plc_profile: impl AsRef<str>) -> Result<&'static str, HostLinkError> {
-    let normalized = normalize_plc_profile(plc_profile.as_ref());
-    if normalized.is_empty() {
-        return Err(HostLinkError::protocol("PLC profile must not be empty"));
-    }
-    let table = range_table()?;
-    let _ = range_profile_for_plc_profile(table, &normalized)?;
-    match normalized.as_str() {
-        "keyence:kv-nano" => Ok("KEYENCE KV-NANO"),
-        "keyence:kv-nano-xym" => Ok("KEYENCE KV-NANO (XYM)"),
-        "keyence:kv-3000" => Ok("KEYENCE KV-3000"),
-        "keyence:kv-3000-xym" => Ok("KEYENCE KV-3000 (XYM)"),
-        "keyence:kv-5000" => Ok("KEYENCE KV-5000"),
-        "keyence:kv-5000-xym" => Ok("KEYENCE KV-5000 (XYM)"),
-        "keyence:kv-7000" => Ok("KEYENCE KV-7000"),
-        "keyence:kv-7000-xym" => Ok("KEYENCE KV-7000 (XYM)"),
-        "keyence:kv-8000" => Ok("KEYENCE KV-8000"),
-        "keyence:kv-8000-xym" => Ok("KEYENCE KV-8000 (XYM)"),
-        "keyence:kv-x500" => Ok("KEYENCE KV-X500"),
-        "keyence:kv-x500-xym" => Ok("KEYENCE KV-X500 (XYM)"),
-        _ => Err(HostLinkError::protocol(format!(
-            "Unsupported PLC profile '{}'.",
-            plc_profile.as_ref()
-        ))),
-    }
-}
-
 #[derive(Debug, Clone)]
 struct RangeTable {
-    profiles: Vec<RangeProfile>,
+    profiles: &'static [KvHostLinkPlcProfile],
     rows: Vec<RangeRow>,
-}
-
-#[derive(Debug, Clone)]
-struct RangeProfile {
-    display_name: &'static str,
-    plc_profile: &'static str,
 }
 
 #[derive(Debug, Clone)]
@@ -190,56 +143,7 @@ fn range_table() -> Result<&'static RangeTable, HostLinkError> {
 
 fn create_range_table() -> RangeTable {
     RangeTable {
-        profiles: vec![
-            RangeProfile {
-                display_name: "KV-NANO",
-                plc_profile: "keyence:kv-nano",
-            },
-            RangeProfile {
-                display_name: "KV-NANO(XYM)",
-                plc_profile: "keyence:kv-nano-xym",
-            },
-            RangeProfile {
-                display_name: "KV-3000",
-                plc_profile: "keyence:kv-3000",
-            },
-            RangeProfile {
-                display_name: "KV-3000(XYM)",
-                plc_profile: "keyence:kv-3000-xym",
-            },
-            RangeProfile {
-                display_name: "KV-5000",
-                plc_profile: "keyence:kv-5000",
-            },
-            RangeProfile {
-                display_name: "KV-5000(XYM)",
-                plc_profile: "keyence:kv-5000-xym",
-            },
-            RangeProfile {
-                display_name: "KV-7000",
-                plc_profile: "keyence:kv-7000",
-            },
-            RangeProfile {
-                display_name: "KV-7000(XYM)",
-                plc_profile: "keyence:kv-7000-xym",
-            },
-            RangeProfile {
-                display_name: "KV-8000",
-                plc_profile: "keyence:kv-8000",
-            },
-            RangeProfile {
-                display_name: "KV-8000(XYM)",
-                plc_profile: "keyence:kv-8000-xym",
-            },
-            RangeProfile {
-                display_name: "KV-X500",
-                plc_profile: "keyence:kv-x500",
-            },
-            RangeProfile {
-                display_name: "KV-X500(XYM)",
-                plc_profile: "keyence:kv-x500-xym",
-            },
-        ],
+        profiles: plc_profiles(),
         rows: vec![
             row(
                 "R",
@@ -870,29 +774,31 @@ fn notation_for_device(
 fn range_profile_for_plc_profile<'a>(
     table: &'a RangeTable,
     plc_profile: &str,
-) -> Result<&'a RangeProfile, HostLinkError> {
-    let normalized = normalize_plc_profile(plc_profile);
-    for profile in &table.profiles {
-        if profile.plc_profile == normalized {
+) -> Result<&'a KvHostLinkPlcProfile, HostLinkError> {
+    let normalized = profile_from_name(plc_profile)?.name;
+    for profile in table.profiles {
+        if profile.name == normalized {
             return Ok(profile);
         }
     }
-    let supported = available_plc_profiles().join(", ");
+    let supported = table
+        .profiles
+        .iter()
+        .map(|profile| profile.name)
+        .collect::<Vec<_>>()
+        .join(", ");
     Err(HostLinkError::protocol(format!(
         "Unsupported PLC profile '{plc_profile}'. Supported PLC profiles: {supported}."
     )))
 }
 
-fn normalize_plc_profile(text: &str) -> String {
-    text.trim().trim_end_matches('\0').to_owned()
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        KvDeviceRangeCategory, KvDeviceRangeNotation, available_plc_profiles,
-        device_range_catalog_for_plc_profile, display_name, parse_segment_bounds,
+        KvDeviceRangeCategory, KvDeviceRangeNotation, device_range_catalog_for_plc_profile,
+        parse_segment_bounds,
     };
+    use crate::plc_profiles::{available_plc_profiles, display_name};
 
     #[test]
     fn available_profiles_include_xym_profiles() {
