@@ -24,6 +24,7 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 const UDP_RECEIVE_BUFFER_SIZE: usize = 65_535;
+const MAX_TCP_LINE_SIZE: usize = 65_536;
 
 pub trait HostLinkPayloadValue {
     fn format_for_suffix(&self, data_format: &str) -> String;
@@ -745,20 +746,34 @@ impl ClientInner {
         let frame = build_frame(body, self.options.append_lf_on_send);
         self.fire_trace(HostLinkTraceDirection::Send, &frame);
 
-        match self.transport.as_mut() {
+        let mut close_tcp = false;
+        let result = match self.transport.as_mut() {
             Some(Transport::Tcp(stream)) => {
-                write_all_with_timeout(stream, &frame, self.options.timeout).await?;
-                let raw = recv_tcp_line(
-                    stream,
-                    &mut self.rx_buf,
-                    &mut self.rx_start,
-                    &mut self.rx_count,
-                    &mut self.tcp_read_buf,
-                    self.options.timeout,
-                )
-                .await?;
-                self.fire_trace(HostLinkTraceDirection::Receive, &raw);
-                ensure_success(decoder(&raw)?)
+                match write_all_with_timeout(stream, &frame, self.options.timeout).await {
+                    Ok(()) => match recv_tcp_line(
+                        stream,
+                        &mut self.rx_buf,
+                        &mut self.rx_start,
+                        &mut self.rx_count,
+                        &mut self.tcp_read_buf,
+                        self.options.timeout,
+                    )
+                    .await
+                    {
+                        Ok(raw) => {
+                            self.fire_trace(HostLinkTraceDirection::Receive, &raw);
+                            ensure_success(decoder(&raw)?)
+                        }
+                        Err(err) => {
+                            close_tcp = true;
+                            Err(err)
+                        }
+                    },
+                    Err(err) => {
+                        close_tcp = true;
+                        Err(err)
+                    }
+                }
             }
             Some(Transport::Udp(socket)) => {
                 send_udp_with_timeout(socket, &frame, self.options.timeout).await?;
@@ -768,7 +783,11 @@ impl ClientInner {
                 ensure_success(decoder(raw)?)
             }
             None => Err(HostLinkError::connection("transport was not opened")),
+        };
+        if close_tcp {
+            self.close();
         }
+        result
     }
 
     fn fire_trace(&self, direction: HostLinkTraceDirection, data: &[u8]) {
@@ -1011,6 +1030,16 @@ async fn recv_tcp_line(
     duration: Duration,
 ) -> Result<Vec<u8>, HostLinkError> {
     loop {
+        while *rx_count > 0 && matches!(rx_buf[*rx_start], b'\r' | b'\n') {
+            *rx_start += 1;
+            *rx_count -= 1;
+        }
+        if *rx_start > rx_buf.len() / 2 {
+            if *rx_count > 0 {
+                rx_buf.copy_within(*rx_start..*rx_start + *rx_count, 0);
+            }
+            *rx_start = 0;
+        }
         let mut found_idx = None;
         for index in 0..*rx_count {
             let byte = rx_buf[*rx_start + index];
@@ -1021,6 +1050,11 @@ async fn recv_tcp_line(
         }
 
         if let Some(found_idx) = found_idx {
+            if found_idx > MAX_TCP_LINE_SIZE {
+                return Err(HostLinkError::protocol(format!(
+                    "Response line exceeds {MAX_TCP_LINE_SIZE} bytes"
+                )));
+            }
             let line = rx_buf[*rx_start..*rx_start + found_idx].to_vec();
             let mut skip = found_idx;
             while skip < *rx_count && matches!(rx_buf[*rx_start + skip], b'\r' | b'\n') {
@@ -1053,6 +1087,11 @@ async fn recv_tcp_line(
                 rx_buf.copy_within(*rx_start..*rx_start + *rx_count, 0);
             }
             *rx_start = 0;
+            if *rx_count + read > MAX_TCP_LINE_SIZE + tcp_read_buf.len() {
+                return Err(HostLinkError::protocol(format!(
+                    "Response line exceeds {MAX_TCP_LINE_SIZE} bytes"
+                )));
+            }
             if *rx_count + read > rx_buf.len() {
                 rx_buf.resize((rx_buf.len() * 2).max(*rx_count + read), 0);
             }
@@ -1061,5 +1100,13 @@ async fn recv_tcp_line(
         let target = *rx_start + *rx_count;
         rx_buf[target..target + read].copy_from_slice(&tcp_read_buf[..read]);
         *rx_count += read;
+        if *rx_count > MAX_TCP_LINE_SIZE {
+            let has_terminator = (0..*rx_count).any(|index| matches!(rx_buf[*rx_start + index], b'\r' | b'\n'));
+            if !has_terminator {
+                return Err(HostLinkError::protocol(format!(
+                    "Response line exceeds {MAX_TCP_LINE_SIZE} bytes"
+                )));
+            }
+        }
     }
 }
