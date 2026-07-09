@@ -1101,7 +1101,8 @@ async fn recv_tcp_line(
         rx_buf[target..target + read].copy_from_slice(&tcp_read_buf[..read]);
         *rx_count += read;
         if *rx_count > MAX_TCP_LINE_SIZE {
-            let has_terminator = (0..*rx_count).any(|index| matches!(rx_buf[*rx_start + index], b'\r' | b'\n'));
+            let has_terminator =
+                (0..*rx_count).any(|index| matches!(rx_buf[*rx_start + index], b'\r' | b'\n'));
             if !has_terminator {
                 return Err(HostLinkError::protocol(format!(
                     "Response line exceeds {MAX_TCP_LINE_SIZE} bytes"
