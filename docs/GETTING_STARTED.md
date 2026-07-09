@@ -41,12 +41,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 `HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?` uses TCP port `8501` by default.
 
 ```rust
-use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions};
+use plc_comm_kv_hostlink::{HostLinkConnectionOptions, open_and_connect};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?;
-    let client = HostLinkClient::connect(options).await?;
+    let client = open_and_connect(options).await?;
 
     println!("{:?}", client.is_open().await);
 
@@ -60,12 +60,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Start with a `DM` read because it is the simplest word-register path on most KV setups.
 
 ```rust
-use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions};
+use plc_comm_kv_hostlink::{HostLinkConnectionOptions, open_and_connect};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client =
-        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
+        open_and_connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
 
     let dm0 = client.read_typed("DM0", "U").await?;
     println!("{:?}", dm0);
@@ -88,12 +88,12 @@ The numeric value depends on your PLC state.
 Use a dedicated test address only. The example uses `DM120` because the existing validation notes reserve nearby `DM` addresses for smoke checks on one test setup; choose an address that is safe on your PLC program.
 
 ```rust
-use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions};
+use plc_comm_kv_hostlink::{HostLinkConnectionOptions, open_and_connect};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client =
-        HostLinkClient::connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
+        open_and_connect(HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?).await?;
 
     let original = client.read_typed("DM120", "U").await?;
     client.write_typed("DM120", "U", 1234_u16).await?;
