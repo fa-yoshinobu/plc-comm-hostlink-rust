@@ -1,6 +1,6 @@
 [package]
 name = "plc-comm-kv-hostlink"
-version = "3.0.0"
+version = "3.0.1"
 edition = "2024"
 rust-version = "1.85"
 description = "Async Rust Host Link client based on plc-comm-hostlink-dotnet"
