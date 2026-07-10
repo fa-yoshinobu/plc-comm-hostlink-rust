@@ -5,6 +5,7 @@ use plc_comm_kv_hostlink::{
     open_and_connect, read_comments, read_dwords_chunked, read_typed, write_dwords_chunked,
 };
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UdpSocket};
 
@@ -62,6 +63,89 @@ async fn udp_send_raw_accepts_large_datagram_response() {
 
     assert_eq!(response.len(), 5000);
     assert!(response.chars().all(|ch| ch == '7'));
+}
+
+#[tokio::test]
+async fn tcp_eof_before_terminator_rejects_partial_response_and_closes_transport() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = [0u8; 5];
+        stream.read_exact(&mut request).await.unwrap();
+        stream.write_all(b"PARTIAL").await.unwrap();
+    });
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1", "keyence:kv-8000").unwrap();
+    options.port = port;
+    options.timeout = Duration::from_secs(2);
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let error = client.send_raw("READ").await.unwrap_err();
+    assert!(error.to_string().contains("before the response terminator"));
+    assert!(!client.is_open().await);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn udp_timeout_discards_delayed_response_before_next_request() {
+    let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let port = socket.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let mut request = vec![0u8; 1024];
+        let (_, first_peer) = socket.recv_from(&mut request).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        socket.send_to(b"FIRST\r", first_peer).await.unwrap();
+
+        let (_, second_peer) = socket.recv_from(&mut request).await.unwrap();
+        socket.send_to(b"SECOND\r", second_peer).await.unwrap();
+    });
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1", "keyence:kv-8000").unwrap();
+    options.transport = HostLinkTransportMode::Udp;
+    options.port = port;
+    options.timeout = Duration::from_millis(50);
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    assert!(client.send_raw("FIRST").await.is_err());
+    assert!(!client.is_open().await);
+    client.set_timeout(Duration::from_secs(2)).await;
+    assert_eq!(client.send_raw("SECOND").await.unwrap(), "SECOND");
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn dropped_udp_request_poisons_transport_and_discards_delayed_response() {
+    let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let port = socket.local_addr().unwrap().port();
+    let (first_seen_tx, first_seen_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let mut request = vec![0u8; 1024];
+        let (_, first_peer) = socket.recv_from(&mut request).await.unwrap();
+        first_seen_tx.send(()).unwrap();
+        release_rx.await.unwrap();
+        let (_, second_peer) = socket.recv_from(&mut request).await.unwrap();
+        socket.send_to(b"FIRST\r", first_peer).await.unwrap();
+        socket.send_to(b"SECOND\r", second_peer).await.unwrap();
+    });
+
+    let mut options = HostLinkConnectionOptions::new("127.0.0.1", "keyence:kv-8000").unwrap();
+    options.transport = HostLinkTransportMode::Udp;
+    options.port = port;
+    options.timeout = Duration::from_secs(2);
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let request_client = client.clone();
+    let request = tokio::spawn(async move { request_client.send_raw("FIRST").await });
+    first_seen_rx.await.unwrap();
+    request.abort();
+    assert!(request.await.unwrap_err().is_cancelled());
+    assert!(!client.is_open().await);
+
+    release_tx.send(()).unwrap();
+    assert_eq!(client.send_raw("SECOND").await.unwrap(), "SECOND");
+    server.await.unwrap();
 }
 
 #[tokio::test]

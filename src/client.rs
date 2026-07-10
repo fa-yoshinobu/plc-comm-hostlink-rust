@@ -151,6 +151,10 @@ struct ClientInner {
     rx_count: usize,
     tcp_read_buf: Vec<u8>,
     udp_read_buf: Vec<u8>,
+    // Set before the first transport await and cleared only after a complete
+    // response. If the future is dropped, the next operation replaces the
+    // poisoned transport before sending another request.
+    exchange_incomplete: bool,
 }
 
 impl HostLinkClient {
@@ -165,6 +169,7 @@ impl HostLinkClient {
                 rx_count: 0,
                 tcp_read_buf: vec![0u8; 8192],
                 udp_read_buf: vec![0u8; UDP_RECEIVE_BUFFER_SIZE],
+                exchange_incomplete: false,
             })),
         }
     }
@@ -185,7 +190,8 @@ impl HostLinkClient {
     }
 
     pub async fn is_open(&self) -> bool {
-        self.inner.lock().await.transport.is_some()
+        let inner = self.inner.lock().await;
+        inner.transport.is_some() && !inner.exchange_incomplete
     }
 
     pub async fn timeout(&self) -> Duration {
@@ -695,6 +701,9 @@ impl HostLinkClient {
 
 impl ClientInner {
     async fn open(&mut self) -> Result<(), HostLinkError> {
+        if self.exchange_incomplete {
+            self.close();
+        }
         if self.transport.is_some() {
             return Ok(());
         }
@@ -732,6 +741,7 @@ impl ClientInner {
         self.transport = None;
         self.rx_start = 0;
         self.rx_count = 0;
+        self.exchange_incomplete = false;
     }
 
     async fn send_raw(&mut self, body: &str) -> Result<String, HostLinkError> {
@@ -746,48 +756,48 @@ impl ClientInner {
         let frame = build_frame(body, self.options.append_lf_on_send);
         self.fire_trace(HostLinkTraceDirection::Send, &frame);
 
-        let mut close_tcp = false;
-        let result = match self.transport.as_mut() {
+        self.exchange_incomplete = true;
+        let exchange_result = match self.transport.as_mut() {
             Some(Transport::Tcp(stream)) => {
                 match write_all_with_timeout(stream, &frame, self.options.timeout).await {
-                    Ok(()) => match recv_tcp_line(
-                        stream,
-                        &mut self.rx_buf,
-                        &mut self.rx_start,
-                        &mut self.rx_count,
-                        &mut self.tcp_read_buf,
-                        self.options.timeout,
-                    )
-                    .await
-                    {
-                        Ok(raw) => {
-                            self.fire_trace(HostLinkTraceDirection::Receive, &raw);
-                            ensure_success(decoder(&raw)?)
-                        }
-                        Err(err) => {
-                            close_tcp = true;
-                            Err(err)
-                        }
-                    },
-                    Err(err) => {
-                        close_tcp = true;
-                        Err(err)
+                    Ok(()) => {
+                        recv_tcp_line(
+                            stream,
+                            &mut self.rx_buf,
+                            &mut self.rx_start,
+                            &mut self.rx_count,
+                            &mut self.tcp_read_buf,
+                            self.options.timeout,
+                        )
+                        .await
                     }
+                    Err(err) => Err(err),
                 }
             }
             Some(Transport::Udp(socket)) => {
-                send_udp_with_timeout(socket, &frame, self.options.timeout).await?;
-                recv_udp_with_timeout(socket, &mut self.udp_read_buf, self.options.timeout).await?;
-                let raw = &self.udp_read_buf;
-                self.fire_trace(HostLinkTraceDirection::Receive, raw);
-                ensure_success(decoder(raw)?)
+                match send_udp_with_timeout(socket, &frame, self.options.timeout).await {
+                    Ok(()) => {
+                        recv_udp_with_timeout(socket, &mut self.udp_read_buf, self.options.timeout)
+                            .await
+                            .map(|()| self.udp_read_buf.clone())
+                    }
+                    Err(err) => Err(err),
+                }
             }
             None => Err(HostLinkError::connection("transport was not opened")),
         };
-        if close_tcp {
-            self.close();
+
+        match exchange_result {
+            Ok(raw) => {
+                self.exchange_incomplete = false;
+                self.fire_trace(HostLinkTraceDirection::Receive, &raw);
+                ensure_success(decoder(&raw)?)
+            }
+            Err(err) => {
+                self.close();
+                Err(err)
+            }
         }
-        result
     }
 
     fn fire_trace(&self, direction: HostLinkTraceDirection, data: &[u8]) {
@@ -1073,13 +1083,12 @@ async fn recv_tcp_line(
             .await
             .map_err(|_| HostLinkError::connection("read timed out"))??;
         if read == 0 {
-            if *rx_count > 0 {
-                let line = rx_buf[*rx_start..*rx_start + *rx_count].to_vec();
-                *rx_start = 0;
-                *rx_count = 0;
-                return Ok(line);
-            }
-            return Err(HostLinkError::connection("Connection closed by PLC"));
+            let message = if *rx_count > 0 {
+                "Connection closed by PLC before the response terminator"
+            } else {
+                "Connection closed by PLC"
+            };
+            return Err(HostLinkError::connection(message));
         }
 
         if *rx_start + *rx_count + read > rx_buf.len() {
