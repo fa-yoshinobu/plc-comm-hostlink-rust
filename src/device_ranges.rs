@@ -473,12 +473,12 @@ fn create_range_table() -> RangeTable {
                 "VM",
                 KvDeviceRangeNotation::Decimal,
                 &[
-                    "VM0-9499",
-                    "VM0-9499",
-                    "VM0-49999",
-                    "VM0-49999",
-                    "VM0-49999",
-                    "VM0-49999",
+                    "VM0-9999",
+                    "VM0-9999",
+                    "VM0-59999",
+                    "VM0-59999",
+                    "VM0-59999",
+                    "VM0-59999",
                     "VM0-63999",
                     "VM0-63999",
                     "VM0-589823",
@@ -500,14 +500,14 @@ fn create_range_table() -> RangeTable {
                 KvDeviceRangeNotation::Decimal,
                 &[
                     "Z1-12", "Z1-12", "Z1-12", "Z1-12", "Z1-12", "Z1-12", "Z1-12", "Z1-12",
-                    "Z1-12", "Z1-12", "Z1-10", "Z1-10",
+                    "Z1-23", "Z1-23", "Z1-10", "Z1-10",
                 ],
             ),
             row(
                 "CTH",
                 KvDeviceRangeNotation::Decimal,
                 &[
-                    "CTH0-3", "CTH0-3", "CTH0-1", "CTH0-3", "CTH0-1", "CTH0-3", "-", "-", "-", "-",
+                    "CTH0-3", "CTH0-3", "CTH0-1", "CTH0-1", "CTH0-1", "CTH0-1", "-", "-", "-", "-",
                     "-", "-",
                 ],
             ),
@@ -1003,7 +1003,7 @@ mod tests {
         let nano = device_range_catalog_for_plc_profile("keyence:kv-nano").unwrap();
         assert_eq!(
             nano.entry("VM").unwrap().address_range.as_deref(),
-            Some("VM0-9499")
+            Some("VM0-9999")
         );
         assert_eq!(
             nano.entry("VB").unwrap().address_range.as_deref(),
