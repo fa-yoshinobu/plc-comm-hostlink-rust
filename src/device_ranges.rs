@@ -798,7 +798,7 @@ mod tests {
         KvDeviceRangeCategory, KvDeviceRangeNotation, device_range_catalog_for_plc_profile,
         parse_segment_bounds,
     };
-    use crate::plc_profiles::{available_plc_profiles, display_name};
+    use crate::plc_profiles::{available_plc_profiles, display_name, plc_profile_descriptors};
 
     #[test]
     fn available_profiles_include_xym_profiles() {
@@ -858,6 +858,30 @@ mod tests {
                     assert_eq!(entry.address_range.as_deref(), Some(expected_range));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn profile_descriptors_match_canonical_profile_metadata() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/kv_device_ranges.json")).unwrap();
+        let profiles = fixture["profiles"].as_object().unwrap();
+        let descriptors = plc_profile_descriptors();
+
+        assert_eq!(descriptors.len(), profiles.len());
+        for descriptor in descriptors {
+            let expected = &profiles[descriptor.canonical_name];
+            assert_eq!(
+                descriptor.display_name,
+                expected["display_name"].as_str().unwrap()
+            );
+            assert!(descriptor.connectable);
+            assert_eq!(
+                descriptor.base_profile,
+                expected
+                    .get("base_profile")
+                    .and_then(serde_json::Value::as_str)
+            );
         }
     }
 
