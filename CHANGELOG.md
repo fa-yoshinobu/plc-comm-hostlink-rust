@@ -1,4 +1,4 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to this project will be documented in this file.
 
@@ -17,13 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.0.1] - 2026-07-10
+## [3.0.0] - 2026-07-10
 
 ### Changed
-- Release: Bumped crate metadata to `2.0.1`.
+- Release: Bumped crate metadata to `3.0.0`.
 
 ### BREAKING
-- Library: Moved PLC profile lookup APIs out of `device_ranges` and re-exported them from the crate root; `device_ranges` now owns only the device-range catalog entry point.
+- Library: Breaking: Moved PLC profile lookup APIs out of `device_ranges` and re-exported them from the crate root; `device_ranges` now owns only the device-range catalog entry point.
+- Migration: Import the profile functions from the crate root, for example `use plc_comm_kv_hostlink::{available_plc_profiles, display_name, normalize_plc_profile, profile_from_name};`.
 
 ### Changed
 - Docs: Updated Getting Started to use the queued `open_and_connect` entry point consistently with the recommended application API.
