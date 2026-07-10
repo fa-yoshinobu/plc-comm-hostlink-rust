@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Release: Bumped crate metadata to `3.0.0`.
+- Packaging: Included LICENSE in the published crate.
+- Docs: Replaced relative README links with absolute URLs so they resolve on package registry pages.
 
 ### BREAKING
 - Library: Breaking: Moved PLC profile lookup APIs out of `device_ranges` and re-exported them from the crate root; `device_ranges` now owns only the device-range catalog entry point.

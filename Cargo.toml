@@ -13,6 +13,7 @@ keywords = ["plc-comm", "hostlink", "plc", "keyence", "kv"]
 categories = ["network-programming", "asynchronous"]
 include = [
     "Cargo.toml",
+    "LICENSE",
     "CHANGELOG.md",
     "README.md",
     "docs/**",

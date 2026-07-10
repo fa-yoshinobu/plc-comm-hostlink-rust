@@ -1,6 +1,6 @@
 [![CI](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/plc-comm-kv-hostlink.svg)](https://crates.io/crates/plc-comm-kv-hostlink)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/blob/main/LICENSE)
 
 # KEYENCE KV Host Link for Rust
 
@@ -12,7 +12,7 @@ This library is part of the plc-comm family. See the [package matrix](https://fa
 
 ## Supported PLC profiles
 
-The maintained profile table is in [PLC profiles](docs/PROFILES.md). Choose one exact canonical PLC profile from that table.
+The maintained profile table is in [PLC profiles](https://fa-yoshinobu.github.io/plc-comm-docs-site/hostlink/rust/PROFILES/). Choose one exact canonical PLC profile from that table.
 
 ## Supported device types
 
@@ -54,20 +54,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | Page | Use it for |
 | --- | --- |
 | [Full documentation site](https://fa-yoshinobu.github.io/plc-comm-docs-site/) | Unified docs for all PLC communication libraries. |
-| [Getting started](docs/GETTING_STARTED.md) | Install the crate, connect to your PLC, and run your first read/write. |
-| [Usage guide](docs/USAGE_GUIDE.md) | Use the high-level API and common Host Link workflows. |
-| [API reference](docs/API_REFERENCE.md) | Find public client methods, helpers, profile APIs, and error types. |
-| [PLC profiles](docs/PROFILES.md) | Choose the canonical KEYENCE KV profile for the target PLC. |
+| [Getting started](https://fa-yoshinobu.github.io/plc-comm-docs-site/hostlink/rust/GETTING_STARTED/) | Install the crate, connect to your PLC, and run your first read/write. |
+| [Usage guide](https://fa-yoshinobu.github.io/plc-comm-docs-site/hostlink/rust/USAGE_GUIDE/) | Use the high-level API and common Host Link workflows. |
+| [API reference](https://fa-yoshinobu.github.io/plc-comm-docs-site/hostlink/rust/API_REFERENCE/) | Find public client methods, helpers, profile APIs, and error types. |
+| [PLC profiles](https://fa-yoshinobu.github.io/plc-comm-docs-site/hostlink/rust/PROFILES/) | Choose the canonical KEYENCE KV profile for the target PLC. |
 | [KV Host Link Device Ranges](https://fa-yoshinobu.github.io/plc-comm-docs-site/plc-setup/kv/device-ranges/) | Check shared device families, address notation, and range tables. |
 | [KV Host Link Troubleshooting & Codes](https://fa-yoshinobu.github.io/plc-comm-docs-site/plc-setup/kv/troubleshooting-codes/) | Troubleshoot common port, profile, address, write-permission, and PLC error-code symptoms. |
-| [Gotchas](docs/GOTCHAS.md) | Check whether this library has any current library-specific caveats. |
-| [Examples](examples/README.md) | Run maintained Rust examples. |
+| [Gotchas](https://fa-yoshinobu.github.io/plc-comm-docs-site/hostlink/rust/GOTCHAS/) | Check whether this library has any current library-specific caveats. |
+| [Examples](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/blob/main/examples/README.md) | Run maintained Rust examples. |
 
 ## License and registry
 
 | Item | Value |
 | --- | --- |
-| License | [MIT](LICENSE) |
+| License | [MIT](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/blob/main/LICENSE) |
 | Registry | [crates.io](https://crates.io/crates/plc-comm-kv-hostlink) |
 | Package | `plc-comm-kv-hostlink` |
 
