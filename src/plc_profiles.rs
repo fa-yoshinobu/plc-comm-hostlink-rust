@@ -7,6 +7,14 @@ pub struct KvHostLinkPlcProfile {
     pub(crate) source_label: &'static str,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KvHostLinkPlcProfileDescriptor {
+    pub canonical_name: &'static str,
+    pub display_name: &'static str,
+    pub connectable: bool,
+    pub base_profile: Option<&'static str>,
+}
+
 const PROFILES: &[KvHostLinkPlcProfile] = &[
     KvHostLinkPlcProfile {
         name: "keyence:kv-nano",
@@ -70,11 +78,90 @@ const PROFILES: &[KvHostLinkPlcProfile] = &[
     },
 ];
 
+const PROFILE_DESCRIPTORS: &[KvHostLinkPlcProfileDescriptor] = &[
+    KvHostLinkPlcProfileDescriptor {
+        canonical_name: "keyence:kv-nano",
+        display_name: "KEYENCE KV-NANO",
+        connectable: true,
+        base_profile: None,
+    },
+    KvHostLinkPlcProfileDescriptor {
+        canonical_name: "keyence:kv-nano-xym",
+        display_name: "KEYENCE KV-NANO (XYM)",
+        connectable: true,
+        base_profile: Some("keyence:kv-nano"),
+    },
+    KvHostLinkPlcProfileDescriptor {
+        canonical_name: "keyence:kv-3000",
+        display_name: "KEYENCE KV-3000",
+        connectable: true,
+        base_profile: None,
+    },
+    KvHostLinkPlcProfileDescriptor {
+        canonical_name: "keyence:kv-3000-xym",
+        display_name: "KEYENCE KV-3000 (XYM)",
+        connectable: true,
+        base_profile: Some("keyence:kv-3000"),
+    },
+    KvHostLinkPlcProfileDescriptor {
+        canonical_name: "keyence:kv-5000",
+        display_name: "KEYENCE KV-5000",
+        connectable: true,
+        base_profile: None,
+    },
+    KvHostLinkPlcProfileDescriptor {
+        canonical_name: "keyence:kv-5000-xym",
+        display_name: "KEYENCE KV-5000 (XYM)",
+        connectable: true,
+        base_profile: Some("keyence:kv-5000"),
+    },
+    KvHostLinkPlcProfileDescriptor {
+        canonical_name: "keyence:kv-7000",
+        display_name: "KEYENCE KV-7000",
+        connectable: true,
+        base_profile: None,
+    },
+    KvHostLinkPlcProfileDescriptor {
+        canonical_name: "keyence:kv-7000-xym",
+        display_name: "KEYENCE KV-7000 (XYM)",
+        connectable: true,
+        base_profile: Some("keyence:kv-7000"),
+    },
+    KvHostLinkPlcProfileDescriptor {
+        canonical_name: "keyence:kv-8000",
+        display_name: "KEYENCE KV-8000",
+        connectable: true,
+        base_profile: None,
+    },
+    KvHostLinkPlcProfileDescriptor {
+        canonical_name: "keyence:kv-8000-xym",
+        display_name: "KEYENCE KV-8000 (XYM)",
+        connectable: true,
+        base_profile: Some("keyence:kv-8000"),
+    },
+    KvHostLinkPlcProfileDescriptor {
+        canonical_name: "keyence:kv-x500",
+        display_name: "KEYENCE KV-X500",
+        connectable: true,
+        base_profile: None,
+    },
+    KvHostLinkPlcProfileDescriptor {
+        canonical_name: "keyence:kv-x500-xym",
+        display_name: "KEYENCE KV-X500 (XYM)",
+        connectable: true,
+        base_profile: Some("keyence:kv-x500"),
+    },
+];
+
 pub fn available_plc_profiles() -> Vec<String> {
     PROFILES
         .iter()
         .map(|profile| profile.name.to_owned())
         .collect()
+}
+
+pub fn plc_profile_descriptors() -> &'static [KvHostLinkPlcProfileDescriptor] {
+    PROFILE_DESCRIPTORS
 }
 
 pub fn display_name(plc_profile: impl AsRef<str>) -> Result<&'static str, HostLinkError> {

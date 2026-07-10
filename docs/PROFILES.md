@@ -1,8 +1,9 @@
 # PLC profiles
 
 PLC profiles select one embedded device-range catalog. They are useful when you build UI validation, address pickers, or model-specific checks before talking to the PLC. The library accepts only the exact canonical strings in this table.
-Use crate-root `display_name(plc_profile)` for UI labels. Store the canonical profile
-string, not the display name.
+Use crate-root `plc_profile_descriptors()` to enumerate canonical names, display labels,
+connection eligibility, and XYM base profiles for a UI. Store the canonical profile string,
+not the display name.
 
 ## Device families and ranges
 

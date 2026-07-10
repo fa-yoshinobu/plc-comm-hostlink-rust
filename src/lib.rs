@@ -39,6 +39,6 @@ pub use model::{
     HostLinkTransportMode, KvModelInfo, KvPlcMode, TraceHook,
 };
 pub use plc_profiles::{
-    KvHostLinkPlcProfile, available_plc_profiles, display_name, normalize_plc_profile,
-    profile_from_name,
+    KvHostLinkPlcProfile, KvHostLinkPlcProfileDescriptor, available_plc_profiles, display_name,
+    normalize_plc_profile, plc_profile_descriptors, profile_from_name,
 };
