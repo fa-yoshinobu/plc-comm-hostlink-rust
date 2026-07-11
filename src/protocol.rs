@@ -1,15 +1,26 @@
 use crate::error::HostLinkError;
 use encoding_rs::SHIFT_JIS;
 
-pub fn build_frame(body: &str, append_lf: bool) -> Vec<u8> {
-    let body = body.trim().as_bytes();
-    let mut result = Vec::with_capacity(body.len() + 1 + usize::from(append_lf));
+pub fn build_frame(body: &str) -> Result<Vec<u8>, HostLinkError> {
+    if !body.is_ascii() {
+        return Err(HostLinkError::protocol(
+            "Host Link command body must contain ASCII bytes only",
+        ));
+    }
+    if body
+        .as_bytes()
+        .iter()
+        .any(|byte| matches!(byte, b'\r' | b'\n'))
+    {
+        return Err(HostLinkError::protocol(
+            "Host Link command body must not contain CR or LF",
+        ));
+    }
+    let body = body.as_bytes();
+    let mut result = Vec::with_capacity(body.len() + 1);
     result.extend_from_slice(body);
     result.push(b'\r');
-    if append_lf {
-        result.push(b'\n');
-    }
-    result
+    Ok(result)
 }
 
 fn trim_response(raw: &[u8]) -> Result<&[u8], HostLinkError> {
@@ -29,6 +40,14 @@ fn trim_response(raw: &[u8]) -> Result<&[u8], HostLinkError> {
     Ok(&raw[..len])
 }
 
+pub(crate) fn raw_response_body(raw: &[u8]) -> Vec<u8> {
+    let mut len = raw.len();
+    while len > 0 && matches!(raw[len - 1], b'\r' | b'\n') {
+        len -= 1;
+    }
+    raw[..len].to_vec()
+}
+
 pub fn decode_response(raw: &[u8]) -> Result<String, HostLinkError> {
     let payload = trim_response(raw)?;
     let text = std::str::from_utf8(payload)
@@ -41,6 +60,11 @@ pub fn decode_response(raw: &[u8]) -> Result<String, HostLinkError> {
 
 pub fn decode_comment_response(raw: &[u8]) -> Result<String, HostLinkError> {
     let payload = trim_response(raw)?;
+    let mut end = payload.len();
+    while end > 0 && payload[end - 1] == b' ' {
+        end -= 1;
+    }
+    let payload = &payload[..end];
     if let Ok(text) = std::str::from_utf8(payload) {
         return Ok(text.to_owned());
     }
@@ -72,4 +96,20 @@ pub fn split_data_tokens(response_text: &str) -> Vec<String> {
         .filter(|token| !token.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_frame;
+
+    #[test]
+    fn frame_builder_preserves_body_and_appends_one_cr() {
+        assert_eq!(build_frame(" RD DM0.U ").unwrap(), b" RD DM0.U \r");
+    }
+
+    #[test]
+    fn frame_builder_rejects_injected_terminators_and_non_ascii() {
+        assert!(build_frame("RD DM0.U\rWR DM0.U 1").is_err());
+        assert!(build_frame("RDC 日本語").is_err());
+    }
 }

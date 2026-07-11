@@ -1,7 +1,7 @@
 //! Read-only polling loop with automatic reconnect.
 //!
 //! Usage:
-//!   cargo run --features cli --example polling_reconnect -- <host> <port> <plc-profile> [device] [dtype] [interval-seconds]
+//!   cargo run --features cli --example polling_reconnect -- <host> <port> <transport> <plc-profile> [device] [dtype] [interval-seconds]
 
 use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions, HostLinkError};
 use std::error::Error;
@@ -41,6 +41,7 @@ struct PollConfig {
     host: String,
     port: u16,
     plc_profile: String,
+    transport: plc_comm_kv_hostlink::HostLinkTransportMode,
     device: String,
     dtype: String,
     interval: Duration,
@@ -62,13 +63,16 @@ async fn poll_step(
         log_state(
             "reconnecting",
             &format!(
-                "tcp {}:{} profile={}",
-                config.host, config.port, config.plc_profile
+                "{:?} {}:{} profile={}",
+                config.transport, config.host, config.port, config.plc_profile
             ),
         );
-        let mut options =
-            HostLinkConnectionOptions::new(config.host.clone(), config.plc_profile.as_str())?;
-        options.port = config.port;
+        let options = HostLinkConnectionOptions::new(
+            config.host.clone(),
+            config.port,
+            config.transport,
+            config.plc_profile.as_str(),
+        )?;
         match HostLinkClient::connect(options).await {
             Ok(new_client) => {
                 state.client = Some(new_client);
@@ -127,20 +131,25 @@ async fn poll_step(
 
 fn parse_args() -> Result<PollConfig, Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();
-    if args.len() < 4 {
-        return Err("Usage: cargo run --features cli --example polling_reconnect -- <host> <port> <plc-profile> [device] [dtype] [interval-seconds]".into());
+    if args.len() < 5 {
+        return Err("Usage: cargo run --features cli --example polling_reconnect -- <host> <port> <transport> <plc-profile> [device] [dtype] [interval-seconds]".into());
     }
     let interval = args
-        .get(6)
+        .get(7)
         .map(|value| value.parse::<f64>())
         .transpose()?
         .unwrap_or(1.0);
     Ok(PollConfig {
         host: args[1].clone(),
         port: args[2].parse()?,
-        plc_profile: args[3].clone(),
-        device: args.get(4).cloned().unwrap_or_else(|| "DM100".to_string()),
-        dtype: args.get(5).cloned().unwrap_or_else(|| "U".to_string()),
+        transport: match args[3].as_str() {
+            "tcp" => plc_comm_kv_hostlink::HostLinkTransportMode::Tcp,
+            "udp" => plc_comm_kv_hostlink::HostLinkTransportMode::Udp,
+            _ => return Err("transport must be exactly 'tcp' or 'udp'".into()),
+        },
+        plc_profile: args[4].clone(),
+        device: args.get(5).cloned().unwrap_or_else(|| "DM100".to_string()),
+        dtype: args.get(6).cloned().unwrap_or_else(|| "U".to_string()),
         interval: Duration::from_secs_f64(interval),
     })
 }

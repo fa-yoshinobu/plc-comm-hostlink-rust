@@ -13,7 +13,7 @@
     {"id": "wre_dm100_vals",                 "command": "write_consecutive_legacy",  "device": "DM100.U", "values": [7, 8],                "expected_body": "WRE DM100.U 2 7 8"},
     {"id": "wss_t0_vals",                    "command": "write_set_value_consecutive","device": "T0.D",  "values": [1000, 2000],            "expected_body": "WSS T0.D 2 1000 2000"},
     {"id": "switch_bank_3",                  "command": "switch_bank",               "bank_no": 3,                                           "expected_body": "BE 3"},
-    {"id": "urd_unit1_100_2",                "command": "read_expansion_unit_buffer", "unit_no": 1, "buffer_address": 100, "count": 2, "response": "123 456", "expected_body": "URD 01 100.U 2"},
+    {"id": "urd_unit1_100_2",                "command": "read_expansion_unit_buffer", "unit_no": 1, "buffer_address": 100, "count": 2, "data_format": ".U", "response": "123 456", "expected_body": "URD 01 100.U 2"},
     {"id": "uwr_unit2_200_s_vals",           "command": "write_expansion_unit_buffer","unit_no": 2, "buffer_address": 200, "values": [7, 8], "data_format": ".S", "expected_body": "UWR 02 200.S 2 7 8"},
     {"id": "rdc_dm20",                       "command": "read_comments",             "device": "DM20",                  "response": "COMMENT", "expected_body": "RDC DM20"},
     {"id": "rd_dm100",         "command": "read",                  "device": "DM100.U", "expected_body": "RD DM100.U"},

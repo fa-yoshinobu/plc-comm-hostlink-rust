@@ -1,6 +1,6 @@
 use crate::address::{
-    KvDeviceAddress, offset_device, parse_device, parse_named_address_parts,
-    require_explicit_format, validate_device_count, validate_device_span,
+    KvDeviceAddress, parse_device, parse_named_address_parts, require_explicit_format,
+    validate_device_count, validate_device_span,
 };
 use crate::client::{HostLinkClient, HostLinkPayloadValue};
 use crate::error::HostLinkError;
@@ -43,13 +43,27 @@ impl From<HostLinkValue> for u16 {
 }
 
 impl HostLinkPayloadValue for HostLinkValue {
+    fn as_integer(&self) -> Option<i128> {
+        match self {
+            HostLinkValue::U16(value) => Some(i128::from(*value)),
+            HostLinkValue::I16(value) => Some(i128::from(*value)),
+            HostLinkValue::U32(value) => Some(i128::from(*value)),
+            HostLinkValue::I32(value) => Some(i128::from(*value)),
+            _ => None,
+        }
+    }
+
     fn format_for_suffix(&self, data_format: &str) -> String {
         let mut value = String::new();
-        self.append_to_payload(data_format, &mut value);
+        let _ = self.append_to_payload(data_format, &mut value);
         value
     }
 
-    fn append_to_payload(&self, data_format: &str, output: &mut String) {
+    fn append_to_payload(
+        &self,
+        data_format: &str,
+        output: &mut String,
+    ) -> Result<(), HostLinkError> {
         match self {
             HostLinkValue::U16(value) => value.append_to_payload(data_format, output),
             HostLinkValue::I16(value) => value.append_to_payload(data_format, output),
@@ -62,12 +76,8 @@ impl HostLinkPayloadValue for HostLinkValue {
     }
 }
 
-pub async fn read_comments(
-    client: &HostLinkClient,
-    device: &str,
-    strip_padding: bool,
-) -> Result<String, HostLinkError> {
-    client.read_comments(device, strip_padding).await
+pub async fn read_comments(client: &HostLinkClient, device: &str) -> Result<String, HostLinkError> {
+    client.read_comments(device).await
 }
 
 pub async fn read_typed(
@@ -251,12 +261,34 @@ pub async fn write_typed<T: HostLinkPayloadValue>(
                 .format_for_suffix("")
                 .parse::<f32>()
                 .map_err(|_| HostLinkError::protocol("Invalid float32 input"))?;
+            if !single.is_finite() {
+                return Err(HostLinkError::protocol("Float32 input must be finite"));
+            }
             let bits = single.to_bits();
             let words = [(bits & 0xFFFF) as u16, (bits >> 16) as u16];
             client.write_consecutive(device, &words, Some("U")).await
         }
-        "BIT" => client.write(device, value, None).await,
-        "S" | "D" | "L" | "U" | "H" => client.write(device, value, Some(dtype.as_str())).await,
+        "BIT" => {
+            let token = value.format_for_suffix("").trim().to_ascii_uppercase();
+            let parsed = match token.as_str() {
+                "1" | "ON" | "TRUE" => true,
+                "0" | "OFF" | "FALSE" => false,
+                _ => return Err(HostLinkError::protocol("Invalid BIT write value")),
+            };
+            client.write(device, parsed, None).await
+        }
+        "H" => {
+            let parsed = if let Some(integer) = value.as_integer() {
+                u16::try_from(integer)
+                    .map_err(|_| HostLinkError::protocol("Invalid hexadecimal 16-bit input"))?
+            } else {
+                let token = value.format_for_suffix("");
+                u16::from_str_radix(token.trim(), 16)
+                    .map_err(|_| HostLinkError::protocol("Invalid hexadecimal 16-bit input"))?
+            };
+            client.write(device, parsed, Some("H")).await
+        }
+        "S" | "D" | "L" | "U" => client.write(device, value, Some(dtype.as_str())).await,
         other => Err(HostLinkError::protocol(format!(
             "Unsupported logical data type '{other}'."
         ))),
@@ -300,15 +332,6 @@ fn last_response_token(response_text: &str) -> Result<&str, HostLinkError> {
 fn is_timer_counter_composite_device(device: &str) -> Result<bool, HostLinkError> {
     let address = parse_device(device)?;
     Ok(matches!(address.device_type.as_str(), "T" | "C"))
-}
-
-fn parse_first_token<T: FromStr>(
-    response_text: &str,
-    invalid_message: &'static str,
-) -> Result<T, HostLinkError> {
-    first_response_token(response_text)?
-        .parse::<T>()
-        .map_err(|_| HostLinkError::protocol(invalid_message))
 }
 
 fn parse_last_token<T: FromStr>(
@@ -359,7 +382,9 @@ async fn read_single_response(
     data_format: Option<&str>,
 ) -> Result<String, HostLinkError> {
     let address = prepare_read_address(device, data_format, 1)?;
-    client.send_raw(&format!("RD {}", address.to_text()?)).await
+    client
+        .send_decoded(&format!("RD {}", address.to_text()?))
+        .await
 }
 
 async fn read_single_parsed<T: FromStr>(
@@ -369,7 +394,18 @@ async fn read_single_parsed<T: FromStr>(
     invalid_message: &'static str,
 ) -> Result<T, HostLinkError> {
     let response = read_single_response(client, device, data_format).await?;
-    parse_first_token(&response, invalid_message)
+    let values = parse_all_tokens::<T>(&response, invalid_message)?;
+    if values.len() != 1 {
+        client.close().await?;
+        return Err(HostLinkError::protocol(format!(
+            "Response returned {} values; expected 1",
+            values.len()
+        )));
+    }
+    values
+        .into_iter()
+        .next()
+        .ok_or_else(|| HostLinkError::protocol("Missing response token"))
 }
 
 async fn read_single_bool(
@@ -378,7 +414,15 @@ async fn read_single_bool(
     data_format: Option<&str>,
 ) -> Result<bool, HostLinkError> {
     let response = read_single_response(client, device, data_format).await?;
-    parse_bool_token(first_response_token(&response)?)
+    let tokens = response_tokens(&response).collect::<Vec<_>>();
+    if tokens.len() != 1 {
+        client.close().await?;
+        return Err(HostLinkError::protocol(format!(
+            "Response returned {} values; expected 1",
+            tokens.len()
+        )));
+    }
+    parse_bool_token(tokens[0])
 }
 
 async fn read_consecutive_parsed<T: FromStr>(
@@ -390,9 +434,17 @@ async fn read_consecutive_parsed<T: FromStr>(
 ) -> Result<Vec<T>, HostLinkError> {
     let address = prepare_read_address(device, data_format, count)?;
     let response = client
-        .send_raw(&format!("RDS {} {}", address.to_text()?, count))
+        .send_decoded(&format!("RDS {} {}", address.to_text()?, count))
         .await?;
-    parse_all_tokens(&response, invalid_message)
+    let values = parse_all_tokens(&response, invalid_message)?;
+    if values.len() != count {
+        client.close().await?;
+        return Err(HostLinkError::protocol(format!(
+            "Response returned {} values; expected {count}",
+            values.len()
+        )));
+    }
+    Ok(values)
 }
 
 pub async fn write_bit_in_word(
@@ -401,23 +453,7 @@ pub async fn write_bit_in_word(
     bit_index: u8,
     value: bool,
 ) -> Result<(), HostLinkError> {
-    if bit_index > 15 {
-        return Err(HostLinkError::protocol("bitIndex must be 0-15."));
-    }
-
-    let mut current = read_single_parsed::<u16>(
-        client,
-        device,
-        Some("U"),
-        "Invalid unsigned 16-bit response",
-    )
-    .await?;
-    if value {
-        current |= 1 << bit_index;
-    } else {
-        current &= !(1 << bit_index);
-    }
-    client.write(device, current, Some("U")).await
+    client.write_bit_in_word(device, bit_index, value).await
 }
 
 pub async fn read_named<S: AsRef<str>>(
@@ -462,7 +498,7 @@ pub(crate) async fn read_named_sequential(
         } else if dtype == "COMMENT" {
             result.insert(
                 address.clone(),
-                HostLinkValue::Text(read_comments(client, &base_address, true).await?),
+                HostLinkValue::Text(read_comments(client, &base_address).await?),
             );
         } else {
             result.insert(
@@ -579,14 +615,14 @@ pub async fn read_dwords_single_request(
     if count == 0 {
         return Err(HostLinkError::protocol("count must be 1 or greater."));
     }
-    let words = read_words_single_request(client, device, count * 2).await?;
-    let mut result = Vec::with_capacity(count);
-    for index in 0..count {
-        let lo = words[index * 2] as u32;
-        let hi = words[(index * 2) + 1] as u32;
-        result.push(lo | (hi << 16));
-    }
-    Ok(result)
+    read_consecutive_parsed::<u32>(
+        client,
+        device,
+        count,
+        Some("D"),
+        "Invalid unsigned 32-bit response",
+    )
+    .await
 }
 
 pub async fn write_words_single_request(
@@ -608,126 +644,5 @@ pub async fn write_dwords_single_request(
     if values.is_empty() {
         return Err(HostLinkError::protocol("values must not be empty"));
     }
-    let mut words = Vec::with_capacity(values.len() * 2);
-    for value in values {
-        words.push((value & 0xFFFF) as u16);
-        words.push((value >> 16) as u16);
-    }
-    write_words_single_request(client, device, &words).await
-}
-
-pub async fn read_words_chunked(
-    client: &HostLinkClient,
-    device: &str,
-    count: usize,
-    max_words_per_request: usize,
-) -> Result<Vec<u16>, HostLinkError> {
-    validate_chunk_arguments(count, max_words_per_request, "count", "maxWordsPerRequest")?;
-    let mut start = parse_device(device)?;
-    start.suffix.clear();
-    let mut result = vec![0u16; count];
-    let mut offset = 0usize;
-    while offset < count {
-        let chunk_count = max_words_per_request.min(count - offset);
-        let chunk_start = offset_device(&start, offset as u32)?;
-        let chunk = read_words_single_request(client, &chunk_start, chunk_count).await?;
-        result[offset..offset + chunk_count].copy_from_slice(&chunk);
-        offset += chunk_count;
-    }
-    Ok(result)
-}
-
-pub async fn read_dwords_chunked(
-    client: &HostLinkClient,
-    device: &str,
-    count: usize,
-    max_dwords_per_request: usize,
-) -> Result<Vec<u32>, HostLinkError> {
-    validate_chunk_arguments(
-        count,
-        max_dwords_per_request,
-        "count",
-        "maxDwordsPerRequest",
-    )?;
-    let mut start = parse_device(device)?;
-    start.suffix.clear();
-    let mut result = vec![0u32; count];
-    let mut offset = 0usize;
-    while offset < count {
-        let chunk_count = max_dwords_per_request.min(count - offset);
-        let chunk_start = offset_device(&start, (offset * 2) as u32)?;
-        let chunk = read_dwords_single_request(client, &chunk_start, chunk_count).await?;
-        result[offset..offset + chunk_count].copy_from_slice(&chunk);
-        offset += chunk_count;
-    }
-    Ok(result)
-}
-
-pub async fn write_words_chunked(
-    client: &HostLinkClient,
-    device: &str,
-    values: &[u16],
-    max_words_per_request: usize,
-) -> Result<(), HostLinkError> {
-    if values.is_empty() {
-        return Err(HostLinkError::protocol("values must not be empty"));
-    }
-    validate_chunk_size(max_words_per_request, "maxWordsPerRequest")?;
-    let mut start = parse_device(device)?;
-    start.suffix.clear();
-    let mut offset = 0usize;
-    while offset < values.len() {
-        let chunk_count = max_words_per_request.min(values.len() - offset);
-        let chunk_start = offset_device(&start, offset as u32)?;
-        write_words_single_request(client, &chunk_start, &values[offset..offset + chunk_count])
-            .await?;
-        offset += chunk_count;
-    }
-    Ok(())
-}
-
-pub async fn write_dwords_chunked(
-    client: &HostLinkClient,
-    device: &str,
-    values: &[u32],
-    max_dwords_per_request: usize,
-) -> Result<(), HostLinkError> {
-    if values.is_empty() {
-        return Err(HostLinkError::protocol("values must not be empty"));
-    }
-    validate_chunk_size(max_dwords_per_request, "maxDwordsPerRequest")?;
-    let mut start = parse_device(device)?;
-    start.suffix.clear();
-    let mut offset = 0usize;
-    while offset < values.len() {
-        let chunk_count = max_dwords_per_request.min(values.len() - offset);
-        let chunk_start = offset_device(&start, (offset * 2) as u32)?;
-        write_dwords_single_request(client, &chunk_start, &values[offset..offset + chunk_count])
-            .await?;
-        offset += chunk_count;
-    }
-    Ok(())
-}
-
-fn validate_chunk_arguments(
-    count: usize,
-    max_per_request: usize,
-    count_name: &str,
-    chunk_name: &str,
-) -> Result<(), HostLinkError> {
-    if count == 0 {
-        return Err(HostLinkError::protocol(format!(
-            "{count_name} must be 1 or greater."
-        )));
-    }
-    validate_chunk_size(max_per_request, chunk_name)
-}
-
-fn validate_chunk_size(max_per_request: usize, param_name: &str) -> Result<(), HostLinkError> {
-    if max_per_request == 0 {
-        return Err(HostLinkError::protocol(format!(
-            "{param_name} must be 1 or greater."
-        )));
-    }
-    Ok(())
+    client.write_consecutive(device, values, Some("D")).await
 }

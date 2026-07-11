@@ -1,7 +1,7 @@
 use futures_util::{StreamExt, pin_mut};
 use plc_comm_kv_hostlink::{
-    HostLinkConnectionOptions, HostLinkTransportMode, HostLinkValue, KvDeviceRangeCatalog,
-    KvDeviceRangeEntry, KvDeviceRangeSegment, KvPlcMode, TimerCounterValue,
+    HostLinkConnectionOptions, HostLinkMonitorWord, HostLinkTransportMode, HostLinkValue,
+    KvDeviceRangeCatalog, KvDeviceRangeEntry, KvDeviceRangeSegment, KvPlcMode, TimerCounterValue,
     device_range_catalog_for_plc_profile, open_and_connect, read_comments, read_counter,
     read_dwords, read_named, read_timer, read_timer_counter, read_words, write_bit_in_word,
 };
@@ -36,7 +36,7 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
     let mut dtype = String::new();
     let mut count = 1usize;
     let mut interval_ms = 10u64;
-    let mut transport = String::from("tcp");
+    let mut transport = String::new();
     let mut plc_profile = String::new();
     let mut extra = Vec::new();
     let mut index = 5usize;
@@ -75,10 +75,19 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             "message": "PLC profile is required. Pass --plc-profile with a canonical value such as keyence:kv-8000."
         }));
     }
+    if transport.trim().is_empty() {
+        return Ok(json!({
+            "status": "error",
+            "message": "Transport is required. Pass --transport tcp or --transport udp."
+        }));
+    }
 
-    let mut options = HostLinkConnectionOptions::new(host.clone(), &plc_profile)?;
-    options.port = port;
-    options.transport = parse_transport(&transport)?;
+    let options = HostLinkConnectionOptions::new(
+        host.clone(),
+        port,
+        parse_transport(&transport)?,
+        &plc_profile,
+    )?;
     let client = open_and_connect(options).await?;
 
     let result = match command.as_str() {
@@ -99,7 +108,10 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             json!({"status": "success"})
         }
         "set-time-now" => {
-            client.inner_client().set_time(None).await?;
+            client
+                .inner_client()
+                .set_time(plc_comm_kv_hostlink::HostLinkClock::now_local()?)
+                .await?;
             json!({"status": "success"})
         }
         "change-mode" => {
@@ -221,9 +233,10 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             if devices.is_empty() {
                 json!({"status": "error", "message": "register-monitor-words requires at least one address"})
             } else {
+                let entries = parse_monitor_words(&devices)?;
                 client
                     .inner_client()
-                    .register_monitor_words(&devices)
+                    .register_monitor_words(&entries)
                     .await?;
                 json!({"status": "success"})
             }
@@ -237,9 +250,10 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             if devices.is_empty() {
                 json!({"status": "error", "message": "monitor-words requires at least one address"})
             } else {
+                let entries = parse_monitor_words(&devices)?;
                 client
                     .inner_client()
-                    .register_monitor_words(&devices)
+                    .register_monitor_words(&entries)
                     .await?;
                 let values = client.inner_client().read_monitor_words().await?;
                 json!({"status": "success", "values": values})
@@ -317,7 +331,7 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             json!({"status": "success", "value": normalize_timer_counter(&value)})
         }
         "read-comments" => {
-            let value = read_comments(client.inner_client(), &address, true).await?;
+            let value = read_comments(client.inner_client(), &address).await?;
             json!({"status": "success", "value": value})
         }
         "write-bit-in-word" => {
@@ -382,40 +396,28 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             }
         }
         "read-expansion" => {
-            if extra.len() < 2 {
-                json!({"status": "error", "message": "read-expansion requires buffer address and count"})
+            if extra.len() < 2 || dtype.trim().is_empty() {
+                json!({"status": "error", "message": "read-expansion requires buffer address, count, and dtype"})
             } else {
-                let format = if dtype.trim().is_empty() {
-                    None
-                } else {
-                    Some(dtype.as_str())
-                };
                 let values = client
                     .inner_client()
                     .read_expansion_unit_buffer(
                         address.parse()?,
                         extra[0].parse()?,
                         extra[1].parse()?,
-                        format,
+                        &dtype,
                     )
                     .await?;
                 json!({"status": "success", "values": values})
             }
         }
         "write-expansion" => {
-            if extra.len() < 2 {
-                json!({"status": "error", "message": "write-expansion requires buffer address and one or more values"})
+            if extra.len() < 2 || dtype.trim().is_empty() {
+                json!({"status": "error", "message": "write-expansion requires buffer address, values, and dtype"})
             } else {
-                let format = if dtype.trim().is_empty() {
-                    None
-                } else {
-                    Some(dtype.as_str())
-                };
                 let values = extra[1..]
                     .iter()
-                    .map(|item| {
-                        parse_typed_value(if dtype.trim().is_empty() { "U" } else { &dtype }, item)
-                    })
+                    .map(|item| parse_typed_value(&dtype, item))
                     .collect::<Result<Vec<_>, _>>()?;
                 client
                     .inner_client()
@@ -423,7 +425,7 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                         address.parse()?,
                         extra[0].parse()?,
                         &values,
-                        format,
+                        &dtype,
                     )
                     .await?;
                 json!({"status": "success"})
@@ -506,10 +508,28 @@ fn parse_mode(raw: &str) -> Result<KvPlcMode, Box<dyn std::error::Error>> {
 
 fn parse_transport(raw: &str) -> Result<HostLinkTransportMode, Box<dyn std::error::Error>> {
     match raw.trim().to_ascii_uppercase().as_str() {
-        "" | "TCP" => Ok(HostLinkTransportMode::Tcp),
+        "TCP" => Ok(HostLinkTransportMode::Tcp),
         "UDP" => Ok(HostLinkTransportMode::Udp),
         _ => Err(format!("Unsupported transport: {raw}").into()),
     }
+}
+
+fn parse_monitor_words(
+    devices: &[String],
+) -> Result<Vec<HostLinkMonitorWord>, Box<dyn std::error::Error>> {
+    devices
+        .iter()
+        .map(|entry| {
+            let (device, data_format) = entry.split_once(':').ok_or(
+                "monitor word entries require DEVICE:FORMAT, for example DM0:U or MR0:BIT",
+            )?;
+            if data_format.eq_ignore_ascii_case("BIT") {
+                Ok(HostLinkMonitorWord::direct_bit(device))
+            } else {
+                Ok(HostLinkMonitorWord::numeric(device, data_format))
+            }
+        })
+        .collect()
 }
 
 fn normalize_value(value: &HostLinkValue) -> Value {

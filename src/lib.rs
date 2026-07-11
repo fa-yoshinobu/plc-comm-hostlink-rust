@@ -26,17 +26,16 @@ pub use device_ranges::{
     KvDeviceRangeCatalog, KvDeviceRangeCategory, KvDeviceRangeEntry, KvDeviceRangeNotation,
     KvDeviceRangeSegment, device_range_catalog_for_plc_profile,
 };
-pub use error::{HostLinkError, decode_error_code};
+pub use error::HostLinkError;
 pub use helpers::{
     HostLinkValue, NamedSnapshot, TimerCounterValue, poll, read_comments, read_counter,
-    read_dwords, read_dwords_chunked, read_dwords_single_request, read_named, read_timer,
-    read_timer_counter, read_typed, read_words, read_words_chunked, read_words_single_request,
-    write_bit_in_word, write_dwords_chunked, write_dwords_single_request, write_typed,
-    write_words_chunked, write_words_single_request,
+    read_dwords, read_dwords_single_request, read_named, read_timer, read_timer_counter,
+    read_typed, read_words, read_words_single_request, write_bit_in_word,
+    write_dwords_single_request, write_typed, write_words_single_request,
 };
 pub use model::{
-    HostLinkClock, HostLinkConnectionOptions, HostLinkTraceDirection, HostLinkTraceFrame,
-    HostLinkTransportMode, KvModelInfo, KvPlcMode, TraceHook,
+    HostLinkClock, HostLinkConnectionOptions, HostLinkMonitorWord, HostLinkTransportMode,
+    KvModelInfo, KvPlcMode,
 };
 pub use plc_profiles::{
     KvHostLinkPlcProfile, KvHostLinkPlcProfileDescriptor, available_plc_profiles, display_name,

@@ -8,14 +8,16 @@ use crate::address::{
 use crate::error::HostLinkError;
 use crate::helpers;
 use crate::model::{
-    HostLinkClock, HostLinkConnectionOptions, HostLinkTraceDirection, HostLinkTraceFrame,
-    HostLinkTransportMode, KvModelInfo, KvPlcMode, TraceHook,
+    HostLinkClock, HostLinkConnectionOptions, HostLinkMonitorWord, HostLinkTraceDirection,
+    HostLinkTraceFrame, HostLinkTransportMode, KvModelInfo, KvPlcMode, TraceHook,
 };
 use crate::protocol::{
-    build_frame, decode_comment_response, decode_response, ensure_success, split_data_tokens,
+    build_frame, decode_comment_response, decode_response, ensure_success, raw_response_body,
+    split_data_tokens,
 };
 use std::fmt::Write as _;
 use std::future::Future;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -23,33 +25,104 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
-const UDP_RECEIVE_BUFFER_SIZE: usize = 65_535;
 const MAX_TCP_LINE_SIZE: usize = 65_536;
+const UDP_RECEIVE_BUFFER_SIZE: usize = MAX_TCP_LINE_SIZE + 2;
 
 pub trait HostLinkPayloadValue {
     fn format_for_suffix(&self, data_format: &str) -> String;
 
-    fn append_to_payload(&self, data_format: &str, output: &mut String) {
-        output.push_str(&self.format_for_suffix(data_format));
+    fn as_integer(&self) -> Option<i128> {
+        None
     }
+
+    fn append_to_payload(
+        &self,
+        data_format: &str,
+        output: &mut String,
+    ) -> Result<(), HostLinkError> {
+        output.push_str(&self.format_for_suffix(data_format));
+        Ok(())
+    }
+}
+
+fn validate_integer_payload(value: i128, data_format: &str) -> Result<(), HostLinkError> {
+    let valid = match data_format {
+        "" => matches!(value, 0 | 1),
+        ".U" | ".H" => (0..=u16::MAX as i128).contains(&value),
+        ".S" => (i16::MIN as i128..=i16::MAX as i128).contains(&value),
+        ".D" => (0..=u32::MAX as i128).contains(&value),
+        ".L" => (i32::MIN as i128..=i32::MAX as i128).contains(&value),
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(HostLinkError::protocol(format!(
+            "value {value} is outside the range for data format '{data_format}'"
+        )))
+    }
+}
+
+fn validate_response_tokens(tokens: &[String], data_format: &str) -> Result<(), HostLinkError> {
+    if tokens.is_empty() {
+        return Err(HostLinkError::protocol("Missing response token"));
+    }
+    for token in tokens {
+        let valid = match data_format {
+            "" => matches!(
+                token.trim().to_ascii_uppercase().as_str(),
+                "0" | "1" | "ON" | "OFF"
+            ),
+            ".U" => token.parse::<u16>().is_ok(),
+            ".S" => token.parse::<i16>().is_ok(),
+            ".D" => token.parse::<u32>().is_ok(),
+            ".L" => token.parse::<i32>().is_ok(),
+            ".H" => {
+                (1..=4).contains(&token.len()) && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+            }
+            _ => false,
+        };
+        if !valid {
+            return Err(HostLinkError::protocol(format!(
+                "Invalid response token '{token}' for data format '{data_format}'"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_response_token_count(tokens: &[String], expected: usize) -> Result<(), HostLinkError> {
+    if tokens.len() != expected {
+        return Err(HostLinkError::protocol(format!(
+            "Response returned {} values; expected {expected}",
+            tokens.len()
+        )));
+    }
+    Ok(())
 }
 
 macro_rules! impl_payload_for_ints {
     ($($ty:ty),* $(,)?) => {
         $(
             impl HostLinkPayloadValue for $ty {
+                fn as_integer(&self) -> Option<i128> {
+                    Some(*self as i128)
+                }
+
                 fn format_for_suffix(&self, data_format: &str) -> String {
                     let mut value = String::new();
-                    self.append_to_payload(data_format, &mut value);
+                    let _ = self.append_to_payload(data_format, &mut value);
                     value
                 }
 
-                fn append_to_payload(&self, data_format: &str, output: &mut String) {
+                fn append_to_payload(&self, data_format: &str, output: &mut String) -> Result<(), HostLinkError> {
+                    validate_integer_payload(*self as i128, data_format)?;
                     if data_format == ".H" {
-                        let _ = write!(output, "{:X}", ((*self as i128) & 0xFFFF));
+                        let _ = write!(output, "{:X}", *self as i128);
                     } else {
                         let _ = write!(output, "{}", self);
                     }
+                    Ok(())
                 }
             }
         )*
@@ -60,37 +133,53 @@ impl_payload_for_ints!(u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
 
 impl HostLinkPayloadValue for f32 {
     fn format_for_suffix(&self, _data_format: &str) -> String {
-        let mut value = String::new();
-        self.append_to_payload("", &mut value);
-        value
+        self.to_string()
     }
 
-    fn append_to_payload(&self, _data_format: &str, output: &mut String) {
-        let _ = write!(output, "{}", self);
+    fn append_to_payload(
+        &self,
+        _data_format: &str,
+        _output: &mut String,
+    ) -> Result<(), HostLinkError> {
+        Err(HostLinkError::protocol(
+            "floating-point values require the high-level F helper",
+        ))
     }
 }
 
 impl HostLinkPayloadValue for f64 {
     fn format_for_suffix(&self, _data_format: &str) -> String {
-        let mut value = String::new();
-        self.append_to_payload("", &mut value);
-        value
+        self.to_string()
     }
 
-    fn append_to_payload(&self, _data_format: &str, output: &mut String) {
-        let _ = write!(output, "{}", self);
+    fn append_to_payload(
+        &self,
+        _data_format: &str,
+        _output: &mut String,
+    ) -> Result<(), HostLinkError> {
+        Err(HostLinkError::protocol(
+            "floating-point values require the high-level F helper",
+        ))
     }
 }
 
 impl HostLinkPayloadValue for bool {
     fn format_for_suffix(&self, _data_format: &str) -> String {
-        let mut value = String::new();
-        self.append_to_payload("", &mut value);
-        value
+        if *self { "1" } else { "0" }.to_owned()
     }
 
-    fn append_to_payload(&self, _data_format: &str, output: &mut String) {
+    fn append_to_payload(
+        &self,
+        data_format: &str,
+        output: &mut String,
+    ) -> Result<(), HostLinkError> {
+        if !data_format.is_empty() {
+            return Err(HostLinkError::protocol(
+                "bool is valid only for direct-bit access",
+            ));
+        }
         output.push(if *self { '1' } else { '0' });
+        Ok(())
     }
 }
 
@@ -99,8 +188,14 @@ impl HostLinkPayloadValue for String {
         self.trim().to_owned()
     }
 
-    fn append_to_payload(&self, _data_format: &str, output: &mut String) {
-        output.push_str(self.trim());
+    fn append_to_payload(
+        &self,
+        _data_format: &str,
+        _output: &mut String,
+    ) -> Result<(), HostLinkError> {
+        Err(HostLinkError::protocol(
+            "text values are not accepted by low-level numeric writes",
+        ))
     }
 }
 
@@ -109,18 +204,32 @@ impl HostLinkPayloadValue for &str {
         self.trim().to_owned()
     }
 
-    fn append_to_payload(&self, _data_format: &str, output: &mut String) {
-        output.push_str(self.trim());
+    fn append_to_payload(
+        &self,
+        _data_format: &str,
+        _output: &mut String,
+    ) -> Result<(), HostLinkError> {
+        Err(HostLinkError::protocol(
+            "text values are not accepted by low-level numeric writes",
+        ))
     }
 }
 
 impl<T: HostLinkPayloadValue + ?Sized> HostLinkPayloadValue for &T {
+    fn as_integer(&self) -> Option<i128> {
+        (*self).as_integer()
+    }
+
     fn format_for_suffix(&self, data_format: &str) -> String {
         (*self).format_for_suffix(data_format)
     }
 
-    fn append_to_payload(&self, data_format: &str, output: &mut String) {
-        (*self).append_to_payload(data_format, output);
+    fn append_to_payload(
+        &self,
+        data_format: &str,
+        output: &mut String,
+    ) -> Result<(), HostLinkError> {
+        (*self).append_to_payload(data_format, output)
     }
 }
 
@@ -202,24 +311,26 @@ impl HostLinkClient {
         self.inner.lock().await.options.plc_profile.clone()
     }
 
-    pub async fn set_timeout(&self, timeout: Duration) {
+    pub async fn set_timeout(&self, timeout: Duration) -> Result<(), HostLinkError> {
+        if timeout.is_zero() {
+            return Err(HostLinkError::protocol("timeout must be greater than zero"));
+        }
         self.inner.lock().await.options.timeout = timeout;
+        Ok(())
     }
 
-    pub async fn append_lf_on_send(&self) -> bool {
-        self.inner.lock().await.options.append_lf_on_send
-    }
-
-    pub async fn set_append_lf_on_send(&self, value: bool) {
-        self.inner.lock().await.options.append_lf_on_send = value;
-    }
-
-    pub async fn set_trace_hook(&self, trace_hook: Option<TraceHook>) {
+    #[allow(dead_code)] // Maintainer-only diagnostics; intentionally absent from the public API.
+    pub(crate) async fn set_trace_hook(&self, trace_hook: Option<TraceHook>) {
         self.inner.lock().await.trace_hook = trace_hook;
     }
 
-    pub async fn send_raw(&self, body: &str) -> Result<String, HostLinkError> {
-        self.inner.lock().await.send_raw(body).await
+    #[doc(hidden)]
+    pub async fn send_raw(&self, body: &str) -> Result<Vec<u8>, HostLinkError> {
+        self.inner.lock().await.send_raw_bytes(body).await
+    }
+
+    pub(crate) async fn send_decoded(&self, body: &str) -> Result<String, HostLinkError> {
+        self.inner.lock().await.send_decoded(body).await
     }
 
     pub async fn change_mode(&self, mode: KvPlcMode) -> Result<(), HostLinkError> {
@@ -231,11 +342,11 @@ impl HostLinkClient {
     }
 
     pub async fn check_error_no(&self) -> Result<String, HostLinkError> {
-        self.send_raw("?E").await
+        self.send_decoded("?E").await
     }
 
     pub async fn query_model(&self) -> Result<KvModelInfo, HostLinkError> {
-        let code = self.send_raw("?K").await?;
+        let code = self.send_decoded("?K").await?;
         Ok(KvModelInfo {
             model: model_name_for_code(&code).to_owned(),
             code,
@@ -243,28 +354,15 @@ impl HostLinkClient {
     }
 
     pub async fn confirm_operating_mode(&self) -> Result<KvPlcMode, HostLinkError> {
-        match self.send_raw("?M").await?.parse::<u8>() {
+        match self.send_decoded("?M").await?.parse::<u8>() {
             Ok(0) => Ok(KvPlcMode::Program),
             Ok(1) => Ok(KvPlcMode::Run),
             _ => Err(HostLinkError::protocol("Unsupported PLC mode response")),
         }
     }
 
-    pub async fn set_time(&self, value: Option<HostLinkClock>) -> Result<(), HostLinkError> {
-        let value = value.unwrap_or_else(HostLinkClock::now_local);
-        if value.month == 0
-            || value.month > 12
-            || value.day == 0
-            || value.day > 31
-            || value.hour > 23
-            || value.minute > 59
-            || value.second > 59
-            || value.week > 6
-        {
-            return Err(HostLinkError::protocol(
-                "Invalid time fields for WRT command",
-            ));
-        }
+    pub async fn set_time(&self, value: HostLinkClock) -> Result<(), HostLinkError> {
+        value.validate()?;
 
         self.expect_ok(&format!(
             "WRT {:02} {:02} {:02} {:02} {:02} {:02} {}",
@@ -295,9 +393,17 @@ impl HostLinkClient {
         let mut address = parse_device(device)?;
         let suffix = require_explicit_format(&address, data_format)?;
         validate_device_span(&address.device_type, address.number, &suffix, 1)?;
-        address.suffix = suffix;
-        let response = self.send_raw(&format!("RD {}", address.to_text()?)).await?;
-        Ok(split_data_tokens(&response))
+        address.suffix = suffix.clone();
+        let response = self
+            .send_decoded(&format!("RD {}", address.to_text()?))
+            .await?;
+        let tokens = split_data_tokens(&response);
+        if let Err(error) = validate_response_token_count(&tokens, 1) {
+            self.close().await?;
+            return Err(error);
+        }
+        validate_response_tokens(&tokens, &suffix)?;
+        Ok(tokens)
     }
 
     pub async fn read_consecutive(
@@ -310,11 +416,17 @@ impl HostLinkClient {
         let suffix = require_explicit_format(&address, data_format)?;
         validate_device_count(&address.device_type, &suffix, count)?;
         validate_device_span(&address.device_type, address.number, &suffix, count)?;
-        address.suffix = suffix;
+        address.suffix = suffix.clone();
         let response = self
-            .send_raw(&format!("RDS {} {}", address.to_text()?, count))
+            .send_decoded(&format!("RDS {} {}", address.to_text()?, count))
             .await?;
-        Ok(split_data_tokens(&response))
+        let tokens = split_data_tokens(&response);
+        if let Err(error) = validate_response_token_count(&tokens, count) {
+            self.close().await?;
+            return Err(error);
+        }
+        validate_response_tokens(&tokens, &suffix)?;
+        Ok(tokens)
     }
 
     pub async fn write<T: HostLinkPayloadValue>(
@@ -331,7 +443,7 @@ impl HostLinkClient {
         let mut command = String::from("WR ");
         command.push_str(&address.to_text()?);
         command.push(' ');
-        value.append_to_payload(&suffix, &mut command);
+        value.append_to_payload(&suffix, &mut command)?;
         self.expect_ok(&command).await
     }
 
@@ -351,7 +463,7 @@ impl HostLinkClient {
         validate_device_count(&address.device_type, &suffix, values.len())?;
         validate_device_span(&address.device_type, address.number, &suffix, values.len())?;
         address.suffix = suffix.clone();
-        let payload = build_joined_payload(values, &suffix);
+        let payload = build_joined_payload(values, &suffix)?;
         self.expect_ok(&format!(
             "WRS {} {} {}",
             address.to_text()?,
@@ -385,9 +497,9 @@ impl HostLinkClient {
         self.expect_ok(&command).await
     }
 
-    pub async fn register_monitor_words<S: AsRef<str>>(
+    pub async fn register_monitor_words(
         &self,
-        devices: &[S],
+        devices: &[HostLinkMonitorWord],
     ) -> Result<(), HostLinkError> {
         if devices.is_empty() {
             return Err(HostLinkError::protocol("At least one device is required"));
@@ -400,11 +512,18 @@ impl HostLinkClient {
 
         let mut command = String::from("MWS");
         for device in devices {
-            let mut address = parse_device(device.as_ref())?;
+            let (device, data_format) = match device {
+                HostLinkMonitorWord::Numeric {
+                    device,
+                    data_format,
+                } => (device.as_str(), Some(data_format.as_str())),
+                HostLinkMonitorWord::DirectBit { device } => (device.as_str(), None),
+            };
+            let mut address = parse_device(device)?;
             validate_device_type("MWS", &address.device_type, mws_device_types())?;
-            let suffix = require_explicit_format(&address, None)?;
+            let suffix = require_explicit_format(&address, data_format)?;
             validate_device_span(&address.device_type, address.number, &suffix, 1)?;
-            address.suffix = suffix;
+            address.suffix = suffix.clone();
             command.push(' ');
             command.push_str(&address.to_text()?);
         }
@@ -412,12 +531,14 @@ impl HostLinkClient {
     }
 
     pub async fn read_monitor_bits(&self) -> Result<Vec<String>, HostLinkError> {
-        let response = self.send_raw("MBR").await?;
-        Ok(split_data_tokens(&response))
+        let response = self.send_decoded("MBR").await?;
+        let tokens = split_data_tokens(&response);
+        validate_response_tokens(&tokens, "")?;
+        Ok(tokens)
     }
 
     pub async fn read_monitor_words(&self) -> Result<Vec<String>, HostLinkError> {
-        let response = self.send_raw("MWR").await?;
+        let response = self.send_decoded("MWR").await?;
         Ok(split_data_tokens(&response))
     }
 
@@ -469,11 +590,17 @@ impl HostLinkClient {
         let suffix = require_explicit_format(&address, data_format)?;
         validate_device_count(&address.device_type, &suffix, count)?;
         validate_device_span(&address.device_type, address.number, &suffix, count)?;
-        address.suffix = suffix;
+        address.suffix = suffix.clone();
         let response = self
-            .send_raw(&format!("RDE {} {}", address.to_text()?, count))
+            .send_decoded(&format!("RDE {} {}", address.to_text()?, count))
             .await?;
-        Ok(split_data_tokens(&response))
+        let tokens = split_data_tokens(&response);
+        if let Err(error) = validate_response_token_count(&tokens, count) {
+            self.close().await?;
+            return Err(error);
+        }
+        validate_response_tokens(&tokens, &suffix)?;
+        Ok(tokens)
     }
 
     pub async fn write_consecutive_legacy<T: HostLinkPayloadValue>(
@@ -491,7 +618,7 @@ impl HostLinkClient {
         validate_device_count(&address.device_type, &suffix, values.len())?;
         validate_device_span(&address.device_type, address.number, &suffix, values.len())?;
         address.suffix = suffix.clone();
-        let payload = build_joined_payload(values, &suffix);
+        let payload = build_joined_payload(values, &suffix)?;
         self.expect_ok(&format!(
             "WRE {} {} {}",
             address.to_text()?,
@@ -516,7 +643,7 @@ impl HostLinkClient {
         let mut command = String::from("WS ");
         command.push_str(&address.to_text()?);
         command.push(' ');
-        value.append_to_payload(&suffix, &mut command);
+        value.append_to_payload(&suffix, &mut command)?;
         self.expect_ok(&command).await
     }
 
@@ -535,7 +662,7 @@ impl HostLinkClient {
         validate_device_count(&address.device_type, &suffix, values.len())?;
         validate_device_span(&address.device_type, address.number, &suffix, values.len())?;
         address.suffix = suffix.clone();
-        let payload = build_joined_payload(values, &suffix);
+        let payload = build_joined_payload(values, &suffix)?;
         self.expect_ok(&format!(
             "WSS {} {} {}",
             address.to_text()?,
@@ -557,7 +684,7 @@ impl HostLinkClient {
         unit_no: u8,
         address: u32,
         count: usize,
-        data_format: Option<&str>,
+        data_format: &str,
     ) -> Result<Vec<String>, HostLinkError> {
         if unit_no > 48 {
             return Err(HostLinkError::protocol("unitNo must be 0-48."));
@@ -565,17 +692,22 @@ impl HostLinkClient {
         if address > 59_999 {
             return Err(HostLinkError::protocol("address must be 0-59999."));
         }
-        let suffix = if let Some(data_format) = data_format {
-            crate::address::normalize_suffix(data_format)?
-        } else {
-            ".U".to_owned()
-        };
+        if data_format.trim().is_empty() {
+            return Err(HostLinkError::protocol("data format must not be empty"));
+        }
+        let suffix = crate::address::normalize_suffix(data_format)?;
         validate_expansion_buffer_count(&suffix, count)?;
         validate_expansion_buffer_span(address, &suffix, count)?;
         let response = self
-            .send_raw(&format!("URD {unit_no:02} {address}{suffix} {count}"))
+            .send_decoded(&format!("URD {unit_no:02} {address}{suffix} {count}"))
             .await?;
-        Ok(split_data_tokens(&response))
+        let tokens = split_data_tokens(&response);
+        if let Err(error) = validate_response_token_count(&tokens, count) {
+            self.close().await?;
+            return Err(error);
+        }
+        validate_response_tokens(&tokens, &suffix)?;
+        Ok(tokens)
     }
 
     pub async fn write_expansion_unit_buffer<T: HostLinkPayloadValue>(
@@ -583,7 +715,7 @@ impl HostLinkClient {
         unit_no: u8,
         address: u32,
         values: &[T],
-        data_format: Option<&str>,
+        data_format: &str,
     ) -> Result<(), HostLinkError> {
         if values.is_empty() {
             return Err(HostLinkError::protocol("values must not be empty"));
@@ -594,14 +726,13 @@ impl HostLinkClient {
         if address > 59_999 {
             return Err(HostLinkError::protocol("address must be 0-59999."));
         }
-        let suffix = if let Some(data_format) = data_format {
-            crate::address::normalize_suffix(data_format)?
-        } else {
-            ".U".to_owned()
-        };
+        if data_format.trim().is_empty() {
+            return Err(HostLinkError::protocol("data format must not be empty"));
+        }
+        let suffix = crate::address::normalize_suffix(data_format)?;
         validate_expansion_buffer_count(&suffix, values.len())?;
         validate_expansion_buffer_span(address, &suffix, values.len())?;
-        let payload = build_joined_payload(values, &suffix);
+        let payload = build_joined_payload(values, &suffix)?;
         self.expect_ok(&format!(
             "UWR {unit_no:02} {address}{suffix} {} {payload}",
             values.len()
@@ -609,11 +740,7 @@ impl HostLinkClient {
         .await
     }
 
-    pub async fn read_comments(
-        &self,
-        device: &str,
-        strip_padding: bool,
-    ) -> Result<String, HostLinkError> {
+    pub async fn read_comments(&self, device: &str) -> Result<String, HostLinkError> {
         let mut address = parse_device(device)?;
         validate_device_type("RDC", &address.device_type, rdc_device_types())?;
         address.suffix.clear();
@@ -621,16 +748,12 @@ impl HostLinkClient {
             .inner
             .lock()
             .await
-            .send_raw_decoded(
+            .send_decoded_with(
                 &format!("RDC {}", address.to_text()?),
                 decode_comment_response,
             )
             .await?;
-        if strip_padding {
-            Ok(response.trim_end_matches(' ').to_owned())
-        } else {
-            Ok(response)
-        }
+        Ok(response)
     }
 
     pub async fn read_typed(
@@ -684,11 +807,45 @@ impl HostLinkClient {
         bit_index: u8,
         value: bool,
     ) -> Result<(), HostLinkError> {
-        helpers::write_bit_in_word(self, device, bit_index, value).await
+        if bit_index > 15 {
+            return Err(HostLinkError::protocol("bitIndex must be 0-15."));
+        }
+        let mut address = parse_device(device)?;
+        let suffix = require_explicit_format(&address, Some("U"))?;
+        validate_device_span(&address.device_type, address.number, &suffix, 1)?;
+        address.suffix = suffix.clone();
+        let address_text = address.to_text()?;
+
+        let mut inner = self.inner.lock().await;
+        let response = inner.send_decoded(&format!("RD {address_text}")).await?;
+        let tokens = split_data_tokens(&response);
+        if tokens.len() != 1 {
+            return Err(HostLinkError::protocol(
+                "Bit-in-word read did not return exactly one unsigned word",
+            ));
+        }
+        let current = tokens[0]
+            .parse::<u16>()
+            .map_err(|_| HostLinkError::protocol("Invalid unsigned 16-bit response"))?;
+        let next = if value {
+            current | (1 << bit_index)
+        } else {
+            current & !(1 << bit_index)
+        };
+        let response = inner
+            .send_decoded(&format!("WR {address_text} {next}"))
+            .await?;
+        if response == "OK" {
+            Ok(())
+        } else {
+            Err(HostLinkError::protocol(format!(
+                "Expected 'OK' but received '{response}' for bit-in-word write"
+            )))
+        }
     }
 
     async fn expect_ok(&self, body: &str) -> Result<(), HostLinkError> {
-        let response = self.send_raw(body).await?;
+        let response = self.send_decoded(body).await?;
         if response == "OK" {
             Ok(())
         } else {
@@ -706,6 +863,12 @@ impl ClientInner {
         }
         if self.transport.is_some() {
             return Ok(());
+        }
+        if self.options.timeout.is_zero() {
+            return Err(HostLinkError::protocol("timeout must be greater than zero"));
+        }
+        if self.options.host.trim().is_empty() || self.options.port == 0 {
+            return Err(HostLinkError::protocol("invalid Host Link endpoint"));
         }
 
         let transport = match self.options.transport {
@@ -744,16 +907,35 @@ impl ClientInner {
         self.exchange_incomplete = false;
     }
 
-    async fn send_raw(&mut self, body: &str) -> Result<String, HostLinkError> {
-        self.send_raw_decoded(body, decode_response).await
+    async fn send_raw_bytes(&mut self, body: &str) -> Result<Vec<u8>, HostLinkError> {
+        let raw = self.exchange_raw(body).await?;
+        Ok(raw_response_body(&raw))
     }
 
-    async fn send_raw_decoded<F>(&mut self, body: &str, decoder: F) -> Result<String, HostLinkError>
+    async fn send_decoded(&mut self, body: &str) -> Result<String, HostLinkError> {
+        self.send_decoded_with(body, decode_response).await
+    }
+
+    async fn send_decoded_with<F>(
+        &mut self,
+        body: &str,
+        decoder: F,
+    ) -> Result<String, HostLinkError>
     where
         F: Fn(&[u8]) -> Result<String, HostLinkError>,
     {
-        self.open().await?;
-        let frame = build_frame(body, self.options.append_lf_on_send);
+        let raw = self.exchange_raw(body).await?;
+        ensure_success(decoder(&raw)?)
+    }
+
+    async fn exchange_raw(&mut self, body: &str) -> Result<Vec<u8>, HostLinkError> {
+        let frame = build_frame(body)?;
+        if self.exchange_incomplete {
+            self.close();
+        }
+        if self.transport.is_none() {
+            return Err(HostLinkError::NotConnected);
+        }
         self.fire_trace(HostLinkTraceDirection::Send, &frame);
 
         self.exchange_incomplete = true;
@@ -789,9 +971,15 @@ impl ClientInner {
 
         match exchange_result {
             Ok(raw) => {
+                if raw_response_body(&raw).len() > MAX_TCP_LINE_SIZE {
+                    self.close();
+                    return Err(HostLinkError::protocol(format!(
+                        "Response line exceeds {MAX_TCP_LINE_SIZE} bytes"
+                    )));
+                }
                 self.exchange_incomplete = false;
                 self.fire_trace(HostLinkTraceDirection::Receive, &raw);
-                ensure_success(decoder(&raw)?)
+                Ok(raw)
             }
             Err(err) => {
                 self.close();
@@ -802,11 +990,12 @@ impl ClientInner {
 
     fn fire_trace(&self, direction: HostLinkTraceDirection, data: &[u8]) {
         if let Some(trace_hook) = &self.trace_hook {
-            trace_hook(HostLinkTraceFrame {
+            let frame = HostLinkTraceFrame {
                 direction,
                 data: data.to_vec(),
                 timestamp: SystemTime::now(),
-            });
+            };
+            let _ = catch_unwind(AssertUnwindSafe(|| trace_hook(frame)));
         }
     }
 }
@@ -858,7 +1047,8 @@ impl QueuedHostLinkClient {
         self.client.close().await
     }
 
-    pub async fn set_trace_hook(&self, trace_hook: Option<TraceHook>) {
+    #[allow(dead_code)] // Maintainer-only diagnostics; intentionally absent from the public API.
+    pub(crate) async fn set_trace_hook(&self, trace_hook: Option<TraceHook>) {
         let _guard = self.gate.lock().await;
         self.client.set_trace_hook(trace_hook).await;
     }
@@ -872,18 +1062,15 @@ impl QueuedHostLinkClient {
         operation(&self.client).await
     }
 
-    pub async fn send_raw(&self, body: &str) -> Result<String, HostLinkError> {
+    #[doc(hidden)]
+    pub async fn send_raw(&self, body: &str) -> Result<Vec<u8>, HostLinkError> {
         let _guard = self.gate.lock().await;
         self.client.send_raw(body).await
     }
 
-    pub async fn read_comments(
-        &self,
-        device: &str,
-        strip_padding: bool,
-    ) -> Result<String, HostLinkError> {
+    pub async fn read_comments(&self, device: &str) -> Result<String, HostLinkError> {
         let _guard = self.gate.lock().await;
-        self.client.read_comments(device, strip_padding).await
+        self.client.read_comments(device).await
     }
 
     pub async fn read_typed(
@@ -1020,15 +1207,18 @@ async fn recv_udp_with_timeout(
     Ok(())
 }
 
-fn build_joined_payload<T: HostLinkPayloadValue>(values: &[T], suffix: &str) -> String {
+fn build_joined_payload<T: HostLinkPayloadValue>(
+    values: &[T],
+    suffix: &str,
+) -> Result<String, HostLinkError> {
     let mut payload = String::new();
     for (index, value) in values.iter().enumerate() {
         if index > 0 {
             payload.push(' ');
         }
-        value.append_to_payload(suffix, &mut payload);
+        value.append_to_payload(suffix, &mut payload)?;
     }
-    payload
+    Ok(payload)
 }
 
 async fn recv_tcp_line(
@@ -1065,11 +1255,11 @@ async fn recv_tcp_line(
                     "Response line exceeds {MAX_TCP_LINE_SIZE} bytes"
                 )));
             }
-            let line = rx_buf[*rx_start..*rx_start + found_idx].to_vec();
             let mut skip = found_idx;
             while skip < *rx_count && matches!(rx_buf[*rx_start + skip], b'\r' | b'\n') {
                 skip += 1;
             }
+            let line = rx_buf[*rx_start..*rx_start + skip].to_vec();
             *rx_start += skip;
             *rx_count -= skip;
             if *rx_start > rx_buf.len() / 2 {
@@ -1118,5 +1308,52 @@ async fn recv_tcp_line(
                 )));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex as StdMutex;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn maintainer_trace_observes_one_send_and_receive_in_order() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 3];
+            stream.read_exact(&mut request).await.unwrap();
+            assert_eq!(&request, b"M0\r");
+            stream.write_all(b"OK\r").await.unwrap();
+        });
+
+        let options = HostLinkConnectionOptions::new(
+            "127.0.0.1",
+            port,
+            HostLinkTransportMode::Tcp,
+            "keyence:kv-8000",
+        )
+        .unwrap();
+        let client = HostLinkClient::connect(options).await.unwrap();
+        let frames = Arc::new(StdMutex::new(Vec::new()));
+        let observed = Arc::clone(&frames);
+        client
+            .set_trace_hook(Some(Arc::new(move |frame| {
+                observed.lock().unwrap().push(frame);
+            })))
+            .await;
+
+        client.change_mode(KvPlcMode::Program).await.unwrap();
+        server.await.unwrap();
+
+        let frames = frames.lock().unwrap();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].direction, HostLinkTraceDirection::Send);
+        assert_eq!(frames[0].data, b"M0\r");
+        assert_eq!(frames[1].direction, HostLinkTraceDirection::Receive);
+        assert_eq!(frames[1].data, b"OK\r");
     }
 }

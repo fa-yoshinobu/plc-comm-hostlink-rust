@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::time::SystemTime;
-use time::{Month, OffsetDateTime};
+use time::{Date, Month, OffsetDateTime, Time};
 
 use crate::error::HostLinkError;
 use crate::plc_profiles;
@@ -11,6 +11,27 @@ pub enum HostLinkTransportMode {
     Udp,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostLinkMonitorWord {
+    Numeric { device: String, data_format: String },
+    DirectBit { device: String },
+}
+
+impl HostLinkMonitorWord {
+    pub fn numeric(device: impl Into<String>, data_format: impl Into<String>) -> Self {
+        Self::Numeric {
+            device: device.into(),
+            data_format: data_format.into(),
+        }
+    }
+
+    pub fn direct_bit(device: impl Into<String>) -> Self {
+        Self::DirectBit {
+            device: device.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KvPlcMode {
     Program = 0,
@@ -18,12 +39,14 @@ pub enum KvPlcMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum HostLinkTraceDirection {
     Send,
     Receive,
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct HostLinkTraceFrame {
     pub direction: HostLinkTraceDirection,
     pub data: Vec<u8>,
@@ -50,9 +73,28 @@ pub struct HostLinkClock {
 }
 
 impl HostLinkClock {
-    pub fn now_local() -> Self {
-        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-        Self::from_offset_datetime(now)
+    pub fn now_local() -> Result<Self, HostLinkError> {
+        let now = OffsetDateTime::now_local()
+            .map_err(|_| HostLinkError::protocol("Local time offset is unavailable"))?;
+        Ok(Self::from_offset_datetime(now))
+    }
+
+    pub fn validate(&self) -> Result<(), HostLinkError> {
+        let month = Month::try_from(self.month)
+            .map_err(|_| HostLinkError::protocol("Invalid month for WRT command"))?;
+        let date = Date::from_calendar_date(2000 + i32::from(self.year), month, self.day).map_err(
+            |_| HostLinkError::protocol("WRT command contains a nonexistent calendar date"),
+        )?;
+        Time::from_hms(self.hour, self.minute, self.second)
+            .map_err(|_| HostLinkError::protocol("Invalid time fields for WRT command"))?;
+        let expected_week = date.weekday().number_days_from_sunday();
+        if self.week != expected_week {
+            return Err(HostLinkError::protocol(format!(
+                "WRT weekday {} does not match the calendar date (expected {expected_week})",
+                self.week
+            )));
+        }
+        Ok(())
     }
 
     fn from_offset_datetime(now: OffsetDateTime) -> Self {
@@ -105,12 +147,52 @@ mod tests {
     }
 
     #[test]
+    fn clock_validation_rejects_nonexistent_dates_and_weekday_mismatch() {
+        let nonexistent = HostLinkClock {
+            year: 26,
+            month: 2,
+            day: 30,
+            hour: 12,
+            minute: 0,
+            second: 0,
+            week: 1,
+        };
+        assert!(nonexistent.validate().is_err());
+
+        let mut wrong_weekday = clock_for(2026, Month::March, 16);
+        wrong_weekday.week = 2;
+        assert!(wrong_weekday.validate().is_err());
+    }
+
+    #[test]
     fn connection_options_require_canonical_plc_profile() {
-        let options = HostLinkConnectionOptions::new("127.0.0.1", "keyence:kv-8000").unwrap();
+        let options = HostLinkConnectionOptions::new(
+            "127.0.0.1",
+            8501,
+            super::HostLinkTransportMode::Tcp,
+            "keyence:kv-8000",
+        )
+        .unwrap();
 
         assert_eq!(options.plc_profile(), "keyence:kv-8000");
-        assert!(HostLinkConnectionOptions::new("127.0.0.1", "").is_err());
-        assert!(HostLinkConnectionOptions::new("127.0.0.1", "KV-8000").is_err());
+        assert!(
+            HostLinkConnectionOptions::new(
+                "127.0.0.1",
+                8501,
+                super::HostLinkTransportMode::Tcp,
+                ""
+            )
+            .is_err()
+        );
+        assert!(
+            HostLinkConnectionOptions::new(
+                "127.0.0.1",
+                8501,
+                super::HostLinkTransportMode::Tcp,
+                "KV-8000"
+            )
+            .is_err()
+        );
     }
 }
 
@@ -120,21 +202,30 @@ pub struct HostLinkConnectionOptions {
     pub port: u16,
     pub timeout: std::time::Duration,
     pub transport: HostLinkTransportMode,
-    pub append_lf_on_send: bool,
     pub(crate) plc_profile: String,
 }
 
 impl HostLinkConnectionOptions {
     pub fn new(
         host: impl Into<String>,
+        port: u16,
+        transport: HostLinkTransportMode,
         plc_profile: impl AsRef<str>,
     ) -> Result<Self, HostLinkError> {
+        let host = host.into();
+        if host.trim().is_empty() {
+            return Err(HostLinkError::protocol("Host must not be empty"));
+        }
+        if port == 0 {
+            return Err(HostLinkError::protocol(
+                "Port must be in the range 1..=65535",
+            ));
+        }
         Ok(Self {
-            host: host.into(),
-            port: 8501,
+            host: host.trim().to_owned(),
+            port,
             timeout: std::time::Duration::from_secs(3),
-            transport: HostLinkTransportMode::Tcp,
-            append_lf_on_send: false,
+            transport,
             plc_profile: normalize_plc_profile(plc_profile)?,
         })
     }

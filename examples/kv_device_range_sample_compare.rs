@@ -5,12 +5,12 @@
 //! validation.
 //!
 //! Usage:
-//!   cargo run --features cli --example kv_device_range_sample_compare -- <host> <port> <plc-profile>
+//!   cargo run --features cli --example kv_device_range_sample_compare -- <host> <port> <transport> <plc-profile>
 
 use plc_comm_kv_hostlink::{
-    HostLinkConnectionOptions, HostLinkError, HostLinkValue, KvDeviceAddress, KvDeviceRangeEntry,
-    KvDeviceRangeSegment, QueuedHostLinkClient, device_range_catalog_for_plc_profile,
-    open_and_connect,
+    HostLinkConnectionOptions, HostLinkError, HostLinkTransportMode, HostLinkValue,
+    KvDeviceAddress, KvDeviceRangeEntry, KvDeviceRangeSegment, QueuedHostLinkClient,
+    device_range_catalog_for_plc_profile, open_and_connect,
 };
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -100,21 +100,25 @@ impl DeviceReport {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();
-    if args.len() < 4 {
+    if args.len() != 5 {
         return Err(make_error(
-            "Usage: cargo run --features cli --example kv_device_range_sample_compare -- <host> <port> <plc-profile>",
+            "Usage: cargo run --features cli --example kv_device_range_sample_compare -- <host> <port> <transport> <plc-profile>",
         ));
     }
 
     let host = args[1].clone();
     let port = args[2].parse::<u16>()?;
-    let plc_profile = args[3].clone();
+    let transport = match args[3].as_str() {
+        "tcp" => HostLinkTransportMode::Tcp,
+        "udp" => HostLinkTransportMode::Udp,
+        _ => return Err(make_error("transport must be exactly 'tcp' or 'udp'")),
+    };
+    let plc_profile = args[4].clone();
     let sample_points = env_usize("KV_SAMPLE_POINTS", 10);
     let only = env_csv("KV_SAMPLE_ONLY");
     let only_set = only.iter().cloned().collect::<BTreeSet<_>>();
 
-    let mut options = HostLinkConnectionOptions::new(host, &plc_profile)?;
-    options.port = port;
+    let options = HostLinkConnectionOptions::new(host, port, transport, &plc_profile)?;
     let client = open_and_connect(options).await?;
 
     let catalog = device_range_catalog_for_plc_profile(&plc_profile)?;

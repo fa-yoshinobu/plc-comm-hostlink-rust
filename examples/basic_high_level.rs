@@ -1,21 +1,21 @@
 //! Basic high-level Host Link example using the queued client.
 //!
 //! Usage:
-//!   cargo run --features cli --example basic_high_level -- <host> <port> <plc-profile>
+//!   cargo run --features cli --example basic_high_level -- <host> <port> <transport> <plc-profile>
 //!
 //! The write uses a DM test address; change it before running against a PLC
 //! program that owns that range. The original value is restored before exit.
 
 use plc_comm_kv_hostlink::{
-    HostLinkConnectionOptions, device_range_catalog_for_plc_profile, open_and_connect,
+    HostLinkConnectionOptions, HostLinkTransportMode, device_range_catalog_for_plc_profile,
+    open_and_connect,
 };
 use std::error::Error;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let (host, port, plc_profile) = parse_args()?;
-    let mut options = HostLinkConnectionOptions::new(host, &plc_profile)?;
-    options.port = port;
+    let (host, port, transport, plc_profile) = parse_args()?;
+    let options = HostLinkConnectionOptions::new(host, port, transport, &plc_profile)?;
     let client = open_and_connect(options).await?;
 
     let catalog = device_range_catalog_for_plc_profile(&plc_profile)?;
@@ -48,10 +48,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn parse_args() -> Result<(String, u16, String), Box<dyn Error>> {
+fn parse_args() -> Result<(String, u16, HostLinkTransportMode, String), Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();
-    if args.len() < 4 {
-        return Err("Usage: cargo run --features cli --example basic_high_level -- <host> <port> <plc-profile>".into());
+    if args.len() != 5 {
+        return Err("Usage: cargo run --features cli --example basic_high_level -- <host> <port> <transport> <plc-profile>".into());
     }
-    Ok((args[1].clone(), args[2].parse()?, args[3].clone()))
+    Ok((
+        args[1].clone(),
+        args[2].parse()?,
+        parse_transport(&args[3])?,
+        args[4].clone(),
+    ))
+}
+
+fn parse_transport(value: &str) -> Result<HostLinkTransportMode, Box<dyn Error>> {
+    match value {
+        "tcp" => Ok(HostLinkTransportMode::Tcp),
+        "udp" => Ok(HostLinkTransportMode::Udp),
+        _ => Err("transport must be exactly 'tcp' or 'udp'".into()),
+    }
 }

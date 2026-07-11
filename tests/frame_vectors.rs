@@ -1,4 +1,7 @@
-use plc_comm_kv_hostlink::{HostLinkClient, HostLinkClock, HostLinkConnectionOptions, KvPlcMode};
+use plc_comm_kv_hostlink::{
+    HostLinkClient, HostLinkClock, HostLinkConnectionOptions, HostLinkMonitorWord,
+    HostLinkTransportMode, KvPlcMode, parse_device,
+};
 use serde::Deserialize;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -37,7 +40,13 @@ async fn frame_vectors_send_expected_bodies() {
 
     for vector in vectors {
         let (port, received) = start_echo_server(vector.response.clone()).await;
-        let mut options = HostLinkConnectionOptions::new("127.0.0.1", "keyence:kv-8000").unwrap();
+        let mut options = HostLinkConnectionOptions::new(
+            "127.0.0.1",
+            8501,
+            HostLinkTransportMode::Tcp,
+            "keyence:kv-8000",
+        )
+        .unwrap();
         options.port = port;
         let client = HostLinkClient::connect(options).await.unwrap();
         let _ = run_vector(&client, &vector).await;
@@ -110,15 +119,13 @@ async fn run_vector(
                 .await?;
         }
         "read" => {
-            client.read(vector.device.as_deref().unwrap(), None).await?;
+            let (device, format) = device_and_format(vector.device.as_deref().unwrap())?;
+            client.read(&device, format.as_deref()).await?;
         }
         "read_consecutive" => {
+            let (device, format) = device_and_format(vector.device.as_deref().unwrap())?;
             client
-                .read_consecutive(
-                    vector.device.as_deref().unwrap(),
-                    vector.count.unwrap(),
-                    None,
-                )
+                .read_consecutive(&device, vector.count.unwrap(), format.as_deref())
                 .await?;
         }
         "register_monitor_bits" => {
@@ -127,7 +134,11 @@ async fn run_vector(
         }
         "register_monitor_words" => {
             let devices = vector.devices.as_ref().unwrap();
-            client.register_monitor_words(devices).await?;
+            let entries = devices
+                .iter()
+                .map(|device| monitor_entry(device))
+                .collect::<Result<Vec<_>, _>>()?;
+            client.register_monitor_words(&entries).await?;
         }
         "read_monitor_bits" => {
             let _ = client.read_monitor_bits().await?;
@@ -146,18 +157,16 @@ async fn run_vector(
                 .await?;
         }
         "write" => {
+            let (device, format) = device_and_format(vector.device.as_deref().unwrap())?;
             client
-                .write(
-                    vector.device.as_deref().unwrap(),
-                    vector.value.unwrap(),
-                    None,
-                )
+                .write(&device, vector.value.unwrap(), format.as_deref())
                 .await?;
         }
         "write_consecutive" => {
             let values = vector.values.clone().unwrap();
+            let (device, format) = device_and_format(vector.device.as_deref().unwrap())?;
             client
-                .write_consecutive(vector.device.as_deref().unwrap(), &values, None)
+                .write_consecutive(&device, &values, format.as_deref())
                 .await?;
         }
         "change_mode" => {
@@ -172,7 +181,7 @@ async fn run_vector(
         }
         "set_time" => {
             client
-                .set_time(Some(HostLinkClock {
+                .set_time(HostLinkClock {
                     year: 26,
                     month: 3,
                     day: 13,
@@ -180,7 +189,7 @@ async fn run_vector(
                     minute: 5,
                     second: 9,
                     week: 5,
-                }))
+                })
                 .await?;
         }
         "read_format" => {
@@ -192,41 +201,29 @@ async fn run_vector(
                 .await?;
         }
         "read_consecutive_legacy" => {
+            let (device, format) = device_and_format(vector.device.as_deref().unwrap())?;
             client
-                .read_consecutive_legacy(
-                    vector.device.as_deref().unwrap(),
-                    vector.count.unwrap(),
-                    None,
-                )
+                .read_consecutive_legacy(&device, vector.count.unwrap(), format.as_deref())
                 .await?;
         }
         "write_consecutive_legacy" => {
             let values = vector.values.clone().unwrap();
+            let (device, format) = device_and_format(vector.device.as_deref().unwrap())?;
             client
-                .write_consecutive_legacy(
-                    vector.device.as_deref().unwrap(),
-                    &values,
-                    vector.data_format.as_deref(),
-                )
+                .write_consecutive_legacy(&device, &values, format.as_deref())
                 .await?;
         }
         "write_set_value" => {
+            let (device, format) = device_and_format(vector.device.as_deref().unwrap())?;
             client
-                .write_set_value(
-                    vector.device.as_deref().unwrap(),
-                    vector.value.unwrap(),
-                    None,
-                )
+                .write_set_value(&device, vector.value.unwrap(), format.as_deref())
                 .await?;
         }
         "write_set_value_consecutive" => {
             let values = vector.values.clone().unwrap();
+            let (device, format) = device_and_format(vector.device.as_deref().unwrap())?;
             client
-                .write_set_value_consecutive(
-                    vector.device.as_deref().unwrap(),
-                    &values,
-                    vector.data_format.as_deref(),
-                )
+                .write_set_value_consecutive(&device, &values, format.as_deref())
                 .await?;
         }
         "switch_bank" => {
@@ -238,7 +235,7 @@ async fn run_vector(
                     vector.unit_no.unwrap(),
                     vector.buffer_address.unwrap(),
                     vector.count.unwrap(),
-                    vector.data_format.as_deref(),
+                    vector.data_format.as_deref().unwrap(),
                 )
                 .await?;
         }
@@ -249,16 +246,33 @@ async fn run_vector(
                     vector.unit_no.unwrap(),
                     vector.buffer_address.unwrap(),
                     &values,
-                    vector.data_format.as_deref(),
+                    vector.data_format.as_deref().unwrap(),
                 )
                 .await?;
         }
         "read_comments" => {
             let _ = client
-                .read_comments(vector.device.as_deref().unwrap(), true)
+                .read_comments(vector.device.as_deref().unwrap())
                 .await?;
         }
         other => panic!("unsupported vector command: {other}"),
     }
     Ok(())
+}
+
+fn device_and_format(
+    device: &str,
+) -> Result<(String, Option<String>), plc_comm_kv_hostlink::HostLinkError> {
+    let mut parsed = parse_device(device)?;
+    let format = (!parsed.suffix.is_empty()).then(|| parsed.suffix.clone());
+    parsed.suffix.clear();
+    Ok((parsed.to_text()?, format))
+}
+
+fn monitor_entry(device: &str) -> Result<HostLinkMonitorWord, plc_comm_kv_hostlink::HostLinkError> {
+    let (device, format) = device_and_format(device)?;
+    Ok(match format {
+        Some(format) => HostLinkMonitorWord::numeric(device, format),
+        None => HostLinkMonitorWord::direct_bit(device),
+    })
 }
