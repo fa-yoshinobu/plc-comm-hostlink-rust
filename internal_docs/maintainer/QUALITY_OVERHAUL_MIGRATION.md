@@ -8,33 +8,34 @@ single-request, profile-safe contract.
 
 | Decision | Implementation | Tests | Checks | Codex review | Claude review | Findings | Live/disposition | Docs | Final |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| D-052 | [x] | [x] | [x] | [x] | [ ] | [ ] | [x] | [x] | [ ] |
-| D-053 | [x] | [x] | [x] | [x] | [ ] | [ ] | [x] | [x] | [ ] |
-| D-054 | [x] | [x] | [x] | [x] | [ ] | [ ] | [x] | [x] | [ ] |
-| D-055 | [x] | [x] | [x] | [x] | [ ] | [ ] | [x] | [x] | [ ] |
-| D-056 | [x] | [x] | [x] | [x] | [ ] | [ ] | [x] | [x] | [ ] |
-| D-057 | [x] | [x] | [x] | [x] | [ ] | [ ] | [x] | [x] | [ ] |
-| D-058 | [x] | [x] | [x] | [x] | [ ] | [ ] | [x] | [x] | [ ] |
-| D-059 | [x] | [x] | [x] | [x] | [ ] | [ ] | [x] | [x] | [ ] |
-| D-060 | [x] | [x] | [x] | [x] | [ ] | [ ] | [x] | [x] | [ ] |
-| D-061 | [x] | [x] | [x] | [x] | [ ] | [ ] | [x] | [x] | [ ] |
-| D-062 | [x] | [x] | [x] | [x] | [ ] | [ ] | [x] | [x] | [ ] |
-| D-063 | [x] | [x] | [x] | [x] | [ ] | [ ] | [x] | [x] | [ ] |
-| D-064 | [x] | [x] | [x] | [x] | [ ] | [ ] | [x] | [x] | [ ] |
+| D-052 | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] |
+| D-053 | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] |
+| D-054 | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] |
+| D-055 | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] |
+| D-056 | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] |
+| D-057 | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] |
+| D-058 | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] |
+| D-059 | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] |
+| D-060 | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] |
+| D-061 | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] |
+| D-062 | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] |
+| D-063 | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] |
+| D-064 | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] | [x] |
 
 `Live/disposition` is checked because these Rust changes are constructor,
 pre-transport validation, deterministic frame, loopback transport-state, and
 documentation contracts. They do not create new PLC/profile support claims.
 
-Claude review remains pending explicit user authorization. No Claude command
-has been run.
+The user ran the authorized HostLink Claude review batch outside Codex on
+2026-07-12. Its Rust findings and Codex disposition are recorded below; Codex
+did not invoke Claude.
 
 ## Verification evidence
 
 - `run_ci.bat`: format, Clippy with `-D warnings`, and all-target/all-feature tests passed.
-- Tests: 37 library tests, 1 frame-vector integration test, and 37 high-level integration tests passed; all executable example targets also built and ran their zero-test harnesses.
+- Tests: 37 library tests and 45 high-level integration tests passed; all executable example targets built, with zero skip/failure. Library-local cross-implementation vectors were removed by workspace policy.
 - `RUSTDOCFLAGS=-D warnings cargo doc --no-deps --all-features` passed.
-- `cargo package --allow-dirty` built and verified the packaged crate; the archive contained the five standard user pages, examples, source, vectors, and tests.
+- `cargo package --allow-dirty` builds and verifies the packaged crate; cross-implementation vectors are not library package content.
 - Multi-PLC and JSON-config examples passed no-network dry-run validation with explicit port, transport, and profile values.
 - `git diff --check` passed and stale LF/chunk/error-message/default-constructor references were absent.
 - Codex reviewed the actual diff, public exports, validation order, raw/semantic separation, TCP/UDP state, cancellation, response caps/counts, Dword frames, compound bit updates, examples, docs, and package contents.
@@ -58,12 +59,12 @@ has been run.
 - Scope: frame builder and connection surface.
 - Target: one trailing `0x0D`; no LF append field, setter, or ignored alias.
 - Compatibility: CRLF customization is removed.
-- Acceptance: golden frame vectors compare exact request bodies.
+- Acceptance: deterministic repository-local command and frame-builder tests compare exact request bodies.
 
 ## D-055 — Receive buffers are internal
 
 - Scope: TCP/UDP receive paths and semantic response validation.
-- Target: 65,536-byte body cap, full UDP datagram handling, expected numeric token counts, and transport invalidation on overflow/mismatch.
+- Target: 65,536-byte body cap, terminated full UDP datagram handling, command/registration-derived token counts, and transport invalidation on overflow/mismatch.
 - Compatibility: no caller-controlled receive size or cap bypass.
 - Acceptance: maximum, one-byte-over, EOF, timeout, UDP, and count-mismatch tests.
 
@@ -114,7 +115,7 @@ has been run.
 - Scope: URD/UWR direct methods and verification tool.
 - Target: explicit U/S/D/L/H, strict value/token validation, count and word-span validation.
 - Compatibility: `None`/empty-to-U fallback is removed.
-- Acceptance: golden frames, invalid formats, boundaries, and 32-bit end-crossing tests.
+- Acceptance: deterministic command tests, invalid formats, boundaries, and 32-bit end-crossing tests.
 
 ## D-063 — Chunked APIs are removed
 
@@ -129,3 +130,45 @@ has been run.
 - Target: low-level numeric calls use a base device plus explicit format; suffix input is rejected. High-level `.0`-`.F` remains bit-in-word and colon remains dtype.
 - Compatibility: suffix-only and conflicting dual-format calls are rejected.
 - Acceptance: suffix, missing/empty format, direct bit, `DM100.D`, `DM100:D`, numeric range, and response-token tests.
+
+## RS-HL-CLAUDE-20260712 — Independent-review corrections
+
+Scope: Claude HostLink findings 8, 9, 10, 11, 12, 13, 20, and 21 for the
+Rust repository.
+
+Target contract: the clock year fits the two-digit field; every non-format
+command rejects suffix-bearing devices; UDP requires a terminator and discards
+malformed transport; `H` reads have exact token shape and digits; conversion
+from `HostLinkValue` is never silently lossy; timeout behavior has executable
+coverage. Cross-language vectors live only in the separate cross-verification
+repository.
+
+Compatibility impact: year values 100..255, suffixes previously erased by
+ST/RS/STS/RSS/MBS/RDC/timer helpers, malformed hexadecimal replies, and lossy
+`u16::from` calls are rejected or no longer compile. Callers use
+`u16::try_from` and handle the result.
+
+Acceptance criteria:
+
+1. Clock year 99 passes and 100 fails before send.
+2. ST/RS/STS/RSS/MBS/RDC and timer/counter helpers reject any suffix before
+   transport.
+3. Unterminated UDP responses fail and close the connection generation; normal
+   terminated datagrams continue to pass.
+4. Non-composite `H` reads require exactly one 1..4-digit hex token, composite
+   reads require exactly three tokens, and non-`U16` conversion fails.
+5. Tests prove the 3-second timeout default, zero rejection, TCP timeout state,
+   and absence of library-local cross-vector files/runners.
+6. RD uses the command-derived token count, including 16/32-point direct-bit
+   numeric formats; direct BIT accepts only `0`/`1`/`ON`/`OFF`, and malformed semantic
+   responses close the transport generation.
+
+- [x] Implementation completed in this repository.
+- [x] Tests added or updated for every acceptance criterion.
+- [x] Full format, Clippy `-D warnings`, 82-test, rustdoc `-D warnings`, example, and package checks passed.
+- [x] Codex self-review completed against public API, validation order, response shape, transport state, timeout/cancellation, docs, and package contents.
+- [x] Claude source review completed; the user ran the authorized batch and its result is preserved in the workspace.
+- [x] Codex dispositioned all Rust findings and reran affected checks.
+- [x] No additional live-PLC check is required for these validation and local transport corrections.
+- [x] Documentation, migration notes, and changelog agree with the implementation.
+- [x] Final acceptance criteria verified for this repository; HostLink family-level acceptance remains separate.

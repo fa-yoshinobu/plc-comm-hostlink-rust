@@ -128,6 +128,7 @@ preserved. UTF-8 is attempted first, then Shift_JIS.
 ## PLC clock
 
 `set_time` requires a `HostLinkClock`. It never substitutes the host clock.
+The `year` field is the PLC's two-digit year and must be in `0..=99`.
 Calendar fields, real date existence, and weekday agreement are validated
 before transport.
 

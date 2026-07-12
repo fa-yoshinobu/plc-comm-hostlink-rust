@@ -27,7 +27,7 @@ if %errorlevel% neq 0 (
 )
 
 echo [4/4] Packaging dry run...
-cargo package
+cargo package --allow-dirty
 if %errorlevel% neq 0 (
     echo [ERROR] Package dry run failed.
     exit /b %errorlevel%

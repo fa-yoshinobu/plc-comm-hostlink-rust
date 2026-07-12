@@ -80,6 +80,11 @@ impl HostLinkClock {
     }
 
     pub fn validate(&self) -> Result<(), HostLinkError> {
+        if self.year > 99 {
+            return Err(HostLinkError::protocol(
+                "WRT year must be in the range 0..=99",
+            ));
+        }
         let month = Month::try_from(self.month)
             .map_err(|_| HostLinkError::protocol("Invalid month for WRT command"))?;
         let date = Date::from_calendar_date(2000 + i32::from(self.year), month, self.day).map_err(
@@ -162,6 +167,10 @@ mod tests {
         let mut wrong_weekday = clock_for(2026, Month::March, 16);
         wrong_weekday.week = 2;
         assert!(wrong_weekday.validate().is_err());
+
+        let mut year_overflow = clock_for(2099, Month::December, 31);
+        year_overflow.year = 100;
+        assert!(year_overflow.validate().is_err());
     }
 
     #[test]

@@ -1,9 +1,9 @@
 use crate::address::{
-    force_consecutive_device_types, force_device_types, mbs_device_types, model_name_for_code,
-    mws_device_types, parse_device, rdc_device_types, require_explicit_format,
-    validate_device_count, validate_device_span, validate_device_type,
-    validate_expansion_buffer_count, validate_expansion_buffer_span, wr_device_types,
-    ws_device_types,
+    force_consecutive_device_types, force_device_types, is_direct_bit_device_type,
+    mbs_device_types, model_name_for_code, mws_device_types, parse_device, rdc_device_types,
+    require_explicit_format, require_no_suffix, validate_device_count, validate_device_span,
+    validate_device_type, validate_expansion_buffer_count, validate_expansion_buffer_span,
+    wr_device_types, ws_device_types,
 };
 use crate::error::HostLinkError;
 use crate::helpers;
@@ -99,6 +99,20 @@ fn validate_response_token_count(tokens: &[String], expected: usize) -> Result<(
         )));
     }
     Ok(())
+}
+
+fn read_response_token_count(device_type: &str, data_format: &str) -> usize {
+    if matches!(device_type, "T" | "C") {
+        return 3;
+    }
+    if is_direct_bit_device_type(device_type) {
+        return match data_format {
+            ".U" | ".S" | ".H" => 16,
+            ".D" | ".L" => 32,
+            _ => 1,
+        };
+    }
+    1
 }
 
 macro_rules! impl_payload_for_ints {
@@ -260,6 +274,8 @@ struct ClientInner {
     rx_count: usize,
     tcp_read_buf: Vec<u8>,
     udp_read_buf: Vec<u8>,
+    monitor_bit_count: Option<usize>,
+    monitor_word_count: Option<usize>,
     // Set before the first transport await and cleared only after a complete
     // response. If the future is dropped, the next operation replaces the
     // poisoned transport before sending another request.
@@ -278,6 +294,8 @@ impl HostLinkClient {
                 rx_count: 0,
                 tcp_read_buf: vec![0u8; 8192],
                 udp_read_buf: vec![0u8; UDP_RECEIVE_BUFFER_SIZE],
+                monitor_bit_count: None,
+                monitor_word_count: None,
                 exchange_incomplete: false,
             })),
         }
@@ -354,10 +372,15 @@ impl HostLinkClient {
     }
 
     pub async fn confirm_operating_mode(&self) -> Result<KvPlcMode, HostLinkError> {
-        match self.send_decoded("?M").await?.parse::<u8>() {
+        let mut inner = self.inner.lock().await;
+        let response = inner.send_decoded("?M").await?;
+        match response.parse::<u8>() {
             Ok(0) => Ok(KvPlcMode::Program),
             Ok(1) => Ok(KvPlcMode::Run),
-            _ => Err(HostLinkError::protocol("Unsupported PLC mode response")),
+            _ => {
+                inner.close();
+                Err(HostLinkError::protocol("Unsupported PLC mode response"))
+            }
         }
     }
 
@@ -372,16 +395,16 @@ impl HostLinkClient {
     }
 
     pub async fn forced_set(&self, device: &str) -> Result<(), HostLinkError> {
-        let mut address = parse_device(device)?;
+        let address = parse_device(device)?;
         validate_device_type("ST", &address.device_type, force_device_types())?;
-        address.suffix.clear();
+        require_no_suffix(&address, "ST")?;
         self.expect_ok(&format!("ST {}", address.to_text()?)).await
     }
 
     pub async fn forced_reset(&self, device: &str) -> Result<(), HostLinkError> {
-        let mut address = parse_device(device)?;
+        let address = parse_device(device)?;
         validate_device_type("RS", &address.device_type, force_device_types())?;
-        address.suffix.clear();
+        require_no_suffix(&address, "RS")?;
         self.expect_ok(&format!("RS {}", address.to_text()?)).await
     }
 
@@ -398,11 +421,15 @@ impl HostLinkClient {
             .send_decoded(&format!("RD {}", address.to_text()?))
             .await?;
         let tokens = split_data_tokens(&response);
-        if let Err(error) = validate_response_token_count(&tokens, 1) {
+        let expected = read_response_token_count(&address.device_type, &suffix);
+        if let Err(error) = validate_response_token_count(&tokens, expected) {
             self.close().await?;
             return Err(error);
         }
-        validate_response_tokens(&tokens, &suffix)?;
+        if let Err(error) = validate_response_tokens(&tokens, &suffix) {
+            self.close().await?;
+            return Err(error);
+        }
         Ok(tokens)
     }
 
@@ -425,7 +452,10 @@ impl HostLinkClient {
             self.close().await?;
             return Err(error);
         }
-        validate_response_tokens(&tokens, &suffix)?;
+        if let Err(error) = validate_response_tokens(&tokens, &suffix) {
+            self.close().await?;
+            return Err(error);
+        }
         Ok(tokens)
     }
 
@@ -488,13 +518,21 @@ impl HostLinkClient {
 
         let mut command = String::from("MBS");
         for device in devices {
-            let mut address = parse_device(device.as_ref())?;
+            let address = parse_device(device.as_ref())?;
             validate_device_type("MBS", &address.device_type, mbs_device_types())?;
-            address.suffix.clear();
+            require_no_suffix(&address, "MBS")?;
             command.push(' ');
             command.push_str(&address.to_text()?);
         }
-        self.expect_ok(&command).await
+        let mut inner = self.inner.lock().await;
+        let response = inner.send_decoded(&command).await?;
+        if response != "OK" {
+            let error = HostLinkError::protocol(format!("Expected OK but received {response}"));
+            inner.close();
+            return Err(error);
+        }
+        inner.monitor_bit_count = Some(devices.len());
+        Ok(())
     }
 
     pub async fn register_monitor_words(
@@ -527,19 +565,47 @@ impl HostLinkClient {
             command.push(' ');
             command.push_str(&address.to_text()?);
         }
-        self.expect_ok(&command).await
+        let mut inner = self.inner.lock().await;
+        let response = inner.send_decoded(&command).await?;
+        if response != "OK" {
+            let error = HostLinkError::protocol(format!("Expected OK but received {response}"));
+            inner.close();
+            return Err(error);
+        }
+        inner.monitor_word_count = Some(devices.len());
+        Ok(())
     }
 
     pub async fn read_monitor_bits(&self) -> Result<Vec<String>, HostLinkError> {
-        let response = self.send_decoded("MBR").await?;
+        let mut inner = self.inner.lock().await;
+        let expected = inner
+            .monitor_bit_count
+            .ok_or_else(|| HostLinkError::protocol("Monitor bits must be registered before MBR"))?;
+        let response = inner.send_decoded("MBR").await?;
         let tokens = split_data_tokens(&response);
-        validate_response_tokens(&tokens, "")?;
+        if let Err(error) = validate_response_token_count(&tokens, expected) {
+            inner.close();
+            return Err(error);
+        }
+        if let Err(error) = validate_response_tokens(&tokens, "") {
+            inner.close();
+            return Err(error);
+        }
         Ok(tokens)
     }
 
     pub async fn read_monitor_words(&self) -> Result<Vec<String>, HostLinkError> {
-        let response = self.send_decoded("MWR").await?;
-        Ok(split_data_tokens(&response))
+        let mut inner = self.inner.lock().await;
+        let expected = inner.monitor_word_count.ok_or_else(|| {
+            HostLinkError::protocol("Monitor words must be registered before MWR")
+        })?;
+        let response = inner.send_decoded("MWR").await?;
+        let tokens = split_data_tokens(&response);
+        if let Err(error) = validate_response_token_count(&tokens, expected) {
+            inner.close();
+            return Err(error);
+        }
+        Ok(tokens)
     }
 
     pub async fn forced_set_consecutive(
@@ -550,13 +616,13 @@ impl HostLinkClient {
         if !(1..=16).contains(&count) {
             return Err(HostLinkError::protocol("count must be 1-16."));
         }
-        let mut address = parse_device(device)?;
+        let address = parse_device(device)?;
         validate_device_type(
             "STS",
             &address.device_type,
             force_consecutive_device_types(),
         )?;
-        address.suffix.clear();
+        require_no_suffix(&address, "STS")?;
         self.expect_ok(&format!("STS {} {}", address.to_text()?, count))
             .await
     }
@@ -569,13 +635,13 @@ impl HostLinkClient {
         if !(1..=16).contains(&count) {
             return Err(HostLinkError::protocol("count must be 1-16."));
         }
-        let mut address = parse_device(device)?;
+        let address = parse_device(device)?;
         validate_device_type(
             "RSS",
             &address.device_type,
             force_consecutive_device_types(),
         )?;
-        address.suffix.clear();
+        require_no_suffix(&address, "RSS")?;
         self.expect_ok(&format!("RSS {} {}", address.to_text()?, count))
             .await
     }
@@ -599,7 +665,10 @@ impl HostLinkClient {
             self.close().await?;
             return Err(error);
         }
-        validate_response_tokens(&tokens, &suffix)?;
+        if let Err(error) = validate_response_tokens(&tokens, &suffix) {
+            self.close().await?;
+            return Err(error);
+        }
         Ok(tokens)
     }
 
@@ -706,7 +775,10 @@ impl HostLinkClient {
             self.close().await?;
             return Err(error);
         }
-        validate_response_tokens(&tokens, &suffix)?;
+        if let Err(error) = validate_response_tokens(&tokens, &suffix) {
+            self.close().await?;
+            return Err(error);
+        }
         Ok(tokens)
     }
 
@@ -741,9 +813,9 @@ impl HostLinkClient {
     }
 
     pub async fn read_comments(&self, device: &str) -> Result<String, HostLinkError> {
-        let mut address = parse_device(device)?;
+        let address = parse_device(device)?;
         validate_device_type("RDC", &address.device_type, rdc_device_types())?;
-        address.suffix.clear();
+        require_no_suffix(&address, "RDC")?;
         let response = self
             .inner
             .lock()
@@ -838,20 +910,25 @@ impl HostLinkClient {
         if response == "OK" {
             Ok(())
         } else {
-            Err(HostLinkError::protocol(format!(
+            let error = HostLinkError::protocol(format!(
                 "Expected 'OK' but received '{response}' for bit-in-word write"
-            )))
+            ));
+            inner.close();
+            Err(error)
         }
     }
 
     async fn expect_ok(&self, body: &str) -> Result<(), HostLinkError> {
-        let response = self.send_decoded(body).await?;
+        let mut inner = self.inner.lock().await;
+        let response = inner.send_decoded(body).await?;
         if response == "OK" {
             Ok(())
         } else {
-            Err(HostLinkError::protocol(format!(
+            let error = HostLinkError::protocol(format!(
                 "Expected 'OK' but received '{response}' for command '{body}'"
-            )))
+            ));
+            inner.close();
+            Err(error)
         }
     }
 }
@@ -905,6 +982,8 @@ impl ClientInner {
         self.rx_start = 0;
         self.rx_count = 0;
         self.exchange_incomplete = false;
+        self.monitor_bit_count = None;
+        self.monitor_word_count = None;
     }
 
     async fn send_raw_bytes(&mut self, body: &str) -> Result<Vec<u8>, HostLinkError> {
@@ -925,7 +1004,14 @@ impl ClientInner {
         F: Fn(&[u8]) -> Result<String, HostLinkError>,
     {
         let raw = self.exchange_raw(body).await?;
-        ensure_success(decoder(&raw)?)
+        let decoded = match decoder(&raw) {
+            Ok(decoded) => decoded,
+            Err(error) => {
+                self.close();
+                return Err(error);
+            }
+        };
+        ensure_success(decoded)
     }
 
     async fn exchange_raw(&mut self, body: &str) -> Result<Vec<u8>, HostLinkError> {
@@ -959,9 +1045,21 @@ impl ClientInner {
             Some(Transport::Udp(socket)) => {
                 match send_udp_with_timeout(socket, &frame, self.options.timeout).await {
                     Ok(()) => {
-                        recv_udp_with_timeout(socket, &mut self.udp_read_buf, self.options.timeout)
-                            .await
-                            .map(|()| self.udp_read_buf.clone())
+                        match recv_udp_with_timeout(
+                            socket,
+                            &mut self.udp_read_buf,
+                            self.options.timeout,
+                        )
+                        .await
+                        {
+                            Ok(()) if matches!(self.udp_read_buf.last(), Some(b'\r' | b'\n')) => {
+                                Ok(self.udp_read_buf.clone())
+                            }
+                            Ok(()) => Err(HostLinkError::protocol(
+                                "UDP response is missing the required CR/LF terminator",
+                            )),
+                            Err(error) => Err(error),
+                        }
                     }
                     Err(err) => Err(err),
                 }

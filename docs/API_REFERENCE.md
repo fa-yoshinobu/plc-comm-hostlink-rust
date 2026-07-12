@@ -43,6 +43,17 @@ Numeric low-level methods require a base device plus an explicit format.
 Direct bit methods use an unsuffixed device. Suffix-bearing low-level device
 strings are rejected.
 
+`HostLinkClock.year` is the explicit two-digit PLC year and must be `0..=99`.
+Semantic reads validate command-derived response counts. Direct-bit responses
+accept only `0`, `1`, `OFF`, or `ON`, while numeric reads of direct-bit devices require 16 or
+32 response points according to the explicit format. Malformed semantic
+responses close the connection generation.
+UDP responses require a CR/LF terminator; missing framing closes the transport.
+All non-format commands, including forced control, monitor-bit registration,
+comment reads, and timer/counter helpers, reject suffix-bearing devices.
+Monitor reads require a successful registration in the current connection
+generation and enforce the exact registered token count.
+
 ## High-level helpers
 
 | Purpose | API |
@@ -59,6 +70,11 @@ strings are rejected.
 
 All word/Dword helpers are single-request operations. There are no chunked
 exports.
+
+Hexadecimal typed reads require exactly one token containing 1..4 hexadecimal
+digits (timer/counter composite reads require their exact three-token shape).
+Converting `HostLinkValue` to `u16` is fallible through `TryFrom`; variants
+other than `HostLinkValue::U16` return an error instead of producing zero.
 
 ## Address and profile APIs
 

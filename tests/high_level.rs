@@ -79,6 +79,283 @@ async fn udp_send_raw_accepts_large_datagram_response() {
 }
 
 #[tokio::test]
+async fn udp_missing_terminator_is_rejected_and_transport_is_closed() {
+    let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let port = socket.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let mut request = vec![0u8; 1024];
+        let (_, peer) = socket.recv_from(&mut request).await.unwrap();
+        socket.send_to(b"UNTERMINATED", peer).await.unwrap();
+    });
+
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Udp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let error = client.send_raw("READ").await.unwrap_err();
+    assert!(error.to_string().contains("terminator"));
+    assert!(!client.is_open().await);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn timeout_contract_has_three_second_default_rejects_zero_and_closes_timed_out_tcp() {
+    let default_options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    assert_eq!(default_options.timeout, Duration::from_secs(3));
+    let unconnected = HostLinkClient::new(default_options);
+    assert!(unconnected.set_timeout(Duration::ZERO).await.is_err());
+    assert_eq!(unconnected.timeout().await, Duration::from_secs(3));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = [0u8; 5];
+        stream.read_exact(&mut request).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    });
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    options.timeout = Duration::from_millis(50);
+    let client = HostLinkClient::connect(options).await.unwrap();
+    let error = client.send_raw("READ").await.unwrap_err();
+    assert!(error.to_string().contains("timed out"));
+    assert!(!client.is_open().await);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn suffixes_are_rejected_by_non_format_commands_before_transport() {
+    let client = HostLinkClient::new(
+        HostLinkConnectionOptions::new(
+            "127.0.0.1",
+            8501,
+            HostLinkTransportMode::Tcp,
+            "keyence:kv-8000",
+        )
+        .unwrap(),
+    );
+
+    assert!(
+        client
+            .forced_set("R0.U")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("suffix")
+    );
+    assert!(
+        client
+            .forced_reset("R0.U")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("suffix")
+    );
+    assert!(
+        client
+            .forced_set_consecutive("R0.U", 2)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("suffix")
+    );
+    assert!(
+        client
+            .forced_reset_consecutive("R0.U", 2)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("suffix")
+    );
+    assert!(
+        client
+            .register_monitor_bits(&["R0.U"])
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("suffix")
+    );
+    assert!(
+        client
+            .read_comments("DM0.U")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("suffix")
+    );
+    assert!(
+        client
+            .read_timer_counter("T0.U")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("suffix")
+    );
+    assert!(!client.is_open().await);
+}
+
+#[test]
+fn host_link_value_u16_conversion_is_fallible() {
+    assert_eq!(u16::try_from(HostLinkValue::U16(42)).unwrap(), 42);
+    assert!(u16::try_from(HostLinkValue::U32(42)).is_err());
+    assert!(u16::try_from(HostLinkValue::I16(42)).is_err());
+    assert!(u16::try_from(HostLinkValue::Bool(true)).is_err());
+}
+
+#[tokio::test]
+async fn hexadecimal_typed_read_requires_exactly_one_valid_token() {
+    for (device, response, expected) in [
+        ("DM210", "ABCD EEEE", "Expected 1"),
+        ("DM211", "WXYZ", "hexadecimal digits"),
+    ] {
+        let (port, _) = start_scripted_server(move |_| response.to_owned()).await;
+        let mut options = HostLinkConnectionOptions::new(
+            "127.0.0.1",
+            8501,
+            HostLinkTransportMode::Tcp,
+            "keyence:kv-8000",
+        )
+        .unwrap();
+        options.port = port;
+        let client = HostLinkClient::connect(options).await.unwrap();
+
+        assert!(
+            read_typed(&client, device, "H")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains(expected)
+        );
+        assert!(!client.is_open().await);
+    }
+}
+
+#[tokio::test]
+async fn single_read_token_count_follows_device_and_format() {
+    let (port, _) = start_scripted_server(|command| {
+        let count = match command.as_str() {
+            "RD R000.U" => 16,
+            "RD R000.D" => 32,
+            "RD DM0.U" => 1,
+            _ => return "E1".to_owned(),
+        };
+        (0..count).map(|_| "0").collect::<Vec<_>>().join(" ")
+    })
+    .await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    assert_eq!(client.read("R0", Some("U")).await.unwrap().len(), 16);
+    assert_eq!(client.read("R0", Some("D")).await.unwrap().len(), 32);
+    assert_eq!(client.read("DM0", Some("U")).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn direct_bit_response_accepts_only_documented_tokens() {
+    let (port, _) = start_scripted_server(|_| "ON".to_owned()).await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    assert_eq!(client.read("R0", None).await.unwrap(), vec!["ON"]);
+
+    let (invalid_port, _) = start_scripted_server(|_| "GARBAGE".to_owned()).await;
+    let mut invalid_options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    invalid_options.port = invalid_port;
+    let invalid_client = HostLinkClient::connect(invalid_options).await.unwrap();
+    let error = invalid_client.read("R0", None).await.unwrap_err();
+    assert!(error.to_string().contains("Invalid response token"));
+    assert!(!invalid_client.is_open().await);
+}
+
+#[tokio::test]
+async fn monitor_reads_require_registration_and_exact_registered_count() {
+    let unconnected = HostLinkClient::new(
+        HostLinkConnectionOptions::new(
+            "127.0.0.1",
+            8501,
+            HostLinkTransportMode::Tcp,
+            "keyence:kv-8000",
+        )
+        .unwrap(),
+    );
+    assert!(
+        unconnected
+            .read_monitor_bits()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("registered")
+    );
+    assert!(
+        unconnected
+            .read_monitor_words()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("registered")
+    );
+
+    let (port, _) = start_scripted_server(|command| match command.as_str() {
+        "MBS R000 R001" => "OK".to_owned(),
+        "MBR" => "1".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+    client.register_monitor_bits(&["R0", "R1"]).await.unwrap();
+    let error = client.read_monitor_bits().await.unwrap_err();
+    assert!(error.to_string().contains("expected 2"));
+    assert!(!client.is_open().await);
+}
+
+#[tokio::test]
 async fn unconnected_commands_return_typed_not_connected_without_opening_transport() {
     let client = HostLinkClient::new(
         HostLinkConnectionOptions::new(

@@ -413,6 +413,19 @@ pub(crate) fn require_explicit_format(
     normalize_suffix(data_format)
 }
 
+pub(crate) fn require_no_suffix(
+    address: &KvDeviceAddress,
+    command: &str,
+) -> Result<(), HostLinkError> {
+    if !address.suffix.is_empty() {
+        return Err(HostLinkError::protocol(format!(
+            "{command} device '{}' must not contain a data-format suffix",
+            address.to_text()?
+        )));
+    }
+    Ok(())
+}
+
 pub fn validate_device_type(
     command: &str,
     device_type: &str,

@@ -1,6 +1,6 @@
 use crate::address::{
     KvDeviceAddress, parse_device, parse_named_address_parts, require_explicit_format,
-    validate_device_count, validate_device_span,
+    require_no_suffix, validate_device_count, validate_device_span,
 };
 use crate::client::{HostLinkClient, HostLinkPayloadValue};
 use crate::error::HostLinkError;
@@ -33,11 +33,15 @@ pub struct TimerCounterValue {
     pub preset: u32,
 }
 
-impl From<HostLinkValue> for u16 {
-    fn from(value: HostLinkValue) -> Self {
+impl TryFrom<HostLinkValue> for u16 {
+    type Error = HostLinkError;
+
+    fn try_from(value: HostLinkValue) -> Result<Self, Self::Error> {
         match value {
-            HostLinkValue::U16(value) => value,
-            _ => 0,
+            HostLinkValue::U16(value) => Ok(value),
+            _ => Err(HostLinkError::protocol(
+                "HostLinkValue variant cannot be converted to u16 without loss",
+            )),
         }
     }
 }
@@ -102,10 +106,13 @@ pub async fn read_typed(
         "S" => {
             if is_timer_counter_composite_device(&device)? {
                 let response = read_single_response(client, &device, Some("S")).await?;
-                Ok(HostLinkValue::I16(parse_last_token(
-                    &response,
-                    "Invalid signed 16-bit response",
-                )?))
+                Ok(HostLinkValue::I16(
+                    close_on_protocol_error(
+                        client,
+                        parse_last_token(&response, "Invalid signed 16-bit response"),
+                    )
+                    .await?,
+                ))
             } else {
                 Ok(HostLinkValue::I16(
                     read_single_parsed(
@@ -121,10 +128,13 @@ pub async fn read_typed(
         "D" => {
             if is_timer_counter_composite_device(&device)? {
                 let response = read_single_response(client, &device, Some("D")).await?;
-                Ok(HostLinkValue::U32(parse_last_token(
-                    &response,
-                    "Invalid unsigned 32-bit response",
-                )?))
+                Ok(HostLinkValue::U32(
+                    close_on_protocol_error(
+                        client,
+                        parse_last_token(&response, "Invalid unsigned 32-bit response"),
+                    )
+                    .await?,
+                ))
             } else {
                 Ok(HostLinkValue::U32(
                     read_single_parsed::<u32>(
@@ -140,10 +150,13 @@ pub async fn read_typed(
         "L" => {
             if is_timer_counter_composite_device(&device)? {
                 let response = read_single_response(client, &device, Some("L")).await?;
-                Ok(HostLinkValue::I32(parse_last_token(
-                    &response,
-                    "Invalid signed 32-bit response",
-                )?))
+                Ok(HostLinkValue::I32(
+                    close_on_protocol_error(
+                        client,
+                        parse_last_token(&response, "Invalid signed 32-bit response"),
+                    )
+                    .await?,
+                ))
             } else {
                 Ok(HostLinkValue::I32(
                     read_single_parsed(
@@ -159,10 +172,13 @@ pub async fn read_typed(
         "U" => {
             if is_timer_counter_composite_device(&device)? {
                 let response = read_single_response(client, &device, Some("U")).await?;
-                Ok(HostLinkValue::U16(parse_last_token(
-                    &response,
-                    "Invalid unsigned 16-bit response",
-                )?))
+                Ok(HostLinkValue::U16(
+                    close_on_protocol_error(
+                        client,
+                        parse_last_token(&response, "Invalid unsigned 16-bit response"),
+                    )
+                    .await?,
+                ))
             } else {
                 Ok(HostLinkValue::U16(
                     read_single_parsed::<u16>(
@@ -177,12 +193,40 @@ pub async fn read_typed(
         }
         "H" => {
             let response = read_single_response(client, &device, Some("H")).await?;
-            let token = if is_timer_counter_composite_device(&device)? {
-                last_response_token(&response)?
+            let composite = is_timer_counter_composite_device(&device)?;
+            let tokens = crate::protocol::split_data_tokens(&response);
+            let token = if composite {
+                if tokens.len() != 3 {
+                    let error = HostLinkError::protocol(format!(
+                        "Expected 3 timer/counter hexadecimal response tokens but received {}",
+                        tokens.len()
+                    ));
+                    let _ = client.close().await;
+                    return Err(error);
+                }
+                tokens.last().expect("length checked")
             } else {
-                first_response_token(&response)?
+                if tokens.len() != 1 {
+                    let error = HostLinkError::protocol(format!(
+                        "Expected 1 hexadecimal response token but received {}",
+                        tokens.len()
+                    ));
+                    let _ = client.close().await;
+                    return Err(error);
+                }
+                &tokens[0]
             };
-            Ok(HostLinkValue::Text(token.trim().to_ascii_uppercase()))
+            let token = token.trim();
+            if !(1..=4).contains(&token.len())
+                || !token.chars().all(|character| character.is_ascii_hexdigit())
+            {
+                let error = HostLinkError::protocol(
+                    "Hexadecimal response token must contain 1..=4 hexadecimal digits",
+                );
+                let _ = client.close().await;
+                return Err(error);
+            }
+            Ok(HostLinkValue::Text(token.to_ascii_uppercase()))
         }
         "BIT" => Ok(HostLinkValue::Bool(
             read_single_bool(client, &device, None).await?,
@@ -197,24 +241,30 @@ pub async fn read_timer_counter(
     client: &HostLinkClient,
     device: &str,
 ) -> Result<TimerCounterValue, HostLinkError> {
-    let mut address = parse_device(device)?;
+    let address = parse_device(device)?;
     if !matches!(address.device_type.as_str(), "T" | "C") {
         return Err(HostLinkError::protocol(
             "read_timer_counter requires a T or C device.",
         ));
     }
 
-    address.suffix.clear();
+    require_no_suffix(&address, "read_timer_counter")?;
     let target = address.to_text()?;
     let response = read_single_response(client, &target, Some("D")).await?;
-    let values = parse_all_tokens::<u32>(
-        &response,
-        "Invalid timer/counter status/current/preset response",
-    )?;
-    if values.len() < 3 {
-        return Err(HostLinkError::protocol(
-            "Timer/counter response did not contain status/current/preset.",
-        ));
+    let values = close_on_protocol_error(
+        client,
+        parse_all_tokens::<u32>(
+            &response,
+            "Invalid timer/counter status/current/preset response",
+        ),
+    )
+    .await?;
+    if values.len() != 3 {
+        let error = HostLinkError::protocol(
+            "Timer/counter response must contain exactly status/current/preset.",
+        );
+        let _ = client.close().await;
+        return Err(error);
     }
     Ok(TimerCounterValue {
         status: values[0],
@@ -317,18 +367,6 @@ fn response_tokens(response_text: &str) -> impl Iterator<Item = &str> {
         .filter(|token| !token.is_empty())
 }
 
-fn first_response_token(response_text: &str) -> Result<&str, HostLinkError> {
-    response_tokens(response_text)
-        .next()
-        .ok_or_else(|| HostLinkError::protocol("Missing response token"))
-}
-
-fn last_response_token(response_text: &str) -> Result<&str, HostLinkError> {
-    response_tokens(response_text)
-        .last()
-        .ok_or_else(|| HostLinkError::protocol("Missing response token"))
-}
-
 fn is_timer_counter_composite_device(device: &str) -> Result<bool, HostLinkError> {
     let address = parse_device(device)?;
     Ok(matches!(address.device_type.as_str(), "T" | "C"))
@@ -338,7 +376,14 @@ fn parse_last_token<T: FromStr>(
     response_text: &str,
     invalid_message: &'static str,
 ) -> Result<T, HostLinkError> {
-    last_response_token(response_text)?
+    let tokens = response_tokens(response_text).collect::<Vec<_>>();
+    if tokens.len() != 3 {
+        return Err(HostLinkError::protocol(format!(
+            "Timer/counter response must contain exactly 3 tokens, received {}",
+            tokens.len()
+        )));
+    }
+    tokens[2]
         .parse::<T>()
         .map_err(|_| HostLinkError::protocol(invalid_message))
 }
@@ -394,7 +439,8 @@ async fn read_single_parsed<T: FromStr>(
     invalid_message: &'static str,
 ) -> Result<T, HostLinkError> {
     let response = read_single_response(client, device, data_format).await?;
-    let values = parse_all_tokens::<T>(&response, invalid_message)?;
+    let values =
+        close_on_protocol_error(client, parse_all_tokens::<T>(&response, invalid_message)).await?;
     if values.len() != 1 {
         client.close().await?;
         return Err(HostLinkError::protocol(format!(
@@ -402,10 +448,14 @@ async fn read_single_parsed<T: FromStr>(
             values.len()
         )));
     }
-    values
-        .into_iter()
-        .next()
-        .ok_or_else(|| HostLinkError::protocol("Missing response token"))
+    close_on_protocol_error(
+        client,
+        values
+            .into_iter()
+            .next()
+            .ok_or_else(|| HostLinkError::protocol("Missing response token")),
+    )
+    .await
 }
 
 async fn read_single_bool(
@@ -422,7 +472,7 @@ async fn read_single_bool(
             tokens.len()
         )));
     }
-    parse_bool_token(tokens[0])
+    close_on_protocol_error(client, parse_bool_token(tokens[0])).await
 }
 
 async fn read_consecutive_parsed<T: FromStr>(
@@ -436,7 +486,8 @@ async fn read_consecutive_parsed<T: FromStr>(
     let response = client
         .send_decoded(&format!("RDS {} {}", address.to_text()?, count))
         .await?;
-    let values = parse_all_tokens(&response, invalid_message)?;
+    let values =
+        close_on_protocol_error(client, parse_all_tokens(&response, invalid_message)).await?;
     if values.len() != count {
         client.close().await?;
         return Err(HostLinkError::protocol(format!(
@@ -445,6 +496,19 @@ async fn read_consecutive_parsed<T: FromStr>(
         )));
     }
     Ok(values)
+}
+
+async fn close_on_protocol_error<T>(
+    client: &HostLinkClient,
+    result: Result<T, HostLinkError>,
+) -> Result<T, HostLinkError> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            let _ = client.close().await;
+            Err(error)
+        }
+    }
 }
 
 pub async fn write_bit_in_word(
