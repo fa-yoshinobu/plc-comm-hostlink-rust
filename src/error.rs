@@ -1,33 +1,15 @@
 use thiserror::Error;
 
-const ERROR_CODE_MESSAGES: &[(&str, &str)] = &[
-    ("E0", "Abnormal device No."),
-    ("E1", "Abnormal command"),
-    ("E2", "Program not registered"),
-    ("E4", "Write disabled"),
-    ("E5", "Unit error"),
-    ("E6", "No comments"),
-];
-
-pub fn decode_error_code(code: &str) -> &'static str {
-    ERROR_CODE_MESSAGES
-        .iter()
-        .find_map(|(key, value)| (*key == code).then_some(*value))
-        .unwrap_or("Unknown error")
-}
-
 #[derive(Debug, Error)]
 pub enum HostLinkError {
     #[error("{0}")]
     Protocol(String),
+    #[error("client is not connected; call open before sending a command")]
+    NotConnected,
     #[error("{0}")]
     Connection(String),
-    #[error("{code}: {message} (response={response:?})")]
-    Plc {
-        code: String,
-        response: String,
-        message: &'static str,
-    },
+    #[error("PLC returned {code} (response={response:?})")]
+    Plc { code: String, response: String },
 }
 
 impl HostLinkError {
@@ -42,7 +24,6 @@ impl HostLinkError {
     pub fn plc(code: impl Into<String>, response: impl Into<String>) -> Self {
         let code = code.into();
         Self::Plc {
-            message: decode_error_code(&code),
             response: response.into(),
             code,
         }

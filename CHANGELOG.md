@@ -17,6 +17,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### BREAKING
+
+- Library: Require destination port, transport, and canonical PLC profile when constructing connection options. Constructors remain local-only; commands require an explicit successful `open` and return `HostLinkError::NotConnected` instead of opening or reopening a transport.
+- Library: Fix the communication timeout default at 3 seconds, normal command termination at CR, and the internal response-body cap at 65,536 bytes. Public LF and buffer-size controls are removed.
+- Library: Make `set_time` require an explicit, calendar-valid `HostLinkClock`; local-time creation remains a separate caller-invoked helper and never falls back to UTC.
+- Library: Change maintainer `send_raw` to return undecoded response-body bytes without converting PLC error responses. It is hidden from ordinary generated user documentation.
+- Library: Remove comment padding options. Comment decoding removes only trailing ASCII space bytes before UTF-8/Shift_JIS decoding.
+- Library: Require expansion-buffer and low-level numeric formats, reject suffix-bearing low-level device inputs, and validate response tokens, numeric ranges, counts, and 32-bit spans without fallback conversion.
+- Library: Remove all public chunked helpers. Word and native Dword helpers send at most one request and reject counts over their one-request limit.
+- Library: Keep bit-in-word read-modify-write under one client lock so concurrent clones cannot interleave the read and write portions.
+- Library: Remove the embedded PLC manual error-message lookup and retain only the returned PLC code and response.
+- Library: Require UDP response terminators, reject suffixes on every non-format command, validate hexadecimal reads as exactly one 1..4-digit token, and limit clock years to `00..99`.
+- Library: Validate command-derived response counts, including 16/32-point direct-bit numeric reads; accept only documented `0`/`1`/`ON`/`OFF` direct-bit tokens and close the session after malformed semantic responses.
+- Library: Replace the lossy `From<HostLinkValue> for u16` conversion with fallible `TryFrom`, so non-`U16` variants cannot silently become zero.
+- Tests: Add explicit 3-second/zero/TCP-timeout recovery coverage and remove library-local cross-implementation vectors; cross-language verification is a separate repository concern.
+- Tooling: Allow the local release gate to package the reviewed working-tree diff before it is committed.
+- Samples: Require port, transport, and canonical PLC profile in every runnable endpoint definition.
+
+### Changed
+
+- Docs: Rebuilt getting-started, usage, API, profile, README, examples, and maintainer migration material around the explicit quality-overhaul contract.
+- Tests: Added coverage for disconnected commands, raw bytes, response caps and expected counts, native Dword requests, calendar validation, comment padding, and concurrent bit-in-word updates.
+
 ## [3.1.0] - 2026-07-10
 
 ### Added

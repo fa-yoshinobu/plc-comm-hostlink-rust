@@ -130,11 +130,8 @@ fn build_plan(args: &Args) -> MonitorResult<PollingPlan> {
     let data = std::fs::read_to_string(&args.config).map_err(|error| error.to_string())?;
     let root: Value = serde_json::from_str(&data).map_err(|error| error.to_string())?;
     let defaults = root.get("defaults").and_then(Value::as_object);
-    let default_transport = parse_transport(str_field(defaults, "transport").unwrap_or("tcp"))?;
-    let default_port = u16_field(defaults, "port").unwrap_or(8501);
     let default_timeout_ms = u64_field(defaults, "timeout_ms").unwrap_or(3000);
     let default_interval = f64_field(defaults, "interval").unwrap_or(1.0);
-    let default_profile = str_field(defaults, "plc_profile");
 
     let mut endpoints = Vec::new();
     let mut tags_by_plc = Vec::new();
@@ -147,23 +144,26 @@ fn build_plan(args: &Args) -> MonitorResult<PollingPlan> {
         let profile = object
             .get("plc_profile")
             .and_then(Value::as_str)
-            .or(default_profile)
             .ok_or_else(|| format!("plcs[{index}] requires plc_profile"))?;
+        let port_value = object
+            .get("port")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("plcs[{index}] requires port"))?;
+        let port = u16::try_from(port_value)
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| format!("plcs[{index}].port must be in 1..=65535"))?;
+        let transport = object
+            .get("transport")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("plcs[{index}] requires transport"))
+            .and_then(parse_transport)?;
         endpoints.push(PlcEndpoint {
             name: name.to_string(),
             host: host.to_string(),
             plc_profile: profile.to_string(),
-            port: object
-                .get("port")
-                .and_then(Value::as_u64)
-                .map(|value| value as u16)
-                .unwrap_or(default_port),
-            transport: object
-                .get("transport")
-                .and_then(Value::as_str)
-                .map(parse_transport)
-                .transpose()?
-                .unwrap_or_else(|| default_transport.clone()),
+            port,
+            transport,
             timeout_ms: object
                 .get("timeout_ms")
                 .and_then(Value::as_u64)
@@ -265,19 +265,6 @@ fn output_csv_path(config_path: &Path, root: &Value) -> MonitorResult<Option<Pat
                 .join(path),
         ))
     }
-}
-
-fn str_field<'a>(object: Option<&'a serde_json::Map<String, Value>>, key: &str) -> Option<&'a str> {
-    object
-        .and_then(|value| value.get(key))
-        .and_then(Value::as_str)
-}
-
-fn u16_field(object: Option<&serde_json::Map<String, Value>>, key: &str) -> Option<u16> {
-    object
-        .and_then(|value| value.get(key))
-        .and_then(Value::as_u64)
-        .map(|value| value as u16)
 }
 
 fn u64_field(object: Option<&serde_json::Map<String, Value>>, key: &str) -> Option<u64> {

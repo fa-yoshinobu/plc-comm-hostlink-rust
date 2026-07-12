@@ -43,12 +43,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Connection setup is separate from catalog selection:
 
 ```rust
-use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions};
+use plc_comm_kv_hostlink::{HostLinkClient, HostLinkConnectionOptions, HostLinkTransportMode};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut options = HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?;
-    options.port = 8501;
+    let options = HostLinkConnectionOptions::new(
+        "192.168.250.100",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )?;
     let client = HostLinkClient::connect(options).await?;
 
     let dm0 = client.read_typed("DM0", "U").await?;

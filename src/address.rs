@@ -241,25 +241,6 @@ pub(crate) fn is_optimizable_read_named_device_type(device_type: &str) -> bool {
     default_format_by_device_type(device_type) == ".U"
 }
 
-pub(crate) fn offset_device(
-    start: &KvDeviceAddress,
-    word_offset: u32,
-) -> Result<String, HostLinkError> {
-    let mut next = start.clone();
-    next.number = if uses_bit_bank_address(&next.device_type) {
-        let logical = bit_bank_logical_number(next.number)
-            .checked_add(word_offset)
-            .ok_or_else(|| HostLinkError::protocol("Device offset overflow"))?;
-        bit_bank_number_from_logical(logical)
-    } else {
-        next.number
-            .checked_add(word_offset)
-            .ok_or_else(|| HostLinkError::protocol("Device offset overflow"))?
-    };
-    next.suffix.clear();
-    next.to_text()
-}
-
 pub(crate) fn parse_named_address_parts(
     address: &str,
 ) -> Result<(String, String, Option<u8>), HostLinkError> {
@@ -409,21 +390,40 @@ pub(crate) fn require_explicit_format(
     address: &KvDeviceAddress,
     data_format: Option<&str>,
 ) -> Result<String, HostLinkError> {
-    let suffix = if let Some(data_format) = data_format {
-        normalize_suffix(data_format)?
-    } else {
-        address.suffix.clone()
-    };
-    if !suffix.is_empty() {
-        return Ok(suffix);
+    if !address.suffix.is_empty() {
+        return Err(HostLinkError::protocol(format!(
+            "Low-level device '{}' must not contain a data-format suffix; pass the base device and data format separately.",
+            address.to_text()?
+        )));
     }
-    if default_format_by_device_type(&address.device_type).is_empty() {
+    if default_format_by_device_type(&address.device_type).is_empty() && data_format.is_none() {
         return Ok(String::new());
     }
-    Err(HostLinkError::protocol(format!(
-        "Device '{}' requires an explicit data format suffix such as '.U', '.S', '.D', '.L', or '.H'.",
-        address.to_text()?
-    )))
+    let data_format = data_format.ok_or_else(|| {
+        HostLinkError::protocol(format!(
+            "Data format is required for numeric device '{}'.",
+            address
+                .to_text()
+                .unwrap_or_else(|_| address.device_type.clone())
+        ))
+    })?;
+    if data_format.trim().is_empty() {
+        return Err(HostLinkError::protocol("Data format must not be empty"));
+    }
+    normalize_suffix(data_format)
+}
+
+pub(crate) fn require_no_suffix(
+    address: &KvDeviceAddress,
+    command: &str,
+) -> Result<(), HostLinkError> {
+    if !address.suffix.is_empty() {
+        return Err(HostLinkError::protocol(format!(
+            "{command} device '{}' must not contain a data-format suffix",
+            address.to_text()?
+        )));
+    }
+    Ok(())
 }
 
 pub fn validate_device_type(
@@ -786,8 +786,7 @@ fn device_range(device_type: &str) -> Option<DeviceRange> {
 #[cfg(test)]
 mod tests {
     use super::{
-        HostLinkAddress, offset_device, parse_device, parse_logical_address, validate_device_span,
-        wr_device_types,
+        HostLinkAddress, parse_device, parse_logical_address, validate_device_span, wr_device_types,
     };
 
     #[test]
@@ -864,15 +863,6 @@ mod tests {
         assert_eq!(parse_device("MR115").unwrap().to_text().unwrap(), "MR115");
         assert_eq!(parse_device("CR0").unwrap().to_text().unwrap(), "CR000");
         assert_eq!(parse_device("CR7915").unwrap().to_text().unwrap(), "CR7915");
-    }
-
-    #[test]
-    fn bit_bank_offsets_cross_bank_boundaries_by_bit_position() {
-        let start = parse_device("CR3614").unwrap();
-        assert_eq!(offset_device(&start, 0).unwrap(), "CR3614");
-        assert_eq!(offset_device(&start, 1).unwrap(), "CR3615");
-        assert_eq!(offset_device(&start, 2).unwrap(), "CR3700");
-        assert_eq!(offset_device(&start, 18).unwrap(), "CR3800");
     }
 
     #[test]
@@ -958,6 +948,11 @@ mod tests {
         let logical = parse_logical_address("dm100:s").unwrap();
         assert_eq!(logical.to_text().unwrap(), "DM100:S");
         assert_eq!(logical.data_type, "S");
+
+        let dword = parse_logical_address("dm100:d").unwrap();
+        assert_eq!(dword.to_text().unwrap(), "DM100:D");
+        assert_eq!(dword.data_type, "D");
+        assert_eq!(dword.bit_index, None);
     }
 
     #[test]

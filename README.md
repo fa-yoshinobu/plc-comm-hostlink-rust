@@ -30,15 +30,20 @@ The package name is `plc-comm-kv-hostlink`; the Rust import path is `plc_comm_kv
 
 ```rust
 use plc_comm_kv_hostlink::{
-    HostLinkClient, HostLinkConnectionOptions, device_range_catalog_for_plc_profile,
+    HostLinkClient, HostLinkConnectionOptions, HostLinkTransportMode,
+    device_range_catalog_for_plc_profile,
 };
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let catalog = device_range_catalog_for_plc_profile("keyence:kv-8000")?;
 
-    let mut options = HostLinkConnectionOptions::new("192.168.250.100", "keyence:kv-8000")?;
-    options.port = 8501;
+    let options = HostLinkConnectionOptions::new(
+        "192.168.250.100",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )?;
     let client = HostLinkClient::connect(options).await?;
 
     let dm0 = client.read_typed("DM0", "U").await?;

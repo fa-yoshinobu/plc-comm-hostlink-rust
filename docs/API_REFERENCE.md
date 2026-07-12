@@ -1,92 +1,97 @@
-# KV Host Link Rust API Reference
+# KV Host Link Rust API reference
 
-This page is a user-facing index of the public Rust KV Host Link API surface.
-Use the usage guide for examples, and this page when you need to find the
-operation name for a specific Host Link workflow.
+This page indexes the supported user-facing surface. Maintainer raw frame and
+trace facilities are intentionally omitted from ordinary user documentation.
 
-The main async client type is `HostLinkClient`. For shared application
-sessions, use `QueuedHostLinkClient` or `open_and_connect`.
+## Connection and lifecycle
 
-## Connection And PLC Control
-
-| Operation | Public API |
+| Purpose | API |
 | --- | --- |
-| Open a ready-to-use queued connection | `open_and_connect`, `HostLinkClientFactory::open_and_connect`, `HostLinkConnectionOptions` |
-| Low-level client | `HostLinkClient`, `HostLinkClient::new`, `HostLinkClient::connect` |
-| Queued shared client | `QueuedHostLinkClient`, `QueuedHostLinkClient::new`, `execute_async`, `inner_client` |
-| Raw command exchange | `send_raw` |
-| PLC mode and error control | `change_mode`, `clear_error`, `check_error_no`, `confirm_operating_mode` |
-| PLC model and clock | `query_model`, `set_time`, `KvModelInfo`, `HostLinkClock` |
-| Connection lifecycle | `open`, `close`, `is_open` |
-| Session settings | `timeout`, `set_timeout`, `plc_profile`, `append_lf_on_send`, `set_append_lf_on_send`, `set_trace_hook` |
-| Trace capture | `HostLinkTraceDirection`, `HostLinkTraceFrame`, `TraceHook` |
+| Validated options | `HostLinkConnectionOptions::new(host, port, transport, plc_profile)` |
+| Disconnected client | `HostLinkClient::new` |
+| Connected direct client | `HostLinkClient::connect` |
+| Connected queued client | `open_and_connect`, `HostLinkClientFactory::open_and_connect` |
+| Lifecycle | `open`, `close`, `is_open` |
+| Session values | `timeout`, `set_timeout`, `plc_profile` |
+| Transport selection | `HostLinkTransportMode::{Tcp, Udp}` |
 
-## Device Operations
+## PLC operations
 
-| Operation | Public API |
+| Purpose | API |
 | --- | --- |
-| Single device read/write | `read`, `write` |
-| Consecutive device read/write | `read_consecutive`, `write_consecutive` |
-| Legacy consecutive read/write | `read_consecutive_legacy`, `write_consecutive_legacy` |
-| Forced bit/device control | `forced_set`, `forced_reset`, `forced_set_consecutive`, `forced_reset_consecutive` |
-| Timer/counter set-value writes | `write_set_value`, `write_set_value_consecutive` |
-| Monitor registration/cycle | `register_monitor_bits`, `register_monitor_words`, `read_monitor_bits`, `read_monitor_words` |
-| Comment reads | `read_comments` |
-| Data bank switching | `switch_bank` |
-| Expansion unit buffer access | `read_expansion_unit_buffer`, `write_expansion_unit_buffer` |
+| PLC mode | `change_mode`, `confirm_operating_mode`, `KvPlcMode` |
+| Error operation | `clear_error`, `check_error_no` |
+| PLC model | `query_model`, `KvModelInfo` |
+| PLC clock | `set_time`, `HostLinkClock` |
+| Forced bit control | `forced_set`, `forced_reset`, `forced_set_consecutive`, `forced_reset_consecutive` |
+| Bank selection | `switch_bank` |
 
-## High-Level Helpers
+## Device operations
 
-| Operation | Public API |
+| Purpose | API |
 | --- | --- |
-| Address parsing and formatting | `HostLinkAddress`, `KvDeviceAddress`, `KvLogicalAddress`, `parse_device`, `parse_logical_address`, `normalize_suffix` |
-| Address validation | `validate_device_type`, `validate_device_count`, `validate_device_span`, `validate_expansion_buffer_count`, `validate_expansion_buffer_span` |
-| Typed values | `HostLinkValue`, `read_typed`, `write_typed` |
-| Timer/counter composite reads | `TimerCounterValue`, `read_timer_counter`, `read_timer`, `read_counter` |
-| Named snapshots and polling | `NamedSnapshot`, `read_named`, `poll` |
-| Word/dword reads | `read_words`, `read_dwords` |
-| Single-request reads/writes | `read_words_single_request`, `read_dwords_single_request`, `write_words_single_request`, `write_dwords_single_request` |
-| Explicit chunked reads/writes | `read_words_chunked`, `read_dwords_chunked`, `write_words_chunked`, `write_dwords_chunked` |
-| Bit-in-word write | `write_bit_in_word` |
+| Low-level single read/write | `read`, `write` |
+| Low-level consecutive read/write | `read_consecutive`, `write_consecutive` |
+| Legacy command variants | `read_consecutive_legacy`, `write_consecutive_legacy` |
+| Timer/counter set value | `write_set_value`, `write_set_value_consecutive` |
+| Monitor registration | `register_monitor_bits`, `register_monitor_words`, `HostLinkMonitorWord` |
+| Monitor read | `read_monitor_bits`, `read_monitor_words` |
+| Expansion-unit buffer | `read_expansion_unit_buffer`, `write_expansion_unit_buffer` |
+| Comments | `read_comments` |
 
-## Address, Profile, And Diagnostics
+Numeric low-level methods require a base device plus an explicit format.
+Direct bit methods use an unsuffixed device. Suffix-bearing low-level device
+strings are rejected.
 
-| Operation | Public API |
+`HostLinkClock.year` is the explicit two-digit PLC year and must be `0..=99`.
+Semantic reads validate command-derived response counts. Direct-bit responses
+accept only `0`, `1`, `OFF`, or `ON`, while numeric reads of direct-bit devices require 16 or
+32 response points according to the explicit format. Malformed semantic
+responses close the connection generation.
+UDP responses require a CR/LF terminator; missing framing closes the transport.
+All non-format commands, including forced control, monitor-bit registration,
+comment reads, and timer/counter helpers, reject suffix-bearing devices.
+Monitor reads require a successful registration in the current connection
+generation and enforce the exact registered token count.
+
+## High-level helpers
+
+| Purpose | API |
 | --- | --- |
-| Device range catalog | `KvDeviceRangeCatalog`, `KvDeviceRangeEntry`, `KvDeviceRangeSegment`, `KvDeviceRangeCategory`, `KvDeviceRangeNotation` |
-| Profile lookup | `KvHostLinkPlcProfile`, `KvHostLinkPlcProfileDescriptor`, `available_plc_profiles`, `plc_profile_descriptors`, `normalize_plc_profile`, `profile_from_name`, `display_name` |
-| Device range catalog lookup | `device_range_catalog_for_plc_profile` |
-| Transport and mode enums | `HostLinkTransportMode`, `KvPlcMode` |
-| Value formatting | `HostLinkPayloadValue` |
-| Error handling | `HostLinkError`, `decode_error_code` |
+| Typed value | `HostLinkValue`, `read_typed`, `write_typed` |
+| Named snapshot | `NamedSnapshot`, `read_named` |
+| Polling | `poll` |
+| Timer/counter composite | `TimerCounterValue`, `read_timer_counter`, `read_timer`, `read_counter` |
+| Word reads | `read_words`, `read_words_single_request` |
+| Dword reads | `read_dwords`, `read_dwords_single_request` |
+| Word writes | `write_words_single_request` |
+| Dword writes | `write_dwords_single_request` |
+| Bit in word | `write_bit_in_word` |
 
-## Public Symbol Index
+All word/Dword helpers are single-request operations. There are no chunked
+exports.
 
-The crate re-exports these public names from `src/lib.rs`:
+Hexadecimal typed reads require exactly one token containing 1..4 hexadecimal
+digits (timer/counter composite reads require their exact three-token shape).
+Converting `HostLinkValue` to `u16` is fallible through `TryFrom`; variants
+other than `HostLinkValue::U16` return an error instead of producing zero.
 
-`HostLinkAddress`, `KvDeviceAddress`, `KvLogicalAddress`,
-`normalize_suffix`, `parse_device`, `parse_logical_address`,
-`validate_device_count`, `validate_device_span`, `validate_device_type`,
-`validate_expansion_buffer_count`, `validate_expansion_buffer_span`,
-`HostLinkClient`, `HostLinkClientFactory`, `HostLinkPayloadValue`,
-`QueuedHostLinkClient`, `open_and_connect`, `KvDeviceRangeCatalog`,
-`KvDeviceRangeCategory`, `KvDeviceRangeEntry`, `KvDeviceRangeNotation`,
-`KvDeviceRangeSegment`, `KvHostLinkPlcProfile`, `KvHostLinkPlcProfileDescriptor`,
-`available_plc_profiles`, `device_range_catalog_for_plc_profile`, `display_name`,
-`normalize_plc_profile`, `plc_profile_descriptors`, `profile_from_name`, `HostLinkError`,
-`decode_error_code`, `HostLinkValue`, `NamedSnapshot`, `TimerCounterValue`,
-`poll`, `read_comments`, `read_counter`, `read_dwords`,
-`read_dwords_chunked`, `read_dwords_single_request`, `read_named`,
-`read_timer`, `read_timer_counter`, `read_typed`, `read_words`,
-`read_words_chunked`, `read_words_single_request`, `write_bit_in_word`,
-`write_dwords_chunked`, `write_dwords_single_request`, `write_typed`,
-`write_words_chunked`, `write_words_single_request`, `HostLinkClock`,
-`HostLinkConnectionOptions`, `HostLinkTraceDirection`,
-`HostLinkTraceFrame`, `HostLinkTransportMode`, `KvModelInfo`, `KvPlcMode`,
-`TraceHook`.
+## Address and profile APIs
 
-## Generated API Details
+| Purpose | API |
+| --- | --- |
+| Address models | `HostLinkAddress`, `KvDeviceAddress`, `KvLogicalAddress` |
+| Address parsing | `parse_device`, `parse_logical_address` |
+| Address validation | `validate_device_type`, `validate_device_count`, `validate_device_span` |
+| Expansion validation | `validate_expansion_buffer_count`, `validate_expansion_buffer_span` |
+| Profile enumeration | `available_plc_profiles`, `plc_profile_descriptors` |
+| Profile selection | `normalize_plc_profile`, `profile_from_name`, `display_name` |
+| Range catalog | `device_range_catalog_for_plc_profile`, `KvDeviceRangeCatalog` |
 
-The crate-level generated API is published by docs.rs for the released crate.
-This page keeps the same user-facing operation index in the repository and on
-the shared docs site.
+## Errors
+
+`HostLinkError` distinguishes protocol validation, `NotConnected`, transport
+connection failure, and PLC rejection. PLC errors retain the returned code and
+response; the crate does not embed copied manual error descriptions.
+
+The complete generated Rust API for a release is available through docs.rs.

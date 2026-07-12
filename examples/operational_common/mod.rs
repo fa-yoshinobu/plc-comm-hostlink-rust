@@ -104,31 +104,21 @@ pub fn parse_tag_spec(value: &str) -> MonitorResult<TagSpec> {
 
 pub fn parse_plc_spec(
     value: &str,
-    default_port: u16,
-    default_transport: &str,
     timeout_ms: u64,
     interval: Duration,
 ) -> MonitorResult<PlcEndpoint> {
     let Some((name, rest)) = value.split_once('=') else {
-        return Err("expected NAME=HOST,PROFILE[,PORT[,TRANSPORT]]".to_string());
+        return Err("expected NAME=HOST,PROFILE,PORT,TRANSPORT".to_string());
     };
     let parts = rest.split(',').map(str::trim).collect::<Vec<_>>();
-    if name.is_empty() || parts.len() < 2 || parts.len() > 4 {
-        return Err("expected NAME=HOST,PROFILE[,PORT[,TRANSPORT]]".to_string());
+    if name.is_empty() || parts.len() != 4 || parts.iter().any(|value| value.is_empty()) {
+        return Err("expected NAME=HOST,PROFILE,PORT,TRANSPORT".to_string());
     }
-    let port = parts
-        .get(2)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.parse::<u16>())
-        .transpose()
-        .map_err(|error| error.to_string())?
-        .unwrap_or(default_port);
-    let transport = parts
-        .get(3)
-        .filter(|value| !value.is_empty())
-        .map(|value| parse_transport(value))
-        .transpose()?
-        .unwrap_or_else(|| default_transport.to_string());
+    let port = parts[2].parse::<u16>().map_err(|error| error.to_string())?;
+    if port == 0 {
+        return Err("port must be in 1..=65535".to_string());
+    }
+    let transport = parse_transport(parts[3])?;
     Ok(PlcEndpoint {
         name: name.to_string(),
         host: parts[0].to_string(),
@@ -271,14 +261,19 @@ fn normalize_tag_name(address: &str) -> String {
 }
 
 fn options_for(endpoint: &PlcEndpoint) -> MonitorResult<HostLinkConnectionOptions> {
-    let mut options = HostLinkConnectionOptions::new(endpoint.host.clone(), &endpoint.plc_profile)
-        .map_err(|error| error.to_string())?;
-    options.port = endpoint.port;
-    options.timeout = Duration::from_millis(endpoint.timeout_ms);
-    options.transport = match endpoint.transport.as_str() {
+    let transport = match endpoint.transport.as_str() {
         "udp" => HostLinkTransportMode::Udp,
-        _ => HostLinkTransportMode::Tcp,
+        "tcp" => HostLinkTransportMode::Tcp,
+        _ => return Err("transport must be tcp or udp".to_string()),
     };
+    let mut options = HostLinkConnectionOptions::new(
+        endpoint.host.clone(),
+        endpoint.port,
+        transport,
+        &endpoint.plc_profile,
+    )
+    .map_err(|error| error.to_string())?;
+    options.timeout = Duration::from_millis(endpoint.timeout_ms);
     Ok(options)
 }
 
