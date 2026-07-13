@@ -17,8 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### BREAKING
+## [3.1.0] - 2026-07-13
 
+### BREAKING
 - Library: Require destination port, transport, and canonical PLC profile when constructing connection options. Constructors remain local-only; commands require an explicit successful `open` and return `HostLinkError::NotConnected` instead of opening or reopening a transport.
 - Library: Fix the communication timeout default at 3 seconds, normal command termination at CR, and the internal response-body cap at 65,536 bytes. Public LF and buffer-size controls are removed.
 - Library: Make `set_time` require an explicit, calendar-valid `HostLinkClock`; local-time creation remains a separate caller-invoked helper and never falls back to UTC.
@@ -35,17 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tooling: Allow the local release gate to package the reviewed working-tree diff before it is committed.
 - Samples: Require port, transport, and canonical PLC profile in every runnable endpoint definition.
 
-### Changed
-
-- Docs: Rebuilt getting-started, usage, API, profile, README, examples, and maintainer migration material around the explicit quality-overhaul contract.
-- Tests: Added coverage for disconnected commands, raw bytes, response caps and expected counts, native Dword requests, calendar validation, comment padding, and concurrent bit-in-word updates.
-
-## [3.1.0] - 2026-07-10
-
 ### Added
 - Library: Added `KvHostLinkPlcProfileDescriptor` and crate-root `plc_profile_descriptors()` for canonical Host Link profile metadata.
 
 ### Changed
+- Docs: Rebuilt getting-started, usage, API, profile, README, examples, and maintainer migration material around the explicit quality-overhaul contract.
+- Tests: Added coverage for disconnected commands, raw bytes, response caps and expected counts, native Dword requests, calendar validation, comment padding, and concurrent bit-in-word updates.
+
+
 - Release: Bumped crate and lockfile metadata to `3.1.0`.
 
 ### Fixed
