@@ -71,11 +71,18 @@ async fn udp_send_raw_accepts_large_datagram_response() {
     options.transport = HostLinkTransportMode::Udp;
     options.port = port;
     let client = HostLinkClient::connect(options).await.unwrap();
+    assert_eq!(client.traffic_stats().await, Default::default());
 
     let response = client.send_raw("LARGE").await.unwrap();
 
     assert_eq!(response.len(), 5000);
     assert!(response.iter().all(|byte| *byte == b'7'));
+    let stats = client.traffic_stats().await;
+    assert_eq!(stats.request_count, 1);
+    assert_eq!(stats.tx_bytes, b"LARGE\r".len() as u64);
+    assert_eq!(stats.rx_bytes, 5002);
+    client.close().await.unwrap();
+    assert_eq!(client.traffic_stats().await, stats);
 }
 
 #[tokio::test]
@@ -101,6 +108,10 @@ async fn udp_missing_terminator_is_rejected_and_transport_is_closed() {
     let error = client.send_raw("READ").await.unwrap_err();
     assert!(error.to_string().contains("terminator"));
     assert!(!client.is_open().await);
+    let stats = client.traffic_stats().await;
+    assert_eq!(stats.request_count, 1);
+    assert_eq!(stats.tx_bytes, b"READ\r".len() as u64);
+    assert_eq!(stats.rx_bytes, 0);
     server.await.unwrap();
 }
 
@@ -139,6 +150,10 @@ async fn timeout_contract_has_three_second_default_rejects_zero_and_closes_timed
     let error = client.send_raw("READ").await.unwrap_err();
     assert!(error.to_string().contains("timed out"));
     assert!(!client.is_open().await);
+    let stats = client.traffic_stats().await;
+    assert_eq!(stats.request_count, 1);
+    assert_eq!(stats.tx_bytes, b"READ\r".len() as u64);
+    assert_eq!(stats.rx_bytes, 0);
     server.await.unwrap();
 }
 
@@ -392,6 +407,7 @@ async fn unconnected_commands_return_typed_not_connected_without_opening_transpo
         Err(HostLinkError::NotConnected)
     ));
     assert!(!client.is_open().await);
+    assert_eq!(client.traffic_stats().await, Default::default());
 }
 
 #[tokio::test]
@@ -411,6 +427,7 @@ async fn raw_exchange_preserves_plc_error_and_non_ascii_response_bytes() {
     .unwrap();
     options.port = port;
     let client = HostLinkClient::connect(options).await.unwrap();
+    assert_eq!(client.traffic_stats().await, Default::default());
 
     assert_eq!(client.send_raw("ERROR").await.unwrap(), b"E1");
     assert_eq!(
@@ -421,6 +438,10 @@ async fn raw_exchange_preserves_plc_error_and_non_ascii_response_bytes() {
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
         vec!["ERROR", "BYTES"]
     );
+    let stats = client.traffic_stats().await;
+    assert_eq!(stats.request_count, 2);
+    assert_eq!(stats.tx_bytes, 12);
+    assert_eq!(stats.rx_bytes, 9);
 }
 
 #[tokio::test]

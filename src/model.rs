@@ -5,6 +5,13 @@ use time::{Date, Month, OffsetDateTime, Time};
 use crate::error::HostLinkError;
 use crate::plc_profiles;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HostLinkTrafficStats {
+    pub request_count: u64,
+    pub tx_bytes: u64,
+    pub rx_bytes: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostLinkTransportMode {
     Tcp,

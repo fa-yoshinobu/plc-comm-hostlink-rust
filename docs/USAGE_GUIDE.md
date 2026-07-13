@@ -146,3 +146,7 @@ local offset is returned and is not replaced with UTC.
 operations. Direct `HostLinkClient` requests are also serialized per client
 instance; the queued wrapper additionally provides an application operation
 boundary for helper workflows.
+
+## Traffic statistics
+
+Call `client.traffic_stats().await` for cumulative request, transmitted-byte, and received-byte counts.

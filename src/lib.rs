@@ -34,8 +34,8 @@ pub use helpers::{
     write_dwords_single_request, write_typed, write_words_single_request,
 };
 pub use model::{
-    HostLinkClock, HostLinkConnectionOptions, HostLinkMonitorWord, HostLinkTransportMode,
-    KvModelInfo, KvPlcMode,
+    HostLinkClock, HostLinkConnectionOptions, HostLinkMonitorWord, HostLinkTrafficStats,
+    HostLinkTransportMode, KvModelInfo, KvPlcMode,
 };
 pub use plc_profiles::{
     KvHostLinkPlcProfile, KvHostLinkPlcProfileDescriptor, available_plc_profiles, display_name,

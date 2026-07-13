@@ -280,6 +280,7 @@ struct ClientInner {
     // response. If the future is dropped, the next operation replaces the
     // poisoned transport before sending another request.
     exchange_incomplete: bool,
+    traffic_stats: crate::HostLinkTrafficStats,
 }
 
 impl HostLinkClient {
@@ -297,6 +298,7 @@ impl HostLinkClient {
                 monitor_bit_count: None,
                 monitor_word_count: None,
                 exchange_incomplete: false,
+                traffic_stats: crate::HostLinkTrafficStats::default(),
             })),
         }
     }
@@ -327,6 +329,10 @@ impl HostLinkClient {
 
     pub async fn plc_profile(&self) -> String {
         self.inner.lock().await.options.plc_profile.clone()
+    }
+
+    pub async fn traffic_stats(&self) -> crate::HostLinkTrafficStats {
+        self.inner.lock().await.traffic_stats
     }
 
     pub async fn set_timeout(&self, timeout: Duration) -> Result<(), HostLinkError> {
@@ -1029,6 +1035,8 @@ impl ClientInner {
             Some(Transport::Tcp(stream)) => {
                 match write_all_with_timeout(stream, &frame, self.options.timeout).await {
                     Ok(()) => {
+                        self.traffic_stats.request_count += 1;
+                        self.traffic_stats.tx_bytes += frame.len() as u64;
                         recv_tcp_line(
                             stream,
                             &mut self.rx_buf,
@@ -1045,6 +1053,8 @@ impl ClientInner {
             Some(Transport::Udp(socket)) => {
                 match send_udp_with_timeout(socket, &frame, self.options.timeout).await {
                     Ok(()) => {
+                        self.traffic_stats.request_count += 1;
+                        self.traffic_stats.tx_bytes += frame.len() as u64;
                         match recv_udp_with_timeout(
                             socket,
                             &mut self.udp_read_buf,
@@ -1069,6 +1079,7 @@ impl ClientInner {
 
         match exchange_result {
             Ok(raw) => {
+                self.traffic_stats.rx_bytes += raw.len() as u64;
                 if raw_response_body(&raw).len() > MAX_TCP_LINE_SIZE {
                     self.close();
                     return Err(HostLinkError::protocol(format!(
@@ -1133,6 +1144,10 @@ impl QueuedHostLinkClient {
 
     pub async fn is_open(&self) -> bool {
         self.client.is_open().await
+    }
+
+    pub async fn traffic_stats(&self) -> crate::HostLinkTrafficStats {
+        self.client.traffic_stats().await
     }
 
     pub async fn open(&self) -> Result<(), HostLinkError> {
