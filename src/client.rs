@@ -1063,7 +1063,9 @@ impl ClientInner {
                         .await
                         {
                             Ok(()) if matches!(self.udp_read_buf.last(), Some(b'\r' | b'\n')) => {
-                                Ok(self.udp_read_buf.clone())
+                                let raw = self.udp_read_buf.clone();
+                                let counted_len = raw.len();
+                                Ok((raw, counted_len))
                             }
                             Ok(()) => Err(HostLinkError::protocol(
                                 "UDP response is missing the required CR/LF terminator",
@@ -1078,8 +1080,8 @@ impl ClientInner {
         };
 
         match exchange_result {
-            Ok(raw) => {
-                self.traffic_stats.rx_bytes += raw.len() as u64;
+            Ok((raw, counted_len)) => {
+                self.traffic_stats.rx_bytes += counted_len as u64;
                 if raw_response_body(&raw).len() > MAX_TCP_LINE_SIZE {
                     self.close();
                     return Err(HostLinkError::protocol(format!(
@@ -1341,7 +1343,7 @@ async fn recv_tcp_line(
     rx_count: &mut usize,
     tcp_read_buf: &mut [u8],
     duration: Duration,
-) -> Result<Vec<u8>, HostLinkError> {
+) -> Result<(Vec<u8>, usize), HostLinkError> {
     loop {
         while *rx_count > 0 && matches!(rx_buf[*rx_start], b'\r' | b'\n') {
             *rx_start += 1;
@@ -1373,13 +1375,14 @@ async fn recv_tcp_line(
                 skip += 1;
             }
             let line = rx_buf[*rx_start..*rx_start + skip].to_vec();
+            let counted_len = found_idx + 1;
             *rx_start += skip;
             *rx_count -= skip;
             if *rx_start > rx_buf.len() / 2 {
                 rx_buf.copy_within(*rx_start..*rx_start + *rx_count, 0);
                 *rx_start = 0;
             }
-            return Ok(line);
+            return Ok((line, counted_len));
         }
 
         let read = timeout(duration, stream.read(tcp_read_buf))
