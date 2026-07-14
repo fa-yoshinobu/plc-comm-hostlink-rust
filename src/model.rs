@@ -5,6 +5,17 @@ use time::{Date, Month, OffsetDateTime, Time};
 use crate::error::HostLinkError;
 use crate::plc_profiles;
 
+/// Immutable lifetime traffic counters for one Host Link client.
+///
+/// TCP receive bytes count the body and first CR/LF terminator. UDP receive
+/// bytes count the complete datagram.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HostLinkTrafficStats {
+    pub request_count: u64,
+    pub tx_bytes: u64,
+    pub rx_bytes: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostLinkTransportMode {
     Tcp,

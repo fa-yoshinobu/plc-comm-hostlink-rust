@@ -146,3 +146,9 @@ local offset is returned and is not replaced with UTC.
 operations. Direct `HostLinkClient` requests are also serialized per client
 instance; the queued wrapper additionally provides an application operation
 boundary for helper workflows.
+
+## Traffic statistics
+
+Call `client.traffic_stats().await` for cumulative request, transmitted-byte, and received-byte counts.
+For TCP, a received line counts its body plus the first CR/LF terminator; extra CR/LF separators
+are consumed but not counted. For UDP, the complete response datagram is counted.

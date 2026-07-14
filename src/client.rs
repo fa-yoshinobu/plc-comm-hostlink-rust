@@ -280,6 +280,7 @@ struct ClientInner {
     // response. If the future is dropped, the next operation replaces the
     // poisoned transport before sending another request.
     exchange_incomplete: bool,
+    traffic_stats: crate::HostLinkTrafficStats,
 }
 
 impl HostLinkClient {
@@ -297,6 +298,7 @@ impl HostLinkClient {
                 monitor_bit_count: None,
                 monitor_word_count: None,
                 exchange_incomplete: false,
+                traffic_stats: crate::HostLinkTrafficStats::default(),
             })),
         }
     }
@@ -327,6 +329,10 @@ impl HostLinkClient {
 
     pub async fn plc_profile(&self) -> String {
         self.inner.lock().await.options.plc_profile.clone()
+    }
+
+    pub async fn traffic_stats(&self) -> crate::HostLinkTrafficStats {
+        self.inner.lock().await.traffic_stats
     }
 
     pub async fn set_timeout(&self, timeout: Duration) -> Result<(), HostLinkError> {
@@ -1029,6 +1035,8 @@ impl ClientInner {
             Some(Transport::Tcp(stream)) => {
                 match write_all_with_timeout(stream, &frame, self.options.timeout).await {
                     Ok(()) => {
+                        self.traffic_stats.request_count += 1;
+                        self.traffic_stats.tx_bytes += frame.len() as u64;
                         recv_tcp_line(
                             stream,
                             &mut self.rx_buf,
@@ -1045,6 +1053,8 @@ impl ClientInner {
             Some(Transport::Udp(socket)) => {
                 match send_udp_with_timeout(socket, &frame, self.options.timeout).await {
                     Ok(()) => {
+                        self.traffic_stats.request_count += 1;
+                        self.traffic_stats.tx_bytes += frame.len() as u64;
                         match recv_udp_with_timeout(
                             socket,
                             &mut self.udp_read_buf,
@@ -1053,7 +1063,9 @@ impl ClientInner {
                         .await
                         {
                             Ok(()) if matches!(self.udp_read_buf.last(), Some(b'\r' | b'\n')) => {
-                                Ok(self.udp_read_buf.clone())
+                                let raw = self.udp_read_buf.clone();
+                                let counted_len = raw.len();
+                                Ok((raw, counted_len))
                             }
                             Ok(()) => Err(HostLinkError::protocol(
                                 "UDP response is missing the required CR/LF terminator",
@@ -1068,7 +1080,8 @@ impl ClientInner {
         };
 
         match exchange_result {
-            Ok(raw) => {
+            Ok((raw, counted_len)) => {
+                self.traffic_stats.rx_bytes += counted_len as u64;
                 if raw_response_body(&raw).len() > MAX_TCP_LINE_SIZE {
                     self.close();
                     return Err(HostLinkError::protocol(format!(
@@ -1133,6 +1146,10 @@ impl QueuedHostLinkClient {
 
     pub async fn is_open(&self) -> bool {
         self.client.is_open().await
+    }
+
+    pub async fn traffic_stats(&self) -> crate::HostLinkTrafficStats {
+        self.client.traffic_stats().await
     }
 
     pub async fn open(&self) -> Result<(), HostLinkError> {
@@ -1326,7 +1343,7 @@ async fn recv_tcp_line(
     rx_count: &mut usize,
     tcp_read_buf: &mut [u8],
     duration: Duration,
-) -> Result<Vec<u8>, HostLinkError> {
+) -> Result<(Vec<u8>, usize), HostLinkError> {
     loop {
         while *rx_count > 0 && matches!(rx_buf[*rx_start], b'\r' | b'\n') {
             *rx_start += 1;
@@ -1358,13 +1375,14 @@ async fn recv_tcp_line(
                 skip += 1;
             }
             let line = rx_buf[*rx_start..*rx_start + skip].to_vec();
+            let counted_len = found_idx + 1;
             *rx_start += skip;
             *rx_count -= skip;
             if *rx_start > rx_buf.len() / 2 {
                 rx_buf.copy_within(*rx_start..*rx_start + *rx_count, 0);
                 *rx_start = 0;
             }
-            return Ok(line);
+            return Ok((line, counted_len));
         }
 
         let read = timeout(duration, stream.read(tcp_read_buf))

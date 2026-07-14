@@ -71,11 +71,18 @@ async fn udp_send_raw_accepts_large_datagram_response() {
     options.transport = HostLinkTransportMode::Udp;
     options.port = port;
     let client = HostLinkClient::connect(options).await.unwrap();
+    assert_eq!(client.traffic_stats().await, Default::default());
 
     let response = client.send_raw("LARGE").await.unwrap();
 
     assert_eq!(response.len(), 5000);
     assert!(response.iter().all(|byte| *byte == b'7'));
+    let stats = client.traffic_stats().await;
+    assert_eq!(stats.request_count, 1);
+    assert_eq!(stats.tx_bytes, b"LARGE\r".len() as u64);
+    assert_eq!(stats.rx_bytes, 5002);
+    client.close().await.unwrap();
+    assert_eq!(client.traffic_stats().await, stats);
 }
 
 #[tokio::test]
@@ -101,6 +108,10 @@ async fn udp_missing_terminator_is_rejected_and_transport_is_closed() {
     let error = client.send_raw("READ").await.unwrap_err();
     assert!(error.to_string().contains("terminator"));
     assert!(!client.is_open().await);
+    let stats = client.traffic_stats().await;
+    assert_eq!(stats.request_count, 1);
+    assert_eq!(stats.tx_bytes, b"READ\r".len() as u64);
+    assert_eq!(stats.rx_bytes, 0);
     server.await.unwrap();
 }
 
@@ -139,6 +150,10 @@ async fn timeout_contract_has_three_second_default_rejects_zero_and_closes_timed
     let error = client.send_raw("READ").await.unwrap_err();
     assert!(error.to_string().contains("timed out"));
     assert!(!client.is_open().await);
+    let stats = client.traffic_stats().await;
+    assert_eq!(stats.request_count, 1);
+    assert_eq!(stats.tx_bytes, b"READ\r".len() as u64);
+    assert_eq!(stats.rx_bytes, 0);
     server.await.unwrap();
 }
 
@@ -392,6 +407,7 @@ async fn unconnected_commands_return_typed_not_connected_without_opening_transpo
         Err(HostLinkError::NotConnected)
     ));
     assert!(!client.is_open().await);
+    assert_eq!(client.traffic_stats().await, Default::default());
 }
 
 #[tokio::test]
@@ -411,6 +427,7 @@ async fn raw_exchange_preserves_plc_error_and_non_ascii_response_bytes() {
     .unwrap();
     options.port = port;
     let client = HostLinkClient::connect(options).await.unwrap();
+    assert_eq!(client.traffic_stats().await, Default::default());
 
     assert_eq!(client.send_raw("ERROR").await.unwrap(), b"E1");
     assert_eq!(
@@ -421,6 +438,42 @@ async fn raw_exchange_preserves_plc_error_and_non_ascii_response_bytes() {
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
         vec!["ERROR", "BYTES"]
     );
+    let stats = client.traffic_stats().await;
+    assert_eq!(stats.request_count, 2);
+    assert_eq!(stats.tx_bytes, 12);
+    assert_eq!(stats.rx_bytes, 7);
+}
+
+#[tokio::test]
+async fn tcp_traffic_stats_are_independent_of_crlf_segmentation() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut first = [0_u8; 6];
+        stream.read_exact(&mut first).await.unwrap();
+        assert_eq!(&first, b"FIRST\r");
+        stream.write_all(b"FIRST\r").await.unwrap();
+
+        let mut second = [0_u8; 7];
+        stream.read_exact(&mut second).await.unwrap();
+        assert_eq!(&second, b"SECOND\r");
+        stream.write_all(b"\nSECOND\n\r").await.unwrap();
+    });
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    assert_eq!(client.send_raw("FIRST").await.unwrap(), b"FIRST");
+    assert_eq!(client.send_raw("SECOND").await.unwrap(), b"SECOND");
+    assert_eq!(client.traffic_stats().await.rx_bytes, 13);
+    server.await.unwrap();
 }
 
 #[tokio::test]
@@ -570,6 +623,62 @@ async fn tcp_eof_before_terminator_rejects_partial_response_and_closes_transport
     let error = client.send_raw("READ").await.unwrap_err();
     assert!(error.to_string().contains("before the response terminator"));
     assert!(!client.is_open().await);
+    assert_eq!(client.traffic_stats().await.rx_bytes, 0);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn tcp_oversize_partial_response_does_not_increment_receive_stats() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = [0u8; 5];
+        stream.read_exact(&mut request).await.unwrap();
+        stream.write_all(&vec![b'A'; 65_537]).await.unwrap();
+    });
+
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    options.timeout = Duration::from_secs(2);
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let error = client.send_raw("READ").await.unwrap_err();
+    assert!(error.to_string().contains("exceeds"));
+    assert_eq!(client.traffic_stats().await.rx_bytes, 0);
+    assert!(!client.is_open().await);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn complete_plc_error_line_is_counted_before_semantic_failure() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = [0u8; 3];
+        stream.read_exact(&mut request).await.unwrap();
+        stream.write_all(b"E1\r").await.unwrap();
+    });
+
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    assert!(client.clear_error().await.is_err());
+    assert_eq!(client.traffic_stats().await.rx_bytes, 3);
     server.await.unwrap();
 }
 

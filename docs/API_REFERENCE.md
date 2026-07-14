@@ -95,3 +95,9 @@ connection failure, and PLC rejection. PLC errors retain the returned code and
 response; the crate does not embed copied manual error descriptions.
 
 The complete generated Rust API for a release is available through docs.rs.
+
+## Traffic statistics
+
+`HostLinkClient::traffic_stats().await` and the queued equivalent return `HostLinkTrafficStats`.
+TCP receive bytes count the body plus the first CR/LF terminator, independent of separator
+segmentation; UDP receive bytes count the complete datagram.
