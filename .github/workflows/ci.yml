@@ -25,6 +25,11 @@ jobs:
       - name: Check release workflows do not auto-publish
         shell: pwsh
         run: ./scripts/check_no_auto_publish.ps1
+
+      - name: Check GitHub source archive contents
+        shell: pwsh
+        run: ./scripts/check_source_archive.ps1
+
       - name: Install Rust toolchain
         run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
 
