@@ -22,7 +22,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::Mutex;
-use tokio::time::timeout;
+use tokio::time::{Instant, timeout_at};
 
 const MAX_TCP_LINE_SIZE: usize = 65_536;
 const UDP_RECEIVE_BUFFER_SIZE: usize = MAX_TCP_LINE_SIZE + 2;
@@ -334,6 +334,7 @@ impl HostLinkClient {
         if timeout.is_zero() {
             return Err(HostLinkError::protocol("timeout must be greater than zero"));
         }
+        checked_deadline(timeout)?;
         self.inner.lock().await.options.timeout = timeout;
         Ok(())
     }
@@ -943,11 +944,12 @@ impl ClientInner {
         if self.options.host.trim().is_empty() || self.options.port == 0 {
             return Err(HostLinkError::protocol("invalid Host Link endpoint"));
         }
+        let connect_deadline = checked_deadline(self.options.timeout)?;
 
         let transport = match self.options.transport {
             HostLinkTransportMode::Tcp => {
-                let stream = timeout(
-                    self.options.timeout,
+                let stream = timeout_at(
+                    connect_deadline,
                     TcpStream::connect((self.options.host.as_str(), self.options.port)),
                 )
                 .await
@@ -957,8 +959,8 @@ impl ClientInner {
             }
             HostLinkTransportMode::Udp => {
                 let socket = UdpSocket::bind("0.0.0.0:0").await?;
-                timeout(
-                    self.options.timeout,
+                timeout_at(
+                    connect_deadline,
                     socket.connect((self.options.host.as_str(), self.options.port)),
                 )
                 .await
@@ -1018,10 +1020,11 @@ impl ClientInner {
         if self.transport.is_none() {
             return Err(HostLinkError::NotConnected);
         }
+        let deadline = checked_deadline(self.options.timeout)?;
         self.exchange_incomplete = true;
         let exchange_result = match self.transport.as_mut() {
             Some(Transport::Tcp(stream)) => {
-                match write_all_with_timeout(stream, &frame, self.options.timeout).await {
+                match write_all_with_timeout(stream, &frame, deadline).await {
                     Ok(()) => {
                         self.traffic_stats.request_count += 1;
                         self.traffic_stats.tx_bytes += frame.len() as u64;
@@ -1031,7 +1034,7 @@ impl ClientInner {
                             &mut self.rx_start,
                             &mut self.rx_count,
                             &mut self.tcp_read_buf,
-                            self.options.timeout,
+                            deadline,
                         )
                         .await
                     }
@@ -1039,16 +1042,11 @@ impl ClientInner {
                 }
             }
             Some(Transport::Udp(socket)) => {
-                match send_udp_with_timeout(socket, &frame, self.options.timeout).await {
+                match send_udp_with_timeout(socket, &frame, deadline).await {
                     Ok(()) => {
                         self.traffic_stats.request_count += 1;
                         self.traffic_stats.tx_bytes += frame.len() as u64;
-                        match recv_udp_with_timeout(
-                            socket,
-                            &mut self.udp_read_buf,
-                            self.options.timeout,
-                        )
-                        .await
+                        match recv_udp_with_timeout(socket, &mut self.udp_read_buf, deadline).await
                         {
                             Ok(()) if matches!(self.udp_read_buf.last(), Some(b'\r' | b'\n')) => {
                                 let raw = self.udp_read_buf.clone();
@@ -1253,12 +1251,18 @@ impl QueuedHostLinkClient {
     }
 }
 
+fn checked_deadline(duration: Duration) -> Result<Instant, HostLinkError> {
+    Instant::now()
+        .checked_add(duration)
+        .ok_or_else(|| HostLinkError::protocol("timeout is too large to form an absolute deadline"))
+}
+
 async fn write_all_with_timeout(
     stream: &mut TcpStream,
     payload: &[u8],
-    duration: Duration,
+    deadline: Instant,
 ) -> Result<(), HostLinkError> {
-    timeout(duration, stream.write_all(payload))
+    timeout_at(deadline, stream.write_all(payload))
         .await
         .map_err(|_| HostLinkError::connection("write timed out"))??;
     Ok(())
@@ -1267,9 +1271,9 @@ async fn write_all_with_timeout(
 async fn send_udp_with_timeout(
     socket: &mut UdpSocket,
     payload: &[u8],
-    duration: Duration,
+    deadline: Instant,
 ) -> Result<(), HostLinkError> {
-    timeout(duration, socket.send(payload))
+    timeout_at(deadline, socket.send(payload))
         .await
         .map_err(|_| HostLinkError::connection("write timed out"))??;
     Ok(())
@@ -1278,14 +1282,14 @@ async fn send_udp_with_timeout(
 async fn recv_udp_with_timeout(
     socket: &mut UdpSocket,
     buffer: &mut Vec<u8>,
-    duration: Duration,
+    deadline: Instant,
 ) -> Result<(), HostLinkError> {
     if buffer.len() != UDP_RECEIVE_BUFFER_SIZE {
         // UDP datagrams cannot be continued by another recv call.
         // Keep the buffer large enough for a full datagram to avoid truncating PLC responses.
         buffer.resize(UDP_RECEIVE_BUFFER_SIZE, 0);
     }
-    let read = timeout(duration, socket.recv(buffer.as_mut_slice()))
+    let read = timeout_at(deadline, socket.recv(buffer.as_mut_slice()))
         .await
         .map_err(|_| HostLinkError::connection("read timed out"))??;
     buffer.truncate(read);
@@ -1312,7 +1316,7 @@ async fn recv_tcp_line(
     rx_start: &mut usize,
     rx_count: &mut usize,
     tcp_read_buf: &mut [u8],
-    duration: Duration,
+    deadline: Instant,
 ) -> Result<(Vec<u8>, usize), HostLinkError> {
     loop {
         while *rx_count > 0 && matches!(rx_buf[*rx_start], b'\r' | b'\n') {
@@ -1355,7 +1359,7 @@ async fn recv_tcp_line(
             return Ok((line, counted_len));
         }
 
-        let read = timeout(duration, stream.read(tcp_read_buf))
+        let read = timeout_at(deadline, stream.read(tcp_read_buf))
             .await
             .map_err(|_| HostLinkError::connection("read timed out"))??;
         if read == 0 {

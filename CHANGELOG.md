@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Library: Removed an unreachable maintainer-only trace-hook implementation and its test-only model types. The hook was crate-private, had no production caller, and was not part of the public API.
 
+### Fixed
+- Library: TCP and UDP exchanges now share one checked absolute deadline across write and complete response assembly, so repeated partial data cannot restart the timeout. Timeout values too large to form a runtime deadline are rejected before transport use instead of risking a panic.
+
+### Tests
+- Tests: Added segmented-response deadline, delayed-write, UDP deadline, and oversized-timeout regression coverage.
+
 ## [3.2.0] - 2026-07-17
 
 - Release: Bumped crate and lockfile metadata to `3.2.0`.

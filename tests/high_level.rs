@@ -127,7 +127,20 @@ async fn timeout_contract_has_three_second_default_rejects_zero_and_closes_timed
     assert_eq!(default_options.timeout, Duration::from_secs(3));
     let unconnected = HostLinkClient::new(default_options);
     assert!(unconnected.set_timeout(Duration::ZERO).await.is_err());
+    assert!(unconnected.set_timeout(Duration::MAX).await.is_err());
     assert_eq!(unconnected.timeout().await, Duration::from_secs(3));
+
+    let mut oversized_options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    oversized_options.timeout = Duration::MAX;
+    let oversized = HostLinkClient::new(oversized_options);
+    let oversized_error = oversized.open().await.unwrap_err();
+    assert!(oversized_error.to_string().contains("too large"));
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -154,6 +167,40 @@ async fn timeout_contract_has_three_second_default_rejects_zero_and_closes_timed
     assert_eq!(stats.request_count, 1);
     assert_eq!(stats.tx_bytes, b"READ\r".len() as u64);
     assert_eq!(stats.rx_bytes, 0);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn tcp_timeout_is_one_deadline_for_a_trickled_response() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 5];
+        stream.read_exact(&mut request).await.unwrap();
+        for _ in 0..5 {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            if stream.write_all(b"A").await.is_err() {
+                break;
+            }
+        }
+    });
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    options.timeout = Duration::from_millis(80);
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let started = tokio::time::Instant::now();
+    let error = client.send_raw("READ").await.unwrap_err();
+    assert!(error.to_string().contains("timed out"));
+    assert!(started.elapsed() < Duration::from_millis(200));
+    assert!(!client.is_open().await);
     server.await.unwrap();
 }
 
