@@ -8,8 +8,8 @@ use crate::address::{
 use crate::error::HostLinkError;
 use crate::helpers;
 use crate::model::{
-    HostLinkClock, HostLinkConnectionOptions, HostLinkMonitorWord, HostLinkTraceDirection,
-    HostLinkTraceFrame, HostLinkTransportMode, KvModelInfo, KvPlcMode, TraceHook,
+    HostLinkClock, HostLinkConnectionOptions, HostLinkMonitorWord, HostLinkTransportMode,
+    KvModelInfo, KvPlcMode,
 };
 use crate::protocol::{
     build_frame, decode_comment_response, decode_response, ensure_success, raw_response_body,
@@ -17,9 +17,8 @@ use crate::protocol::{
 };
 use std::fmt::Write as _;
 use std::future::Future;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::Mutex;
@@ -44,7 +43,6 @@ pub trait HostLinkPayloadValue {
         Ok(())
     }
 }
-
 fn validate_integer_payload(value: i128, data_format: &str) -> Result<(), HostLinkError> {
     let valid = match data_format {
         "" => matches!(value, 0 | 1),
@@ -62,7 +60,6 @@ fn validate_integer_payload(value: i128, data_format: &str) -> Result<(), HostLi
         )))
     }
 }
-
 fn validate_response_tokens(tokens: &[String], data_format: &str) -> Result<(), HostLinkError> {
     if tokens.is_empty() {
         return Err(HostLinkError::protocol("Missing response token"));
@@ -268,7 +265,6 @@ enum Transport {
 struct ClientInner {
     options: HostLinkConnectionOptions,
     transport: Option<Transport>,
-    trace_hook: Option<TraceHook>,
     rx_buf: Vec<u8>,
     rx_start: usize,
     rx_count: usize,
@@ -289,7 +285,6 @@ impl HostLinkClient {
             inner: Arc::new(Mutex::new(ClientInner {
                 options,
                 transport: None,
-                trace_hook: None,
                 rx_buf: vec![0u8; 4096],
                 rx_start: 0,
                 rx_count: 0,
@@ -341,11 +336,6 @@ impl HostLinkClient {
         }
         self.inner.lock().await.options.timeout = timeout;
         Ok(())
-    }
-
-    #[allow(dead_code)] // Maintainer-only diagnostics; intentionally absent from the public API.
-    pub(crate) async fn set_trace_hook(&self, trace_hook: Option<TraceHook>) {
-        self.inner.lock().await.trace_hook = trace_hook;
     }
 
     #[doc(hidden)]
@@ -1028,8 +1018,6 @@ impl ClientInner {
         if self.transport.is_none() {
             return Err(HostLinkError::NotConnected);
         }
-        self.fire_trace(HostLinkTraceDirection::Send, &frame);
-
         self.exchange_incomplete = true;
         let exchange_result = match self.transport.as_mut() {
             Some(Transport::Tcp(stream)) => {
@@ -1089,24 +1077,12 @@ impl ClientInner {
                     )));
                 }
                 self.exchange_incomplete = false;
-                self.fire_trace(HostLinkTraceDirection::Receive, &raw);
                 Ok(raw)
             }
             Err(err) => {
                 self.close();
                 Err(err)
             }
-        }
-    }
-
-    fn fire_trace(&self, direction: HostLinkTraceDirection, data: &[u8]) {
-        if let Some(trace_hook) = &self.trace_hook {
-            let frame = HostLinkTraceFrame {
-                direction,
-                data: data.to_vec(),
-                timestamp: SystemTime::now(),
-            };
-            let _ = catch_unwind(AssertUnwindSafe(|| trace_hook(frame)));
         }
     }
 }
@@ -1160,12 +1136,6 @@ impl QueuedHostLinkClient {
     pub async fn close(&self) -> Result<(), HostLinkError> {
         let _guard = self.gate.lock().await;
         self.client.close().await
-    }
-
-    #[allow(dead_code)] // Maintainer-only diagnostics; intentionally absent from the public API.
-    pub(crate) async fn set_trace_hook(&self, trace_hook: Option<TraceHook>) {
-        let _guard = self.gate.lock().await;
-        self.client.set_trace_hook(trace_hook).await;
     }
 
     pub async fn execute_async<F, Fut, T>(&self, operation: F) -> Result<T, HostLinkError>
@@ -1424,52 +1394,5 @@ async fn recv_tcp_line(
                 )));
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Mutex as StdMutex;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-
-    #[tokio::test]
-    async fn maintainer_trace_observes_one_send_and_receive_in_order() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut request = [0_u8; 3];
-            stream.read_exact(&mut request).await.unwrap();
-            assert_eq!(&request, b"M0\r");
-            stream.write_all(b"OK\r").await.unwrap();
-        });
-
-        let options = HostLinkConnectionOptions::new(
-            "127.0.0.1",
-            port,
-            HostLinkTransportMode::Tcp,
-            "keyence:kv-8000",
-        )
-        .unwrap();
-        let client = HostLinkClient::connect(options).await.unwrap();
-        let frames = Arc::new(StdMutex::new(Vec::new()));
-        let observed = Arc::clone(&frames);
-        client
-            .set_trace_hook(Some(Arc::new(move |frame| {
-                observed.lock().unwrap().push(frame);
-            })))
-            .await;
-
-        client.change_mode(KvPlcMode::Program).await.unwrap();
-        server.await.unwrap();
-
-        let frames = frames.lock().unwrap();
-        assert_eq!(frames.len(), 2);
-        assert_eq!(frames[0].direction, HostLinkTraceDirection::Send);
-        assert_eq!(frames[0].data, b"M0\r");
-        assert_eq!(frames[1].direction, HostLinkTraceDirection::Receive);
-        assert_eq!(frames[1].data, b"OK\r");
     }
 }

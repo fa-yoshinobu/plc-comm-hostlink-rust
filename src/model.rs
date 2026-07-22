@@ -1,5 +1,3 @@
-use std::sync::Arc;
-use std::time::SystemTime;
 use time::{Date, Month, OffsetDateTime, Time};
 
 use crate::error::HostLinkError;
@@ -48,23 +46,6 @@ pub enum KvPlcMode {
     Program = 0,
     Run = 1,
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
-pub enum HostLinkTraceDirection {
-    Send,
-    Receive,
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct HostLinkTraceFrame {
-    pub direction: HostLinkTraceDirection,
-    pub data: Vec<u8>,
-    pub timestamp: SystemTime,
-}
-
-pub type TraceHook = Arc<dyn Fn(HostLinkTraceFrame) + Send + Sync>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KvModelInfo {
