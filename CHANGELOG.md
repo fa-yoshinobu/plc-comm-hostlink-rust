@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Library: Removed an unreachable maintainer-only trace-hook implementation and its test-only model types. The hook was crate-private, had no production caller, and was not part of the public API.
+
 ## [3.2.0] - 2026-07-17
 
 - Release: Bumped crate and lockfile metadata to `3.2.0`.
