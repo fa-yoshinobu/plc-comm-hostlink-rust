@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Library: TCP and UDP exchanges now share one checked absolute deadline across write and complete response assembly, so repeated partial data cannot restart the timeout. Timeout values too large to form a runtime deadline are rejected before transport use instead of risking a panic.
+- Library: Direct-bit numeric and bit-in-word operations now preserve complete 16-/32-bit values, sequential typed reads pack direct-bit tokens, and RDS requests split at command limits.
+- Library: Hexadecimal VB parsing preserves the `F` digit through `F9FF`, and profile/device catalog upper bounds no longer reject transport sends.
 
 ### Tests
 - Tests: Added segmented-response deadline, delayed-write, UDP deadline, and oversized-timeout regression coverage.

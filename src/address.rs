@@ -29,8 +29,6 @@ const WS_DEVICE_TYPES: &[&str] = &["T", "C", "CTH", "CTC"];
 
 #[derive(Debug, Clone, Copy)]
 struct DeviceRange {
-    lo: u32,
-    hi: u32,
     base: u32,
 }
 
@@ -221,10 +219,6 @@ pub(crate) fn bit_bank_logical_number(number: u32) -> u32 {
     (number / 100) * 16 + (number % 100)
 }
 
-fn bit_bank_number_from_logical(number: u32) -> u32 {
-    (number / 16) * 100 + (number % 16)
-}
-
 fn format_bit_bank_number(number: u32) -> String {
     let bank = number / 100;
     let bit = number % 100;
@@ -314,13 +308,9 @@ fn parse_device_internal(text: &str) -> Result<KvDeviceAddress, HostLinkError> {
             ))
         })?
     };
-    if number < range.lo || number > range.hi {
-        return Err(HostLinkError::protocol(format!(
-            "Device number out of range: {device_type}{number_text} (allowed: {}..{})",
-            format_device_number(&device_type, range.lo),
-            format_device_number(&device_type, range.hi)
-        )));
-    }
+    // PROFILE_RANGE_NOT_A_TRANSPORT_GUARD: catalog/profile upper bounds are
+    // application metadata. Transport validation keeps syntax, supported family,
+    // non-negative/u32 representation, and command limits, but does not reject by catalog range.
     if uses_bit_bank_address(&device_type) && !is_valid_bit_bank_number(number) {
         return Err(HostLinkError::protocol(format!(
             "Invalid bit-bank device number: {device_type}{number_text} (lower two digits must be 00..15)"
@@ -470,7 +460,7 @@ pub fn validate_device_span(
     effective_format: &str,
     count: usize,
 ) -> Result<(), HostLinkError> {
-    let range = device_range(device_type).ok_or_else(|| {
+    let _range = device_range(device_type).ok_or_else(|| {
         HostLinkError::protocol(format!("Unsupported device type: {device_type}"))
     })?;
     if count == 0 {
@@ -485,28 +475,10 @@ pub fn validate_device_span(
     } else {
         start_number
     };
-    let hi_span_number = if uses_bit_bank_address(device_type) {
-        bit_bank_logical_number(range.hi)
-    } else {
-        range.hi
-    };
-    let end_span_number = start_span_number
+    let _end_span_number = start_span_number
         .checked_add((count as u32).saturating_mul(device_width))
         .and_then(|value| value.checked_sub(1))
         .ok_or_else(|| HostLinkError::protocol("Device span overflow"))?;
-
-    if start_number < range.lo || start_number > range.hi || end_span_number > hi_span_number {
-        let start_text = format_device_number(device_type, start_number);
-        let end_number = if uses_bit_bank_address(device_type) {
-            bit_bank_number_from_logical(end_span_number)
-        } else {
-            end_span_number
-        };
-        let end_text = format_device_number(device_type, end_number);
-        return Err(HostLinkError::protocol(format!(
-            "Device span out of range: {device_type}{start_text}..{device_type}{end_text} with format '{effective_format}'"
-        )));
-    }
 
     Ok(())
 }
@@ -602,24 +574,6 @@ fn extract_suffix(raw: &str) -> Result<(&str, String), HostLinkError> {
     }
 }
 
-fn format_device_number(device_type: &str, value: u32) -> String {
-    if uses_bit_bank_address(device_type) {
-        return format_bit_bank_number(value);
-    }
-    if uses_xym_bit_address(device_type) {
-        return format_xym_bit_number(value);
-    }
-
-    let Some(range) = device_range(device_type) else {
-        return value.to_string();
-    };
-    if range.base == 16 {
-        format!("{value:X}")
-    } else {
-        value.to_string()
-    }
-}
-
 fn parse_xym_bit_number(device_type: &str, number_text: &str) -> Result<u32, HostLinkError> {
     let bank_text = if number_text.len() == 1 {
         "0"
@@ -652,135 +606,14 @@ fn parse_xym_bit_number(device_type: &str, number_text: &str) -> Result<u32, Hos
 }
 
 fn device_range(device_type: &str) -> Option<DeviceRange> {
-    let range = match device_type {
-        "R" => DeviceRange {
-            lo: 0,
-            hi: 199_915,
-            base: 10,
-        },
-        "B" => DeviceRange {
-            lo: 0,
-            hi: 0x7FFF,
-            base: 16,
-        },
-        "MR" => DeviceRange {
-            lo: 0,
-            hi: 399_915,
-            base: 10,
-        },
-        "LR" => DeviceRange {
-            lo: 0,
-            hi: 99_915,
-            base: 10,
-        },
-        "CR" => DeviceRange {
-            lo: 0,
-            hi: 7_915,
-            base: 10,
-        },
-        "VB" => DeviceRange {
-            lo: 0,
-            hi: 0xF9FF,
-            base: 16,
-        },
-        "DM" => DeviceRange {
-            lo: 0,
-            hi: 65_534,
-            base: 10,
-        },
-        "EM" => DeviceRange {
-            lo: 0,
-            hi: 65_534,
-            base: 10,
-        },
-        "FM" => DeviceRange {
-            lo: 0,
-            hi: 32_767,
-            base: 10,
-        },
-        "ZF" => DeviceRange {
-            lo: 0,
-            hi: 524_287,
-            base: 10,
-        },
-        "W" => DeviceRange {
-            lo: 0,
-            hi: 0x7FFF,
-            base: 16,
-        },
-        "TM" => DeviceRange {
-            lo: 0,
-            hi: 511,
-            base: 10,
-        },
-        "Z" => DeviceRange {
-            lo: 1,
-            hi: 12,
-            base: 10,
-        },
-        "T" | "TC" | "TS" | "C" | "CC" | "CS" => DeviceRange {
-            lo: 0,
-            hi: 3_999,
-            base: 10,
-        },
-        "CTH" => DeviceRange {
-            lo: 0,
-            hi: 3,
-            base: 10,
-        },
-        "CTC" => DeviceRange {
-            lo: 0,
-            hi: 7,
-            base: 10,
-        },
-        "AT" => DeviceRange {
-            lo: 0,
-            hi: 7,
-            base: 10,
-        },
-        "CM" => DeviceRange {
-            lo: 0,
-            hi: 7_599,
-            base: 10,
-        },
-        "VM" => DeviceRange {
-            lo: 0,
-            hi: 589_823,
-            base: 10,
-        },
-        "X" => DeviceRange {
-            lo: 0,
-            hi: 1_999 * 16 + 15,
-            base: 10,
-        },
-        "Y" => DeviceRange {
-            lo: 0,
-            hi: 1_999 * 16 + 15,
-            base: 10,
-        },
-        "M" => DeviceRange {
-            lo: 0,
-            hi: 63_999,
-            base: 10,
-        },
-        "L" => DeviceRange {
-            lo: 0,
-            hi: 15_999,
-            base: 10,
-        },
-        "D" | "E" => DeviceRange {
-            lo: 0,
-            hi: 65_534,
-            base: 10,
-        },
-        "F" => DeviceRange {
-            lo: 0,
-            hi: 32_767,
-            base: 10,
-        },
+    let base = match device_type {
+        "B" | "VB" | "W" => 16,
+        "R" | "MR" | "LR" | "CR" | "DM" | "EM" | "FM" | "ZF" | "TM" | "Z" | "T" | "TC" | "TS"
+        | "C" | "CC" | "CS" | "CTH" | "CTC" | "AT" | "CM" | "VM" | "X" | "Y" | "M" | "L" | "D"
+        | "E" | "F" => 10,
         _ => return None,
     };
-    Some(range)
+    Some(DeviceRange { base })
 }
 
 #[cfg(test)]
@@ -868,7 +701,7 @@ mod tests {
     #[test]
     fn validate_device_span_uses_bit_bank_point_count() {
         validate_device_span("CR", 7900, "", 16).unwrap();
-        assert!(validate_device_span("CR", 7900, "", 17).is_err());
+        validate_device_span("CR", 7900, "", 17).unwrap();
     }
 
     #[test]
@@ -876,16 +709,16 @@ mod tests {
         validate_device_span("R", 199900, "", 16).unwrap();
         validate_device_span("R", 199900, ".U", 1).unwrap();
         validate_device_span("R", 199800, ".D", 1).unwrap();
-        assert!(validate_device_span("R", 199900, ".U", 2).is_err());
-        assert!(validate_device_span("R", 199900, ".D", 1).is_err());
-        assert!(validate_device_span("CR", 7900, ".U", 2).is_err());
+        validate_device_span("R", 199900, ".U", 2).unwrap();
+        validate_device_span("R", 199900, ".D", 1).unwrap();
+        validate_device_span("CR", 7900, ".U", 2).unwrap();
     }
 
     #[test]
     fn validate_device_span_treats_at_32bit_as_device_points() {
         validate_device_span("AT", 7, ".D", 1).unwrap();
         validate_device_span("AT", 0, ".D", 8).unwrap();
-        assert!(validate_device_span("AT", 1, ".D", 8).is_err());
+        validate_device_span("AT", 1, ".D", 8).unwrap();
     }
 
     #[test]
@@ -904,14 +737,14 @@ mod tests {
 
         validate_device_span("T", 3880, ".D", 120).unwrap();
         validate_device_span("Z", 1, ".D", 12).unwrap();
-        assert!(validate_device_span("T", 3881, ".D", 120).is_err());
-        assert!(validate_device_span("Z", 2, ".D", 12).is_err());
+        validate_device_span("T", 3881, ".D", 120).unwrap();
+        validate_device_span("Z", 2, ".D", 12).unwrap();
     }
 
     #[test]
     fn parse_device_accepts_high_xym_m_addresses() {
         assert_eq!(parse_device("M63872").unwrap().to_text().unwrap(), "M63872");
-        assert!(parse_device("M64000").is_err());
+        assert_eq!(parse_device("M64000").unwrap().to_text().unwrap(), "M64000");
     }
 
     #[test]
@@ -926,21 +759,21 @@ mod tests {
             "Invalid X/Y device number: X3F0 (bank digits must be decimal and bit digit must be 0..F)"
         );
         assert_eq!(parse_device("X1999F").unwrap().to_text().unwrap(), "X1999F");
-        assert!(parse_device("X20000").is_err());
+        assert_eq!(parse_device("X20000").unwrap().to_text().unwrap(), "X20000");
         assert_eq!(parse_device("Y1999F").unwrap().to_text().unwrap(), "Y1999F");
-        assert!(parse_device("Y20000").is_err());
+        assert_eq!(parse_device("Y20000").unwrap().to_text().unwrap(), "Y20000");
     }
 
     #[test]
     fn validate_device_span_allows_xym_m_upper_bound() {
         validate_device_span("X", 1_999 * 16 + 15, "", 1).unwrap();
-        assert!(validate_device_span("X", 1_999 * 16 + 15, "", 2).is_err());
+        validate_device_span("X", 1_999 * 16 + 15, "", 2).unwrap();
         validate_device_span("Y", 1_999 * 16 + 15, "", 1).unwrap();
-        assert!(validate_device_span("Y", 1_999 * 16 + 15, "", 2).is_err());
+        validate_device_span("Y", 1_999 * 16 + 15, "", 2).unwrap();
         validate_device_span("M", 63_998, "", 1).unwrap();
         validate_device_span("M", 63_998, "", 2).unwrap();
-        assert!(validate_device_span("M", 63_999, "", 2).is_err());
-        assert!(validate_device_span("L", 16_000, "", 1).is_err());
+        validate_device_span("M", 63_999, "", 2).unwrap();
+        validate_device_span("L", 16_000, "", 1).unwrap();
     }
 
     #[test]

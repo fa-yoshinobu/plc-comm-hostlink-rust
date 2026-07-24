@@ -888,14 +888,18 @@ impl HostLinkClient {
         let mut inner = self.inner.lock().await;
         let response = inner.send_decoded(&format!("RD {address_text}")).await?;
         let tokens = split_data_tokens(&response);
-        if tokens.len() != 1 {
-            return Err(HostLinkError::protocol(
-                "Bit-in-word read did not return exactly one unsigned word",
-            ));
-        }
-        let current = tokens[0]
-            .parse::<u16>()
-            .map_err(|_| HostLinkError::protocol("Invalid unsigned 16-bit response"))?;
+        let current = if is_direct_bit_device_type(&address.device_type) {
+            helpers::pack_direct_bit_tokens(&tokens, 16, device)? as u16
+        } else {
+            if tokens.len() != 1 {
+                return Err(HostLinkError::protocol(
+                    "Bit-in-word read did not return exactly one unsigned word",
+                ));
+            }
+            tokens[0]
+                .parse::<u16>()
+                .map_err(|_| HostLinkError::protocol("Invalid unsigned 16-bit response"))?
+        };
         let next = if value {
             current | (1 << bit_index)
         } else {

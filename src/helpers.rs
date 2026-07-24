@@ -1,6 +1,6 @@
 use crate::address::{
-    KvDeviceAddress, parse_device, parse_named_address_parts, require_explicit_format,
-    require_no_suffix, validate_device_count, validate_device_span,
+    KvDeviceAddress, is_direct_bit_device_type, parse_device, parse_named_address_parts,
+    require_explicit_format, require_no_suffix, validate_device_count, validate_device_span,
 };
 use crate::client::{HostLinkClient, HostLinkPayloadValue};
 use crate::error::HostLinkError;
@@ -96,6 +96,33 @@ pub async fn read_typed(
         ));
     }
     let device = device.trim().to_ascii_uppercase();
+    let parsed_device = parse_device(&device)?;
+    let direct_bit_device = is_direct_bit_device_type(&parsed_device.device_type);
+
+    if direct_bit_device && dtype != "BIT" {
+        if dtype == "F" {
+            return Err(HostLinkError::protocol(
+                "Float reads are not defined for direct bit devices.",
+            ));
+        }
+        let expected = if matches!(dtype.as_str(), "D" | "L") {
+            32
+        } else {
+            16
+        };
+        let tokens = client.read(&device, Some(&dtype)).await?;
+        let packed = pack_direct_bit_tokens(&tokens, expected, &device)?;
+        return match dtype.as_str() {
+            "U" => Ok(HostLinkValue::U16(packed as u16)),
+            "S" => Ok(HostLinkValue::I16(packed as u16 as i16)),
+            "D" => Ok(HostLinkValue::U32(packed)),
+            "L" => Ok(HostLinkValue::I32(packed as i32)),
+            "H" => Ok(HostLinkValue::Text(format!("{:04X}", packed as u16))),
+            other => Err(HostLinkError::protocol(format!(
+                "Unsupported direct-bit word dtype '{other}'."
+            ))),
+        };
+    }
 
     match dtype.as_str() {
         "F" => {
@@ -361,6 +388,26 @@ pub(crate) fn parse_bool_token(token: &str) -> Result<bool, HostLinkError> {
     }
 }
 
+pub(crate) fn pack_direct_bit_tokens(
+    tokens: &[String],
+    expected: usize,
+    context: &str,
+) -> Result<u32, HostLinkError> {
+    if tokens.len() != expected {
+        return Err(HostLinkError::protocol(format!(
+            "Direct-bit word response for '{context}' returned {} tokens; expected {expected}",
+            tokens.len()
+        )));
+    }
+    let mut packed = 0u32;
+    for (bit, token) in tokens.iter().enumerate() {
+        if parse_bool_token(token)? {
+            packed |= 1u32 << bit;
+        }
+    }
+    Ok(packed)
+}
+
 fn response_tokens(response_text: &str) -> impl Iterator<Item = &str> {
     response_text
         .split([' ', ','])
@@ -548,13 +595,19 @@ pub(crate) async fn read_named_sequential(
         let (base_address, dtype, bit_index) = parse_named_address_parts(address)?;
         if dtype == "BIT_IN_WORD" {
             let bit_index = require_bit_in_word_index(address, bit_index)?;
-            let word = read_single_parsed::<u16>(
-                client,
-                &base_address,
-                Some("U"),
-                "Invalid unsigned 16-bit response",
-            )
-            .await?;
+            let parsed = parse_device(&base_address)?;
+            let word = if is_direct_bit_device_type(&parsed.device_type) {
+                let tokens = client.read(&base_address, Some("U")).await?;
+                pack_direct_bit_tokens(&tokens, 16, &base_address)? as u16
+            } else {
+                read_single_parsed::<u16>(
+                    client,
+                    &base_address,
+                    Some("U"),
+                    "Invalid unsigned 16-bit response",
+                )
+                .await?
+            };
             result.insert(
                 address.clone(),
                 HostLinkValue::Bool(((word >> bit_index) & 1) != 0),

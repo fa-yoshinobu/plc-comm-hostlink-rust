@@ -713,8 +713,7 @@ fn parse_segment_number(
     let normalized = text.trim();
     let trimmed = normalized
         .strip_prefix(default_device)
-        .unwrap_or(normalized)
-        .trim_start_matches(|ch: char| ch.is_ascii_alphabetic());
+        .unwrap_or(normalized);
     if trimmed.is_empty() {
         return None;
     }
@@ -1009,6 +1008,9 @@ mod tests {
             nano.entry("VB").unwrap().address_range.as_deref(),
             Some("VB0-1FFF")
         );
+        assert_eq!(nano.entry("VB").unwrap().upper_bound, Some(0x1FFF));
+        let kv8000 = device_range_catalog_for_plc_profile("keyence:kv-8000").unwrap();
+        assert_eq!(kv8000.entry("VB").unwrap().upper_bound, Some(0xF9FF));
         assert_eq!(
             nano.entry("CTC").unwrap().address_range.as_deref(),
             Some("CTC0-7")
