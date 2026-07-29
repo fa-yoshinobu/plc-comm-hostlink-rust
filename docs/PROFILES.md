@@ -1,6 +1,8 @@
 # PLC profiles
 
 PLC profiles select one embedded device-range catalog. They are useful when you build UI validation, address pickers, or model-specific checks before talking to the PLC. The library accepts only the exact canonical strings in this table.
+Models not represented below, including KV-700 and KV-1000, do not currently
+have a canonical profile.
 Use crate-root `plc_profile_descriptors()` to enumerate canonical names, display labels,
 connection eligibility, and XYM base profiles for a UI. Store the canonical profile string,
 not the display name.
@@ -23,24 +25,25 @@ amount of work.
 
 Device-family notation, type suffixes, XYM aliases, and static range tables are shared across the KV Host Link libraries. Use the common [KV Host Link Device Ranges](https://fa-yoshinobu.github.io/plc-comm-docs-site/plc-setup/kv/device-ranges/) page for those details.
 
-The tables below only identify the canonical profile names and the intended KV families.
+The table below identifies the canonical profile names, intended hardware, and
+address notation. Device ranges remain in the shared reference above.
 
 ## Supported PLC profiles
 
-| Canonical profile | Display name | Runtime model |
-| --- | --- | --- |
-| `keyence:kv-nano` | `KEYENCE KV-NANO` | `KV-N24nn`, `KV-N40nn`, `KV-N60nn`, `KV-NC32T` |
-| `keyence:kv-nano-xym` | `KEYENCE KV-NANO (XYM)` | KV-NANO family with XYM aliases. |
-| `keyence:kv-3000` | `KEYENCE KV-3000` | `KV-3000` |
-| `keyence:kv-3000-xym` | `KEYENCE KV-3000 (XYM)` | KV-3000 with XYM aliases. |
-| `keyence:kv-5000` | `KEYENCE KV-5000` | `KV-5000`, `KV-5500` |
-| `keyence:kv-5000-xym` | `KEYENCE KV-5000 (XYM)` | KV-5000 family with XYM aliases. |
-| `keyence:kv-7000` | `KEYENCE KV-7000` | `KV-7000`, `KV-7300`, `KV-7500` |
-| `keyence:kv-7000-xym` | `KEYENCE KV-7000 (XYM)` | KV-7000 family with XYM aliases. |
-| `keyence:kv-8000` | `KEYENCE KV-8000` | `KV-8000`, `KV-8000A` |
-| `keyence:kv-8000-xym` | `KEYENCE KV-8000 (XYM)` | KV-8000 family with XYM aliases. |
-| `keyence:kv-x500` | `KEYENCE KV-X500` | `KV-X310`, `KV-X500`, `KV-X520`, `KV-X530`, `KV-X550` |
-| `keyence:kv-x500-xym` | `KEYENCE KV-X500 (XYM)` | KV-X500 family with XYM aliases. |
+| Canonical profile | Display name | Intended hardware | Address notation |
+| --- | --- | --- | --- |
+| `keyence:kv-nano` | KEYENCE KV-NANO | `KV-N24nn`, `KV-N40nn`, `KV-N60nn`, `KV-NC32T` | Native KV notation. |
+| `keyence:kv-nano-xym` | KEYENCE KV-NANO (XYM) | Same KV-NANO family | XYM aliases over `keyence:kv-nano`. |
+| `keyence:kv-3000` | KEYENCE KV-3000 | `KV-3000` | Native KV notation. |
+| `keyence:kv-3000-xym` | KEYENCE KV-3000 (XYM) | Same KV-3000 family | XYM aliases over `keyence:kv-3000`. |
+| `keyence:kv-5000` | KEYENCE KV-5000 | `KV-5000`, `KV-5500` | Native KV notation. |
+| `keyence:kv-5000-xym` | KEYENCE KV-5000 (XYM) | Same KV-5000 family | XYM aliases over `keyence:kv-5000`. |
+| `keyence:kv-7000` | KEYENCE KV-7000 | `KV-7000`, `KV-7300`, `KV-7500` | Native KV notation. |
+| `keyence:kv-7000-xym` | KEYENCE KV-7000 (XYM) | Same KV-7000 family | XYM aliases over `keyence:kv-7000`. |
+| `keyence:kv-8000` | KEYENCE KV-8000 | `KV-8000`, `KV-8000A` | Native KV notation. |
+| `keyence:kv-8000-xym` | KEYENCE KV-8000 (XYM) | Same KV-8000 family | XYM aliases over `keyence:kv-8000`. |
+| `keyence:kv-x500` | KEYENCE KV-X500 | `KV-X310`, `KV-X500`, `KV-X520`, `KV-X530`, `KV-X550` | Native KV notation. |
+| `keyence:kv-x500-xym` | KEYENCE KV-X500 (XYM) | Same KV-X500 family | XYM aliases over `keyence:kv-x500`. |
 
 ## How to select
 
