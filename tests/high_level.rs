@@ -171,6 +171,43 @@ async fn timeout_contract_has_three_second_default_rejects_zero_and_closes_timed
 }
 
 #[tokio::test]
+async fn read_named_direct_bit_word_views_use_independent_sixteen_bit_reads() {
+    let first = (0..16)
+        .map(|bit| if matches!(bit, 0 | 3 | 15) { "1" } else { "0" })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let second = (0..16)
+        .map(|bit| if matches!(bit, 1 | 15) { "1" } else { "0" })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let (port, received) = start_scripted_server(move |command| match command.as_str() {
+        "RD M0.U" => first.clone(),
+        "RD M1.U" => second.clone(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let result = client.read_named(&["M0:U", "M1:U"]).await.unwrap();
+
+    assert_eq!(result["M0:U"], HostLinkValue::U16(0x8009));
+    assert_eq!(result["M1:U"], HostLinkValue::U16(0x8002));
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RD M0.U", "RD M1.U"]
+    );
+}
+
+#[tokio::test]
 async fn tcp_timeout_is_one_deadline_for_a_trickled_response() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -1494,8 +1531,12 @@ async fn poll_reuses_compiled_plan_for_each_cycle() {
 }
 
 #[tokio::test]
-async fn read_rejects_32_bit_device_end_crossing_before_send() {
-    let (port, received) = start_scripted_server(|_| "OK".to_owned()).await;
+async fn read_sends_32_bit_device_at_catalog_upper_boundary() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RD DM65534.D" => "1".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
 
     let mut options = HostLinkConnectionOptions::new(
         "127.0.0.1",
@@ -1506,10 +1547,13 @@ async fn read_rejects_32_bit_device_end_crossing_before_send() {
     .unwrap();
     options.port = port;
     let client = HostLinkClient::connect(options).await.unwrap();
-    let error = read_typed(&client, "DM65534", "D").await.unwrap_err();
+    let value = read_typed(&client, "DM65534", "D").await.unwrap();
 
-    assert!(error.to_string().contains("Device span out of range"));
-    assert!(received.lock().unwrap().is_empty());
+    assert_eq!(value, HostLinkValue::U32(1));
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RD DM65534.D"]
+    );
 }
 
 #[tokio::test]

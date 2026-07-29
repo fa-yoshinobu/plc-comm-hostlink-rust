@@ -79,11 +79,17 @@ pub(crate) fn compile_read_named_plan(addresses: &[String]) -> Option<CompiledRe
 
         for request in sorted {
             let request_start = read_plan_number(&request);
-            let request_end_exclusive = request_start + get_word_width(request.kind) as u32;
+            let request_end_exclusive =
+                request_start.checked_add(get_word_width(request.kind) as u32)?;
             let request_mode = segment_mode_for_kind(request.kind);
+            let segment_limit =
+                read_plan_segment_limit(&request.base_address.device_type, request_mode);
+            let exceeds_segment_limit = current_start.is_some()
+                && request_end_exclusive.checked_sub(current_start_number)? > segment_limit as u32;
             if current_start.is_none()
                 || request_start > current_end_exclusive
                 || current_mode != Some(request_mode)
+                || exceeds_segment_limit
             {
                 if let Some(start_address) = current_start.take() {
                     segments.push(ReadPlanSegment {
@@ -147,6 +153,12 @@ fn try_parse_optimizable_read_named_request(
         } else {
             (try_map_read_plan_value_kind(&dtype)?, 0)
         };
+    if is_direct_bit_device_type(&base_address.device_type) && kind != ReadPlanValueKind::DirectBit
+    {
+        // Direct-bit word views return 16/32 tokens per RD. They cannot share the
+        // normal word-device RDS plan without shifting the logical values.
+        return None;
+    }
     if is_native_32bit_device_type(&base_address.device_type)
         && matches!(
             kind,
@@ -197,6 +209,17 @@ fn get_word_width(kind: ReadPlanValueKind) -> usize {
         | ReadPlanValueKind::Signed32
         | ReadPlanValueKind::Float32 => 2,
         _ => 1,
+    }
+}
+
+fn read_plan_segment_limit(device_type: &str, mode: ReadPlanSegmentMode) -> usize {
+    if mode == ReadPlanSegmentMode::DirectBits {
+        return 1000;
+    }
+    match device_type {
+        "TM" => 512,
+        "Z" => 12,
+        _ => 1000,
     }
 }
 
