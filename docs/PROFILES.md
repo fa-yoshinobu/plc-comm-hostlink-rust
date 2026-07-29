@@ -5,6 +5,20 @@ Use crate-root `plc_profile_descriptors()` to enumerate canonical names, display
 connection eligibility, and XYM base profiles for a UI. Store the canonical profile string,
 not the display name.
 
+## Verified hardware available for validation
+
+The maintainer owns the hardware listed below. Communication has been verified
+on this hardware, and it is available for focused reproduction and validation
+when a problem is reported.
+
+"Verified" does not mean that every library feature has been tested on every
+listed PLC or module. Exhaustively testing every combination would require a prohibitive
+amount of work.
+
+| PLC family | Hardware owned by the maintainer |
+| --- | --- |
+| KEYENCE KV series | `KV-X500`, `KV-5000`, `KV-7000`, `KV-XLE02` |
+
 ## Device families and ranges
 
 Device-family notation, type suffixes, XYM aliases, and static range tables are shared across the KV Host Link libraries. Use the common [KV Host Link Device Ranges](https://fa-yoshinobu.github.io/plc-comm-docs-site/plc-setup/kv/device-ranges/) page for those details.
