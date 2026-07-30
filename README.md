@@ -66,7 +66,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | [KV Host Link Device Ranges](https://fa-yoshinobu.github.io/plc-comm-docs-site/plc-setup/kv/device-ranges/) | Check shared device families, address notation, and range tables. |
 | [KV Host Link Troubleshooting & Codes](https://fa-yoshinobu.github.io/plc-comm-docs-site/plc-setup/kv/troubleshooting-codes/) | Troubleshoot common port, profile, address, write-permission, and PLC error-code symptoms. |
 | [Gotchas](https://fa-yoshinobu.github.io/plc-comm-docs-site/hostlink/rust/GOTCHAS/) | Check whether this library has any current library-specific caveats. |
+| [Performance](https://fa-yoshinobu.github.io/plc-comm-docs-site/performance/) | See measured latency, throughput, and long-run soak results from real PLC hardware. |
+| [Choosing a Language](https://fa-yoshinobu.github.io/plc-comm-docs-site/choosing-a-language/) | Compare the .NET, Python, Rust, C++, and Node-RED implementations before you pick one. |
 | [Examples](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/blob/main/examples/README.md) | Run maintained Rust examples. |
+
+For a zero-code connectivity check, see [PLC Scope](https://github.com/fa-yoshinobu/plc-scope-dotnet) (Windows).
 
 ## License and registry
 
