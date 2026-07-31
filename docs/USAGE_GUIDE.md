@@ -26,13 +26,15 @@ client.open().await?;
 
 Normal command frames always end in CR (`0x0D`). There is no public LF append
 option or receive-buffer-size option. TCP and UDP responses have an internal
-absolute body cap of 65,536 bytes.
+absolute body cap of 65,536 bytes. Request bodies use the same 65,536-byte cap;
+one byte over is rejected before client state or traffic counters change.
 
 `open` is idempotent while the same transport remains healthy. Transport
-failure, timeout, cancellation, EOF, or response overflow closes that
-transport. A later command returns `HostLinkError::NotConnected`; only an
-explicit `open` creates the next transport, and the failed command is not
-retried.
+failure, timeout, EOF, or response overflow closes that transport. If the
+caller drops an in-flight command future, the future returns no library
+`Result`; the abandoned exchange poisons and retires the transport. A later
+command returns `HostLinkError::NotConnected`; only an explicit `open` creates
+the next transport, and the failed or abandoned command is not retried.
 
 ## Typed values and address grammar
 
@@ -64,7 +66,8 @@ client.write_consecutive("DM200", &[1_u32, 2_u32], Some("D")).await?;
 Passing `DM100.D` to a low-level numeric API is rejected even when a matching
 format argument is also present. Direct bit devices use `None` because the
 device family and command already determine bit semantics; numeric devices do
-not use `None` as a default.
+not use `None` as a default. Direct-bit writes accept Rust `bool` values only;
+numeric and textual Boolean aliases are rejected before transport.
 
 ## Single-request block helpers
 
@@ -74,37 +77,41 @@ Unsigned Dword helpers use native `.D` commands. Word requests accept at most
 1,000 values and Dword requests at most 500 values, subject to stricter
 device-family limits.
 
-The library has no chunked helper and never combines multiple PLC scan times
-into one returned snapshot. If an application intentionally uses several
-requests, it must own the address progression, timing difference, retry
-policy, and partial-write handling.
+The library has no general chunked helper. A low-level read or write is never
+divided automatically. If an application intentionally uses several requests,
+it must own the address progression, timing difference, retry policy, and
+partial-write handling.
 
-## Named snapshots and polling
+## Named read results and polling
 
 ```rust
-let snapshot = client
+let values = client
     .read_named(&["DM0:U", "DM1:S", "DM2:D", "DM4:F", "DM120.D"])
     .await?;
 ```
 
-`read_named` may combine compatible adjacent values into one request, but it
-does not exceed one-request protocol limits. Named reads and polls require at
-least one address, and poll intervals must be greater than zero; invalid input
-fails before queue execution or communication. `poll` reuses the compiled plan
-for each cycle.
+`read_named` is the one read-only aggregate allowed to plan multiple requests.
+All addresses are copied and validated before the first send. Compatible
+adjacent values may share a request; when a request limit is reached, a new
+request starts only at a declared value boundary, so a Dword or Float32 value
+is never split. Requests retain declared input order.
 
-## Bit-in-word writes
+The complete named read (or one `poll` cycle) owns one FIFO wire turn and
+returns all requested values or an error, never a partial result. Multiple
+request frames are not a PLC-atomic observation: PLC scan timing can differ
+between segments. Applications that need one coherent PLC snapshot must use a
+single request or an explicit PLC-side snapshot/handshake design. Named reads
+and polls require at least one address, and poll intervals must be greater than
+zero; invalid input fails before FIFO admission or communication. `poll` reuses
+the validated plan for each cycle.
 
-`write_bit_in_word` performs its read-modify-write sequence under the client
-lock. Concurrent updates through clones of the same client cannot interleave
-between the read and write portions.
+## Bit-in-word access
 
-```rust
-client.write_bit_in_word("DM120", 0, true).await?;
-```
-
-This is a compound operation, not a PLC-atomic instruction. Other PLC logic or
-another client can still change the same word.
+Bit-in-word notation (`DM120.0` through `DM120.F`) is read-only. The former
+client-side read-modify-write helper was removed because it could overwrite a
+concurrent PLC or external-client update. Use a PLC-native atomic bit operation
+when available, or make the application explicitly own any non-atomic whole-
+word read/write sequence.
 
 ## Expansion-unit buffer access
 
@@ -148,14 +155,34 @@ client.set_time(clock).await?;
 Calling `now_local` is an explicit application choice. Failure to obtain the
 local offset is returned and is not replaced with UTC.
 
-## Shared clients
+## Shared clients and lifecycle
 
-`open_and_connect` returns `QueuedHostLinkClient`, which serializes public
-operations. Direct `HostLinkClient` requests are also serialized per client
-instance; the queued wrapper additionally provides an application operation
-boundary for helper workflows. The queued client does not expose its inner
-direct client. Applications that require direct-client semantics construct or
-connect a `HostLinkClient` explicitly.
+`HostLinkClient`, `HostLinkClient::connect`, and `open_and_connect` all use the
+same client type. Clones share one FIFO admission queue and one wire turn, so
+there is no separate queued wrapper or bypass alias. Arguments and timeout are
+snapshotted at admission. Dropping a future while it is still waiting removes
+it without a send and produces no library `Result`.
+
+`close` rejects both the active operation and all operations waiting in the old
+connection generation. A later explicit `open` creates a new generation; work
+admitted before `close` cannot send on that reopened transport.
+
+## Errors and uncertain write outcomes
+
+`HostLinkError` distinguishes `Protocol`, `Timeout`, `Closed`, `NotConnected`,
+`Transport`, `Plc`, and `OutcomeUnknown`. A state-changing command that may
+already have been sent returns `OutcomeUnknown` when timeout, close, transport
+failure, or malformed acknowledgement prevents a definite result. Raw commands
+are conservatively treated as state-changing. The client closes the affected
+transport and never retries automatically.
+
+Rust cancellation is future drop rather than a returned library error. Dropping
+a state-changing future after transmission may have started gives the caller no
+`HostLinkError`; the caller must treat the PLC outcome as unknown. The transport
+is poisoned and retired, so the next command returns `NotConnected` until
+`open` succeeds. This caller-observed cancellation is distinct from the
+library's `Timeout` result and is deliberately not a
+`HostLinkOutcomeUnknownReason` variant.
 
 ## Traffic statistics
 

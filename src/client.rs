@@ -5,7 +5,7 @@ use crate::address::{
     validate_device_type, validate_expansion_buffer_count, validate_expansion_buffer_span,
     wr_device_types, ws_device_types,
 };
-use crate::error::HostLinkError;
+use crate::error::{HostLinkError, HostLinkOutcomeUnknownReason};
 use crate::helpers;
 use crate::model::{
     HostLinkClock, HostLinkConnectionOptions, HostLinkMonitorWord, HostLinkTransportMode,
@@ -17,11 +17,14 @@ use crate::protocol::{
 };
 use std::fmt::Write as _;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{
+    Arc, RwLock,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket, lookup_host};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard, watch};
 use tokio::time::{Instant, timeout_at};
 
 const MAX_TCP_LINE_SIZE: usize = 65_536;
@@ -29,6 +32,10 @@ const UDP_RECEIVE_BUFFER_SIZE: usize = MAX_TCP_LINE_SIZE + 2;
 
 pub trait HostLinkPayloadValue {
     fn format_for_suffix(&self, data_format: &str) -> String;
+
+    fn as_bool(&self) -> Option<bool> {
+        None
+    }
 
     fn as_integer(&self) -> Option<i128> {
         None
@@ -172,6 +179,10 @@ impl HostLinkPayloadValue for f64 {
 }
 
 impl HostLinkPayloadValue for bool {
+    fn as_bool(&self) -> Option<bool> {
+        Some(*self)
+    }
+
     fn format_for_suffix(&self, _data_format: &str) -> String {
         if *self { "1" } else { "0" }.to_owned()
     }
@@ -224,6 +235,10 @@ impl HostLinkPayloadValue for &str {
 }
 
 impl<T: HostLinkPayloadValue + ?Sized> HostLinkPayloadValue for &T {
+    fn as_bool(&self) -> Option<bool> {
+        (*self).as_bool()
+    }
+
     fn as_integer(&self) -> Option<i128> {
         (*self).as_integer()
     }
@@ -244,14 +259,18 @@ impl<T: HostLinkPayloadValue + ?Sized> HostLinkPayloadValue for &T {
 #[derive(Clone)]
 pub struct HostLinkClient {
     inner: Arc<Mutex<ClientInner>>,
+    turn: Arc<Mutex<()>>,
+    control: Arc<ClientControl>,
+    admitted_generation: Option<u64>,
+    admitted_timeout: Option<Duration>,
 }
 
 pub struct HostLinkClientFactory;
 
-#[derive(Clone)]
-pub struct QueuedHostLinkClient {
-    client: HostLinkClient,
-    gate: Arc<Mutex<()>>,
+struct ClientControl {
+    generation: AtomicU64,
+    close_tx: watch::Sender<u64>,
+    timeout: RwLock<Duration>,
 }
 
 enum Transport {
@@ -273,11 +292,15 @@ struct ClientInner {
     // response. If the future is dropped, the next operation replaces the
     // poisoned transport before sending another request.
     exchange_incomplete: bool,
+    last_request_may_have_been_sent: bool,
+    active_deadline: Option<Instant>,
     traffic_stats: crate::HostLinkTrafficStats,
 }
 
 impl HostLinkClient {
     pub fn new(options: HostLinkConnectionOptions) -> Self {
+        let (close_tx, _) = watch::channel(0u64);
+        let initial_timeout = options.timeout;
         Self {
             inner: Arc::new(Mutex::new(ClientInner {
                 options,
@@ -290,9 +313,74 @@ impl HostLinkClient {
                 monitor_bit_count: None,
                 monitor_word_count: None,
                 exchange_incomplete: false,
+                last_request_may_have_been_sent: false,
+                active_deadline: None,
                 traffic_stats: crate::HostLinkTrafficStats::default(),
             })),
+            turn: Arc::new(Mutex::new(())),
+            control: Arc::new(ClientControl {
+                generation: AtomicU64::new(0),
+                close_tx,
+                timeout: RwLock::new(initial_timeout),
+            }),
+            admitted_generation: None,
+            admitted_timeout: None,
         }
+    }
+
+    fn generation(&self) -> u64 {
+        self.admitted_generation
+            .unwrap_or_else(|| self.control.generation.load(Ordering::Acquire))
+    }
+
+    fn direct_for_generation(&self, generation: u64, timeout: Duration) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            turn: Arc::clone(&self.turn),
+            control: Arc::clone(&self.control),
+            admitted_generation: Some(generation),
+            admitted_timeout: Some(timeout),
+        }
+    }
+
+    async fn acquire_turn(
+        &self,
+        generation: u64,
+    ) -> Result<Option<OwnedMutexGuard<()>>, HostLinkError> {
+        if self.admitted_generation.is_some() {
+            if self.control.generation.load(Ordering::Acquire) != generation {
+                return Err(HostLinkError::Closed);
+            }
+            return Ok(None);
+        }
+        let mut close_rx = self.control.close_tx.subscribe();
+        let turn = Arc::clone(&self.turn);
+        let guard = tokio::select! {
+            guard = turn.lock_owned() => guard,
+            changed = close_rx.changed() => {
+                let _ = changed;
+                return Err(HostLinkError::Closed);
+            }
+        };
+        if self.control.generation.load(Ordering::Acquire) != generation {
+            return Err(HostLinkError::Closed);
+        }
+        Ok(Some(guard))
+    }
+
+    pub(crate) async fn begin_turn(
+        &self,
+    ) -> Result<(Option<OwnedMutexGuard<()>>, HostLinkClient), HostLinkError> {
+        let generation = self.generation();
+        let timeout = self.admitted_timeout.unwrap_or_else(|| {
+            *self
+                .control
+                .timeout
+                .read()
+                .expect("timeout snapshot lock poisoned")
+        });
+        let guard = self.acquire_turn(generation).await?;
+        Ok((guard, self.direct_for_generation(generation, timeout)))
     }
 
     pub async fn connect(options: HostLinkConnectionOptions) -> Result<Self, HostLinkError> {
@@ -302,10 +390,14 @@ impl HostLinkClient {
     }
 
     pub async fn open(&self) -> Result<(), HostLinkError> {
-        self.inner.lock().await.open().await
+        let (_turn, direct) = self.begin_turn().await?;
+        direct.open_direct().await
     }
 
     pub async fn close(&self) -> Result<(), HostLinkError> {
+        let generation = self.control.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        self.control.close_tx.send_replace(generation);
+        let _turn = Arc::clone(&self.turn).lock_owned().await;
         self.inner.lock().await.close();
         Ok(())
     }
@@ -332,17 +424,126 @@ impl HostLinkClient {
             return Err(HostLinkError::protocol("timeout must be greater than zero"));
         }
         checked_deadline(timeout)?;
-        self.inner.lock().await.options.timeout = timeout;
+        let (_turn, direct) = self.begin_turn().await?;
+        direct.inner.lock().await.options.timeout = timeout;
+        *self
+            .control
+            .timeout
+            .write()
+            .expect("timeout snapshot lock poisoned") = timeout;
         Ok(())
     }
 
     #[doc(hidden)]
     pub async fn send_raw(&self, body: &str) -> Result<Vec<u8>, HostLinkError> {
-        self.inner.lock().await.send_raw_bytes(body).await
+        let body = body.to_owned();
+        build_frame(&body)?;
+        let (_turn, direct) = self.begin_turn().await?;
+        direct.send_raw_direct(&body, true).await
     }
 
     pub(crate) async fn send_decoded(&self, body: &str) -> Result<String, HostLinkError> {
-        self.inner.lock().await.send_decoded(body).await
+        let body = body.to_owned();
+        build_frame(&body)?;
+        let (_turn, direct) = self.begin_turn().await?;
+        direct.send_decoded_direct(&body, false).await
+    }
+
+    async fn open_direct(&self) -> Result<(), HostLinkError> {
+        let generation = self.generation();
+        if self.control.generation.load(Ordering::Acquire) != generation {
+            return Err(HostLinkError::Closed);
+        }
+        let mut close_rx = self.control.close_tx.subscribe();
+        if *close_rx.borrow() != generation {
+            return Err(HostLinkError::Closed);
+        }
+        let mut inner = self.inner.lock().await;
+        let timeout = self.admitted_timeout.unwrap_or(inner.options.timeout);
+        let result = tokio::select! {
+            result = inner.open(timeout) => result,
+            changed = close_rx.changed() => {
+                let _ = changed;
+                Err(HostLinkError::Closed)
+            }
+        };
+        if matches!(result, Err(HostLinkError::Closed)) {
+            inner.close();
+        }
+        result
+    }
+
+    async fn send_raw_direct(
+        &self,
+        body: &str,
+        state_changing: bool,
+    ) -> Result<Vec<u8>, HostLinkError> {
+        let generation = self.generation();
+        let mut close_rx = self.control.close_tx.subscribe();
+        if self.control.generation.load(Ordering::Acquire) != generation
+            || *close_rx.borrow() != generation
+        {
+            return Err(HostLinkError::Closed);
+        }
+        let mut inner = self.inner.lock().await;
+        inner.last_request_may_have_been_sent = false;
+        let timeout = self.admitted_timeout.unwrap_or(inner.options.timeout);
+        let result = tokio::select! {
+            result = inner.send_raw_bytes(body, timeout) => result,
+            changed = close_rx.changed() => {
+                let _ = changed;
+                Err(HostLinkError::Closed)
+            }
+        };
+        let may_have_been_sent = inner.last_request_may_have_been_sent;
+        if result.is_err() {
+            inner.close();
+        }
+        classify_operation_result(result, state_changing, may_have_been_sent)
+    }
+
+    async fn send_decoded_direct(
+        &self,
+        body: &str,
+        state_changing: bool,
+    ) -> Result<String, HostLinkError> {
+        self.send_decoded_with_direct(body, state_changing, decode_response)
+            .await
+    }
+
+    async fn send_decoded_with_direct(
+        &self,
+        body: &str,
+        state_changing: bool,
+        decoder: fn(&[u8]) -> Result<String, HostLinkError>,
+    ) -> Result<String, HostLinkError> {
+        let generation = self.generation();
+        if self.control.generation.load(Ordering::Acquire) != generation {
+            return Err(HostLinkError::Closed);
+        }
+        let mut close_rx = self.control.close_tx.subscribe();
+        if *close_rx.borrow() != generation {
+            return Err(HostLinkError::Closed);
+        }
+        let mut inner = self.inner.lock().await;
+        inner.last_request_may_have_been_sent = false;
+        let timeout = self.admitted_timeout.unwrap_or(inner.options.timeout);
+        let result = tokio::select! {
+            result = inner.send_decoded_with(body, decoder, timeout) => result,
+            changed = close_rx.changed() => {
+                let _ = changed;
+                Err(HostLinkError::Closed)
+            }
+        };
+        let may_have_been_sent = inner.last_request_may_have_been_sent;
+        if result.is_err() {
+            inner.close();
+        }
+        classify_operation_result(result, state_changing, may_have_been_sent)
+    }
+
+    pub(crate) async fn retire_transport(&self) {
+        self.inner.lock().await.close();
     }
 
     pub async fn change_mode(&self, mode: KvPlcMode) -> Result<(), HostLinkError> {
@@ -366,13 +567,13 @@ impl HostLinkClient {
     }
 
     pub async fn confirm_operating_mode(&self) -> Result<KvPlcMode, HostLinkError> {
-        let mut inner = self.inner.lock().await;
-        let response = inner.send_decoded("?M").await?;
+        let (_turn, direct) = self.begin_turn().await?;
+        let response = direct.send_decoded_direct("?M", false).await?;
         match response.parse::<u8>() {
             Ok(0) => Ok(KvPlcMode::Program),
             Ok(1) => Ok(KvPlcMode::Run),
             _ => {
-                inner.close();
+                direct.retire_transport().await;
                 Err(HostLinkError::protocol("Unsupported PLC mode response"))
             }
         }
@@ -411,11 +612,11 @@ impl HostLinkClient {
         let suffix = require_explicit_format(&address, data_format)?;
         validate_device_span(&address.device_type, address.number, &suffix, 1)?;
         address.suffix = suffix.clone();
-        let response = self
-            .send_decoded(&format!("RD {}", address.to_text()?))
-            .await?;
+        let command = format!("RD {}", address.to_text()?);
+        let (_turn, direct) = self.begin_turn().await?;
+        let response = direct.send_decoded_direct(&command, false).await?;
         if suffix.is_empty() && response.trim() != response {
-            self.close().await?;
+            direct.retire_transport().await;
             return Err(HostLinkError::protocol(
                 "Direct bit response must not contain surrounding whitespace",
             ));
@@ -423,11 +624,11 @@ impl HostLinkClient {
         let tokens = split_data_tokens(&response);
         let expected = read_response_token_count(&address.device_type, &suffix);
         if let Err(error) = validate_response_token_count(&tokens, expected) {
-            self.close().await?;
+            direct.retire_transport().await;
             return Err(error);
         }
         if let Err(error) = validate_response_tokens(&tokens, &suffix) {
-            self.close().await?;
+            direct.retire_transport().await;
             return Err(error);
         }
         Ok(tokens)
@@ -444,22 +645,22 @@ impl HostLinkClient {
         validate_device_count(&address.device_type, &suffix, count)?;
         validate_device_span(&address.device_type, address.number, &suffix, count)?;
         address.suffix = suffix.clone();
-        let response = self
-            .send_decoded(&format!("RDS {} {}", address.to_text()?, count))
-            .await?;
+        let command = format!("RDS {} {}", address.to_text()?, count);
+        let (_turn, direct) = self.begin_turn().await?;
+        let response = direct.send_decoded_direct(&command, false).await?;
         if suffix.is_empty() && response.trim() != response {
-            self.close().await?;
+            direct.retire_transport().await;
             return Err(HostLinkError::protocol(
                 "Direct bit response must not contain surrounding whitespace",
             ));
         }
         let tokens = split_data_tokens(&response);
         if let Err(error) = validate_response_token_count(&tokens, count) {
-            self.close().await?;
+            direct.retire_transport().await;
             return Err(error);
         }
         if let Err(error) = validate_response_tokens(&tokens, &suffix) {
-            self.close().await?;
+            direct.retire_transport().await;
             return Err(error);
         }
         Ok(tokens)
@@ -479,7 +680,7 @@ impl HostLinkClient {
         let mut command = String::from("WR ");
         command.push_str(&address.to_text()?);
         command.push(' ');
-        value.append_to_payload(&suffix, &mut command)?;
+        append_strict_payload(&value, &suffix, &mut command)?;
         self.expect_ok(&command).await
     }
 
@@ -530,14 +731,17 @@ impl HostLinkClient {
             command.push(' ');
             command.push_str(&address.to_text()?);
         }
-        let mut inner = self.inner.lock().await;
-        let response = inner.send_decoded(&command).await?;
+        let (_turn, direct) = self.begin_turn().await?;
+        let response = direct.send_decoded_direct(&command, true).await?;
         if response != "OK" {
             let error = HostLinkError::protocol(format!("Expected OK but received {response}"));
-            inner.close();
-            return Err(error);
+            direct.retire_transport().await;
+            return Err(HostLinkError::outcome_unknown(
+                HostLinkOutcomeUnknownReason::MalformedResponse,
+                error,
+            ));
         }
-        inner.monitor_bit_count = Some(devices.len());
+        direct.inner.lock().await.monitor_bit_count = Some(devices.len());
         Ok(())
     }
 
@@ -571,50 +775,59 @@ impl HostLinkClient {
             command.push(' ');
             command.push_str(&address.to_text()?);
         }
-        let mut inner = self.inner.lock().await;
-        let response = inner.send_decoded(&command).await?;
+        let (_turn, direct) = self.begin_turn().await?;
+        let response = direct.send_decoded_direct(&command, true).await?;
         if response != "OK" {
             let error = HostLinkError::protocol(format!("Expected OK but received {response}"));
-            inner.close();
-            return Err(error);
+            direct.retire_transport().await;
+            return Err(HostLinkError::outcome_unknown(
+                HostLinkOutcomeUnknownReason::MalformedResponse,
+                error,
+            ));
         }
-        inner.monitor_word_count = Some(devices.len());
+        direct.inner.lock().await.monitor_word_count = Some(devices.len());
         Ok(())
     }
 
     pub async fn read_monitor_bits(&self) -> Result<Vec<String>, HostLinkError> {
-        let mut inner = self.inner.lock().await;
-        let expected = inner
-            .monitor_bit_count
-            .ok_or_else(|| HostLinkError::protocol("Monitor bits must be registered before MBR"))?;
-        let response = inner.send_decoded("MBR").await?;
+        let (_turn, direct) = self.begin_turn().await?;
+        let expected =
+            direct.inner.lock().await.monitor_bit_count.ok_or_else(|| {
+                HostLinkError::protocol("Monitor bits must be registered before MBR")
+            })?;
+        let response = direct.send_decoded_direct("MBR", false).await?;
         if response.trim() != response {
-            inner.close();
+            direct.retire_transport().await;
             return Err(HostLinkError::protocol(
                 "Direct bit response must not contain surrounding whitespace",
             ));
         }
         let tokens = split_data_tokens(&response);
         if let Err(error) = validate_response_token_count(&tokens, expected) {
-            inner.close();
+            direct.retire_transport().await;
             return Err(error);
         }
         if let Err(error) = validate_response_tokens(&tokens, "") {
-            inner.close();
+            direct.retire_transport().await;
             return Err(error);
         }
         Ok(tokens)
     }
 
     pub async fn read_monitor_words(&self) -> Result<Vec<String>, HostLinkError> {
-        let mut inner = self.inner.lock().await;
-        let expected = inner.monitor_word_count.ok_or_else(|| {
-            HostLinkError::protocol("Monitor words must be registered before MWR")
-        })?;
-        let response = inner.send_decoded("MWR").await?;
+        let (_turn, direct) = self.begin_turn().await?;
+        let expected = direct
+            .inner
+            .lock()
+            .await
+            .monitor_word_count
+            .ok_or_else(|| {
+                HostLinkError::protocol("Monitor words must be registered before MWR")
+            })?;
+        let response = direct.send_decoded_direct("MWR", false).await?;
         let tokens = split_data_tokens(&response);
         if let Err(error) = validate_response_token_count(&tokens, expected) {
-            inner.close();
+            direct.retire_transport().await;
             return Err(error);
         }
         Ok(tokens)
@@ -669,16 +882,16 @@ impl HostLinkClient {
         validate_device_count(&address.device_type, &suffix, count)?;
         validate_device_span(&address.device_type, address.number, &suffix, count)?;
         address.suffix = suffix.clone();
-        let response = self
-            .send_decoded(&format!("RDE {} {}", address.to_text()?, count))
-            .await?;
+        let command = format!("RDE {} {}", address.to_text()?, count);
+        let (_turn, direct) = self.begin_turn().await?;
+        let response = direct.send_decoded_direct(&command, false).await?;
         let tokens = split_data_tokens(&response);
         if let Err(error) = validate_response_token_count(&tokens, count) {
-            self.close().await?;
+            direct.retire_transport().await;
             return Err(error);
         }
         if let Err(error) = validate_response_tokens(&tokens, &suffix) {
-            self.close().await?;
+            direct.retire_transport().await;
             return Err(error);
         }
         Ok(tokens)
@@ -724,7 +937,7 @@ impl HostLinkClient {
         let mut command = String::from("WS ");
         command.push_str(&address.to_text()?);
         command.push(' ');
-        value.append_to_payload(&suffix, &mut command)?;
+        append_strict_payload(&value, &suffix, &mut command)?;
         self.expect_ok(&command).await
     }
 
@@ -779,16 +992,16 @@ impl HostLinkClient {
         let suffix = crate::address::normalize_suffix(data_format)?;
         validate_expansion_buffer_count(&suffix, count)?;
         validate_expansion_buffer_span(address, &suffix, count)?;
-        let response = self
-            .send_decoded(&format!("URD {unit_no:02} {address}{suffix} {count}"))
-            .await?;
+        let command = format!("URD {unit_no:02} {address}{suffix} {count}");
+        let (_turn, direct) = self.begin_turn().await?;
+        let response = direct.send_decoded_direct(&command, false).await?;
         let tokens = split_data_tokens(&response);
         if let Err(error) = validate_response_token_count(&tokens, count) {
-            self.close().await?;
+            direct.retire_transport().await;
             return Err(error);
         }
         if let Err(error) = validate_response_tokens(&tokens, &suffix) {
-            self.close().await?;
+            direct.retire_transport().await;
             return Err(error);
         }
         Ok(tokens)
@@ -828,14 +1041,10 @@ impl HostLinkClient {
         let address = parse_device(device)?;
         validate_device_type("RDC", &address.device_type, rdc_device_types())?;
         require_no_suffix(&address, "RDC")?;
-        let response = self
-            .inner
-            .lock()
-            .await
-            .send_decoded_with(
-                &format!("RDC {}", address.to_text()?),
-                decode_comment_response,
-            )
+        let command = format!("RDC {}", address.to_text()?);
+        let (_turn, direct) = self.begin_turn().await?;
+        let response = direct
+            .send_decoded_with_direct(&command, false, decode_comment_response)
             .await?;
         Ok(response)
     }
@@ -881,90 +1090,63 @@ impl HostLinkClient {
     pub async fn read_named<S: AsRef<str>>(
         &self,
         addresses: &[S],
-    ) -> Result<helpers::NamedSnapshot, HostLinkError> {
+    ) -> Result<helpers::NamedReadResult, HostLinkError> {
         helpers::read_named(self, addresses).await
     }
 
-    pub async fn write_bit_in_word(
-        &self,
-        device: &str,
-        bit_index: u8,
-        value: bool,
-    ) -> Result<(), HostLinkError> {
-        if bit_index > 15 {
-            return Err(HostLinkError::protocol("bitIndex must be 0-15."));
-        }
-        let mut address = parse_device(device)?;
-        let suffix = require_explicit_format(&address, Some("U"))?;
-        validate_device_span(&address.device_type, address.number, &suffix, 1)?;
-        address.suffix = suffix.clone();
-        let address_text = address.to_text()?;
-
-        let mut inner = self.inner.lock().await;
-        let response = inner.send_decoded(&format!("RD {address_text}")).await?;
-        if response.trim() != response {
-            inner.close();
-            return Err(HostLinkError::protocol(
-                "Bit-in-word response must not contain surrounding whitespace",
-            ));
-        }
-        let tokens = split_data_tokens(&response);
-        let current_result = if is_direct_bit_device_type(&address.device_type) {
-            helpers::pack_direct_bit_tokens(&tokens, 16, device).map(|value| value as u16)
-        } else {
-            if tokens.len() != 1 {
-                Err(HostLinkError::protocol(
-                    "Bit-in-word read did not return exactly one unsigned word",
-                ))
-            } else {
-                tokens[0]
-                    .parse::<u16>()
-                    .map_err(|_| HostLinkError::protocol("Invalid unsigned 16-bit response"))
+    pub fn poll<'a, S: AsRef<str> + 'a>(
+        &'a self,
+        addresses: &'a [S],
+        interval: Duration,
+    ) -> impl futures_core::Stream<Item = Result<helpers::NamedReadResult, HostLinkError>> + 'a
+    {
+        async_stream::try_stream! {
+            let addr_list = addresses.iter().map(|item| item.as_ref().to_owned()).collect::<Vec<_>>();
+            if addr_list.is_empty() {
+                Err(HostLinkError::protocol("poll addresses must not be empty."))?;
             }
-        };
-        let current = match current_result {
-            Ok(value) => value,
-            Err(error) => {
-                inner.close();
-                return Err(error);
+            if interval.is_zero() {
+                Err(HostLinkError::protocol("poll interval must be greater than zero."))?;
             }
-        };
-        let next = if value {
-            current | (1 << bit_index)
-        } else {
-            current & !(1 << bit_index)
-        };
-        let response = inner
-            .send_decoded(&format!("WR {address_text} {next}"))
-            .await?;
-        if response == "OK" {
-            Ok(())
-        } else {
-            let error = HostLinkError::protocol(format!(
-                "Expected 'OK' but received '{response}' for bit-in-word write"
-            ));
-            inner.close();
-            Err(error)
+            helpers::validate_named_addresses(&addr_list)?;
+            let compiled = crate::read_plan::compile_read_named_plan(&addr_list);
+            loop {
+                yield helpers::read_named_compiled(self, &addr_list, compiled.as_ref()).await?;
+                tokio::time::sleep(interval).await;
+            }
         }
     }
 
+    pub async fn read_words(&self, device: &str, count: usize) -> Result<Vec<u16>, HostLinkError> {
+        helpers::read_words(self, device, count).await
+    }
+
+    pub async fn read_dwords(&self, device: &str, count: usize) -> Result<Vec<u32>, HostLinkError> {
+        helpers::read_dwords(self, device, count).await
+    }
+
     async fn expect_ok(&self, body: &str) -> Result<(), HostLinkError> {
-        let mut inner = self.inner.lock().await;
-        let response = inner.send_decoded(body).await?;
+        let body = body.to_owned();
+        build_frame(&body)?;
+        let (_turn, direct) = self.begin_turn().await?;
+        let response = direct.send_decoded_direct(&body, true).await?;
         if response == "OK" {
             Ok(())
         } else {
             let error = HostLinkError::protocol(format!(
                 "Expected 'OK' but received '{response}' for command '{body}'"
             ));
-            inner.close();
-            Err(error)
+            direct.retire_transport().await;
+            Err(HostLinkError::outcome_unknown(
+                HostLinkOutcomeUnknownReason::MalformedResponse,
+                error,
+            ))
         }
     }
 }
 
 impl ClientInner {
-    async fn open(&mut self) -> Result<(), HostLinkError> {
+    async fn open(&mut self, timeout: Duration) -> Result<(), HostLinkError> {
         if self.exchange_incomplete {
             self.close();
         }
@@ -977,7 +1159,7 @@ impl ClientInner {
         if self.options.host.trim().is_empty() || self.options.port == 0 {
             return Err(HostLinkError::protocol("invalid Host Link endpoint"));
         }
-        let connect_deadline = checked_deadline(self.options.timeout)?;
+        let connect_deadline = checked_deadline(timeout)?;
         let endpoints = resolve_ipv4_endpoints(
             self.options.host.as_str(),
             self.options.port,
@@ -995,7 +1177,7 @@ impl ClientInner {
                 let socket = UdpSocket::bind("0.0.0.0:0").await?;
                 timeout_at(connect_deadline, socket.connect(endpoints[0]))
                     .await
-                    .map_err(|_| HostLinkError::connection("udp connect timed out"))??;
+                    .map_err(|_| HostLinkError::timeout("udp connect"))??;
                 Transport::Udp(socket)
             }
         };
@@ -1003,6 +1185,8 @@ impl ClientInner {
         self.transport = Some(transport);
         self.rx_start = 0;
         self.rx_count = 0;
+        self.last_request_may_have_been_sent = false;
+        self.active_deadline = None;
         Ok(())
     }
 
@@ -1011,39 +1195,51 @@ impl ClientInner {
         self.rx_start = 0;
         self.rx_count = 0;
         self.exchange_incomplete = false;
+        self.active_deadline = None;
         self.monitor_bit_count = None;
         self.monitor_word_count = None;
     }
 
-    async fn send_raw_bytes(&mut self, body: &str) -> Result<Vec<u8>, HostLinkError> {
-        let raw = self.exchange_raw(body).await?;
-        Ok(raw_response_body(&raw))
-    }
-
-    async fn send_decoded(&mut self, body: &str) -> Result<String, HostLinkError> {
-        self.send_decoded_with(body, decode_response).await
+    async fn send_raw_bytes(
+        &mut self,
+        body: &str,
+        timeout: Duration,
+    ) -> Result<Vec<u8>, HostLinkError> {
+        let raw = self.exchange_raw(body, timeout).await?;
+        let body = raw_response_body(&raw);
+        self.finish_decode_deadline()?;
+        Ok(body)
     }
 
     async fn send_decoded_with<F>(
         &mut self,
         body: &str,
         decoder: F,
+        timeout: Duration,
     ) -> Result<String, HostLinkError>
     where
         F: Fn(&[u8]) -> Result<String, HostLinkError>,
     {
-        let raw = self.exchange_raw(body).await?;
-        let decoded = match decoder(&raw) {
+        let raw = self.exchange_raw(body, timeout).await?;
+        let decoded_result = decoder(&raw);
+        self.finish_decode_deadline()?;
+        let decoded = match decoded_result {
             Ok(decoded) => decoded,
             Err(error) => {
                 self.close();
                 return Err(error);
             }
         };
-        ensure_success(decoded)
+        let result = ensure_success(decoded);
+        self.finish_decode_deadline()?;
+        result
     }
 
-    async fn exchange_raw(&mut self, body: &str) -> Result<Vec<u8>, HostLinkError> {
+    async fn exchange_raw(
+        &mut self,
+        body: &str,
+        timeout: Duration,
+    ) -> Result<Vec<u8>, HostLinkError> {
         let frame = build_frame(body)?;
         if self.exchange_incomplete {
             self.close();
@@ -1051,8 +1247,10 @@ impl ClientInner {
         if self.transport.is_none() {
             return Err(HostLinkError::NotConnected);
         }
-        let deadline = checked_deadline(self.options.timeout)?;
+        let deadline = checked_deadline(timeout)?;
+        self.active_deadline = Some(deadline);
         self.exchange_incomplete = true;
+        self.last_request_may_have_been_sent = true;
         let exchange_result = match self.transport.as_mut() {
             Some(Transport::Tcp(stream)) => {
                 match write_all_with_timeout(stream, &frame, deadline).await {
@@ -1114,174 +1312,62 @@ impl ClientInner {
             }
         }
     }
+
+    fn finish_decode_deadline(&mut self) -> Result<(), HostLinkError> {
+        let Some(deadline) = self.active_deadline else {
+            return Ok(());
+        };
+        if Instant::now() >= deadline {
+            self.close();
+            return Err(HostLinkError::timeout(
+                "transaction deadline expired during response decoding",
+            ));
+        }
+        self.active_deadline = None;
+        Ok(())
+    }
 }
 
 impl HostLinkClientFactory {
     pub async fn open_and_connect(
         options: HostLinkConnectionOptions,
-    ) -> Result<QueuedHostLinkClient, HostLinkError> {
+    ) -> Result<HostLinkClient, HostLinkError> {
         if options.host.trim().is_empty() {
             return Err(HostLinkError::protocol("Host must not be empty."));
         }
 
         let client = HostLinkClient::new(options);
-        let queued = QueuedHostLinkClient::new(client);
-        queued.open().await?;
-        Ok(queued)
+        client.open().await?;
+        Ok(client)
     }
 }
 
 pub async fn open_and_connect(
     options: HostLinkConnectionOptions,
-) -> Result<QueuedHostLinkClient, HostLinkError> {
+) -> Result<HostLinkClient, HostLinkError> {
     HostLinkClientFactory::open_and_connect(options).await
 }
 
-impl QueuedHostLinkClient {
-    pub fn new(client: HostLinkClient) -> Self {
-        Self {
-            client,
-            gate: Arc::new(Mutex::new(())),
+fn classify_operation_result<T>(
+    result: Result<T, HostLinkError>,
+    state_changing: bool,
+    may_have_been_sent: bool,
+) -> Result<T, HostLinkError> {
+    result.map_err(|error| {
+        if !state_changing || !may_have_been_sent {
+            return error;
         }
-    }
-
-    fn inner_client(&self) -> &HostLinkClient {
-        &self.client
-    }
-
-    pub async fn is_open(&self) -> bool {
-        self.client.is_open().await
-    }
-
-    pub async fn traffic_stats(&self) -> crate::HostLinkTrafficStats {
-        self.client.traffic_stats().await
-    }
-
-    pub async fn open(&self) -> Result<(), HostLinkError> {
-        let _guard = self.gate.lock().await;
-        self.client.open().await
-    }
-
-    pub async fn close(&self) -> Result<(), HostLinkError> {
-        let _guard = self.gate.lock().await;
-        self.client.close().await
-    }
-
-    #[doc(hidden)]
-    pub async fn send_raw(&self, body: &str) -> Result<Vec<u8>, HostLinkError> {
-        let _guard = self.gate.lock().await;
-        self.client.send_raw(body).await
-    }
-
-    pub async fn read_comments(&self, device: &str) -> Result<String, HostLinkError> {
-        let _guard = self.gate.lock().await;
-        self.client.read_comments(device).await
-    }
-
-    pub async fn read_typed(
-        &self,
-        device: &str,
-        dtype: &str,
-    ) -> Result<helpers::HostLinkValue, HostLinkError> {
-        let _guard = self.gate.lock().await;
-        helpers::read_typed(&self.client, device, dtype).await
-    }
-
-    pub async fn read_timer_counter(
-        &self,
-        device: &str,
-    ) -> Result<helpers::TimerCounterValue, HostLinkError> {
-        let _guard = self.gate.lock().await;
-        helpers::read_timer_counter(&self.client, device).await
-    }
-
-    pub async fn read_timer(
-        &self,
-        device: &str,
-    ) -> Result<helpers::TimerCounterValue, HostLinkError> {
-        let _guard = self.gate.lock().await;
-        helpers::read_timer(&self.client, device).await
-    }
-
-    pub async fn read_counter(
-        &self,
-        device: &str,
-    ) -> Result<helpers::TimerCounterValue, HostLinkError> {
-        let _guard = self.gate.lock().await;
-        helpers::read_counter(&self.client, device).await
-    }
-
-    pub async fn write_typed<T: HostLinkPayloadValue>(
-        &self,
-        device: &str,
-        dtype: &str,
-        value: T,
-    ) -> Result<(), HostLinkError> {
-        let _guard = self.gate.lock().await;
-        helpers::write_typed(&self.client, device, dtype, &value).await
-    }
-
-    pub async fn write_bit_in_word(
-        &self,
-        device: &str,
-        bit_index: u8,
-        value: bool,
-    ) -> Result<(), HostLinkError> {
-        let _guard = self.gate.lock().await;
-        helpers::write_bit_in_word(&self.client, device, bit_index, value).await
-    }
-
-    pub async fn read_named<S: AsRef<str>>(
-        &self,
-        addresses: &[S],
-    ) -> Result<helpers::NamedSnapshot, HostLinkError> {
-        if addresses.is_empty() {
-            return Err(HostLinkError::protocol(
-                "read_named addresses must not be empty.",
-            ));
-        }
-        let _guard = self.gate.lock().await;
-        helpers::read_named(&self.client, addresses).await
-    }
-
-    pub fn poll<'a, S: AsRef<str> + 'a>(
-        &'a self,
-        addresses: &'a [S],
-        interval: Duration,
-    ) -> impl futures_core::Stream<Item = Result<helpers::NamedSnapshot, HostLinkError>> + 'a {
-        async_stream::try_stream! {
-            let addr_list = addresses.iter().map(|item| item.as_ref().to_owned()).collect::<Vec<_>>();
-            if addr_list.is_empty() {
-                Err(HostLinkError::protocol("poll addresses must not be empty."))?;
-            }
-            if interval.is_zero() {
-                Err(HostLinkError::protocol("poll interval must be greater than zero."))?;
-            }
-            let compiled = crate::read_plan::compile_read_named_plan(&addr_list);
-            loop {
-                let snapshot = {
-                    let _guard = self.gate.lock().await;
-                    if let Some(plan) = &compiled {
-                        helpers::execute_read_named_plan(&self.client, plan).await?
-                    } else {
-                        helpers::read_named_sequential(&self.client, &addr_list).await?
-                    }
-                };
-                yield snapshot;
-                tokio::time::sleep(interval).await;
-            }
-        }
-    }
-
-    pub async fn read_words(&self, device: &str, count: usize) -> Result<Vec<u16>, HostLinkError> {
-        let _guard = self.gate.lock().await;
-        helpers::read_words(self.inner_client(), device, count).await
-    }
-
-    pub async fn read_dwords(&self, device: &str, count: usize) -> Result<Vec<u32>, HostLinkError> {
-        let _guard = self.gate.lock().await;
-        helpers::read_dwords(self.inner_client(), device, count).await
-    }
+        let reason = match error {
+            HostLinkError::Timeout(_) => HostLinkOutcomeUnknownReason::Timeout,
+            HostLinkError::Closed => HostLinkOutcomeUnknownReason::Closed,
+            HostLinkError::Transport { .. } => HostLinkOutcomeUnknownReason::Transport,
+            HostLinkError::Protocol(_) => HostLinkOutcomeUnknownReason::MalformedResponse,
+            HostLinkError::OutcomeUnknown { .. }
+            | HostLinkError::NotConnected
+            | HostLinkError::Plc { .. } => return error,
+        };
+        HostLinkError::outcome_unknown(reason, error)
+    })
 }
 
 fn checked_deadline(duration: Duration) -> Result<Instant, HostLinkError> {
@@ -1310,10 +1396,8 @@ async fn resolve_ipv4_endpoints(
 
     let resolved = timeout_at(deadline, lookup_host((host, port)))
         .await
-        .map_err(|_| HostLinkError::connection("endpoint resolution timed out"))?
-        .map_err(|error| {
-            HostLinkError::connection(format!("endpoint resolution failed: {error}"))
-        })?;
+        .map_err(|_| HostLinkError::timeout("endpoint resolution"))?
+        .map_err(|error| HostLinkError::transport("endpoint resolution failed", error))?;
     select_ipv4_endpoints(host, resolved.collect())
 }
 
@@ -1342,15 +1426,18 @@ async fn connect_tcp_ipv4(
         match timeout_at(deadline, TcpStream::connect(endpoint)).await {
             Ok(Ok(stream)) => return Ok(stream),
             Ok(Err(error)) => last_error = Some(error),
-            Err(_) => return Err(HostLinkError::connection("tcp connect timed out")),
+            Err(_) => return Err(HostLinkError::timeout("tcp connect")),
         }
     }
-    Err(HostLinkError::connection(format!(
-        "tcp connect failed for every resolved IPv4 endpoint: {}",
-        last_error
-            .map(|error| error.to_string())
-            .unwrap_or_else(|| "no endpoint".to_owned())
-    )))
+    match last_error {
+        Some(error) => Err(HostLinkError::transport(
+            "tcp connect failed for every resolved IPv4 endpoint",
+            error,
+        )),
+        None => Err(HostLinkError::connection(
+            "tcp connect failed: no IPv4 endpoint",
+        )),
+    }
 }
 
 async fn write_all_with_timeout(
@@ -1360,7 +1447,7 @@ async fn write_all_with_timeout(
 ) -> Result<(), HostLinkError> {
     timeout_at(deadline, stream.write_all(payload))
         .await
-        .map_err(|_| HostLinkError::connection("write timed out"))??;
+        .map_err(|_| HostLinkError::timeout("tcp write"))??;
     Ok(())
 }
 
@@ -1371,7 +1458,7 @@ async fn send_udp_with_timeout(
 ) -> Result<(), HostLinkError> {
     timeout_at(deadline, socket.send(payload))
         .await
-        .map_err(|_| HostLinkError::connection("write timed out"))??;
+        .map_err(|_| HostLinkError::timeout("udp send"))??;
     Ok(())
 }
 
@@ -1387,7 +1474,7 @@ async fn recv_udp_with_timeout(
     }
     let read = timeout_at(deadline, socket.recv(buffer.as_mut_slice()))
         .await
-        .map_err(|_| HostLinkError::connection("read timed out"))??;
+        .map_err(|_| HostLinkError::timeout("udp receive"))??;
     buffer.truncate(read);
     Ok(())
 }
@@ -1401,9 +1488,25 @@ fn build_joined_payload<T: HostLinkPayloadValue>(
         if index > 0 {
             payload.push(' ');
         }
-        value.append_to_payload(suffix, &mut payload)?;
+        append_strict_payload(value, suffix, &mut payload)?;
     }
     Ok(payload)
+}
+
+fn append_strict_payload<T: HostLinkPayloadValue + ?Sized>(
+    value: &T,
+    suffix: &str,
+    output: &mut String,
+) -> Result<(), HostLinkError> {
+    if suffix.is_empty() {
+        let value = value
+            .as_bool()
+            .ok_or_else(|| HostLinkError::protocol("direct-bit writes require a bool value"))?;
+        output.push(if value { '1' } else { '0' });
+        Ok(())
+    } else {
+        value.append_to_payload(suffix, output)
+    }
 }
 
 async fn recv_tcp_line(
@@ -1457,7 +1560,7 @@ async fn recv_tcp_line(
 
         let read = timeout_at(deadline, stream.read(tcp_read_buf))
             .await
-            .map_err(|_| HostLinkError::connection("read timed out"))??;
+            .map_err(|_| HostLinkError::timeout("tcp receive"))??;
         if read == 0 {
             let message = if *rx_count > 0 {
                 "Connection closed by PLC before the response terminator"

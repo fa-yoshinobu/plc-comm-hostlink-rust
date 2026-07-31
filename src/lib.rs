@@ -18,20 +18,17 @@ pub use address::{
     parse_logical_address, validate_device_count, validate_device_span, validate_device_type,
     validate_expansion_buffer_count, validate_expansion_buffer_span,
 };
-pub use client::{
-    HostLinkClient, HostLinkClientFactory, HostLinkPayloadValue, QueuedHostLinkClient,
-    open_and_connect,
-};
+pub use client::{HostLinkClient, HostLinkClientFactory, HostLinkPayloadValue, open_and_connect};
 pub use device_ranges::{
     KvDeviceRangeCatalog, KvDeviceRangeCategory, KvDeviceRangeEntry, KvDeviceRangeNotation,
     KvDeviceRangeSegment, device_range_catalog_for_plc_profile,
 };
-pub use error::HostLinkError;
+pub use error::{HostLinkError, HostLinkOutcomeUnknownReason};
 pub use helpers::{
-    HostLinkValue, NamedSnapshot, TimerCounterValue, poll, read_comments, read_counter,
+    HostLinkValue, NamedReadResult, TimerCounterValue, poll, read_comments, read_counter,
     read_dwords, read_dwords_single_request, read_named, read_timer, read_timer_counter,
-    read_typed, read_words, read_words_single_request, write_bit_in_word,
-    write_dwords_single_request, write_typed, write_words_single_request,
+    read_typed, read_words, read_words_single_request, write_dwords_single_request, write_typed,
+    write_words_single_request,
 };
 pub use model::{
     HostLinkClock, HostLinkConnectionOptions, HostLinkMonitorWord, HostLinkTrafficStats,

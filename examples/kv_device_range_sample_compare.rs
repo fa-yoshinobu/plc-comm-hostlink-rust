@@ -9,8 +9,8 @@
 //!   cargo run --features cli --example kv_device_range_sample_compare -- <host> <port> <transport> <plc-profile>
 
 use plc_comm_kv_hostlink::{
-    HostLinkConnectionOptions, HostLinkError, HostLinkTransportMode, HostLinkValue,
-    KvDeviceAddress, KvDeviceRangeEntry, KvDeviceRangeSegment, QueuedHostLinkClient,
+    HostLinkClient, HostLinkConnectionOptions, HostLinkError, HostLinkTransportMode, HostLinkValue,
+    KvDeviceAddress, KvDeviceRangeEntry, KvDeviceRangeSegment,
     device_range_catalog_for_plc_profile, open_and_connect,
 };
 use std::collections::BTreeSet;
@@ -168,7 +168,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 async fn run_entry(
-    client: &QueuedHostLinkClient,
+    client: &HostLinkClient,
     entry: &KvDeviceRangeEntry,
     sample_points: usize,
     summary: &mut Summary,
@@ -312,7 +312,7 @@ fn print_device_report(report: &DeviceReport) {
 }
 
 async fn exercise_point(
-    client: &QueuedHostLinkClient,
+    client: &HostLinkClient,
     address: &str,
     kind: ValueKind,
 ) -> Result<(), (&'static str, String)> {
@@ -360,7 +360,7 @@ async fn exercise_point(
 }
 
 async fn assert_value(
-    client: &QueuedHostLinkClient,
+    client: &HostLinkClient,
     address: &str,
     kind: ValueKind,
     expected: &HostLinkValue,
@@ -378,7 +378,7 @@ async fn assert_value(
 }
 
 async fn read_value(
-    client: &QueuedHostLinkClient,
+    client: &HostLinkClient,
     address: &str,
     kind: ValueKind,
 ) -> Result<HostLinkValue, HostLinkError> {
@@ -386,7 +386,7 @@ async fn read_value(
 }
 
 async fn write_value(
-    client: &QueuedHostLinkClient,
+    client: &HostLinkClient,
     address: &str,
     kind: ValueKind,
     value: HostLinkValue,

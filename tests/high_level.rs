@@ -2,13 +2,14 @@ use encoding_rs::SHIFT_JIS;
 use futures_util::{StreamExt, pin_mut};
 use plc_comm_kv_hostlink::{
     HostLinkClient, HostLinkConnectionOptions, HostLinkError, HostLinkMonitorWord,
-    HostLinkTransportMode, HostLinkValue, open_and_connect, read_comments, read_dwords, read_typed,
-    read_words, write_dwords_single_request,
+    HostLinkOutcomeUnknownReason, HostLinkTransportMode, HostLinkValue, open_and_connect,
+    read_comments, read_dwords, read_typed, read_words, write_dwords_single_request,
 };
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, UdpSocket};
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tokio::sync::Notify;
 
 #[tokio::test]
 async fn read_named_batches_contiguous_word_reads() {
@@ -47,6 +48,381 @@ async fn read_named_batches_contiguous_word_reads() {
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
         vec!["RDS DM100.U 8"]
     );
+}
+
+#[tokio::test]
+async fn read_named_preserves_descending_input_wire_order() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RDS DM10.U 1" => "10".to_owned(),
+        "RDS DM9.U 1" => "9".to_owned(),
+        "RDS DM11.U 1" => "11".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let result = client
+        .read_named(&["DM10:U", "DM9:U", "DM11:U"])
+        .await
+        .unwrap();
+
+    assert_eq!(result["DM10:U"], HostLinkValue::U16(10));
+    assert_eq!(result["DM9:U"], HostLinkValue::U16(9));
+    assert_eq!(result["DM11:U"], HostLinkValue::U16(11));
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RDS DM10.U 1", "RDS DM9.U 1", "RDS DM11.U 1"]
+    );
+}
+
+#[tokio::test]
+async fn read_named_prevalidates_every_address_before_first_send() {
+    let (port, received) = start_scripted_server(|_| "1".to_owned()).await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let error = client
+        .read_named(&["DM0:U", "not-a-device:U"])
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, HostLinkError::Protocol(_)));
+    assert!(received.lock().unwrap().is_empty());
+    assert_eq!(client.traffic_stats().await.request_count, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn read_named_owns_one_fifo_turn_for_its_complete_result() {
+    let (port, received) = start_scripted_server(|command| {
+        if command == "RDS DM0.U 1" {
+            std::thread::sleep(Duration::from_millis(60));
+            return "1".to_owned();
+        }
+        match command.as_str() {
+            "RDS TM0.U 1" => "2".to_owned(),
+            "?K" => "01".to_owned(),
+            _ => "E1".to_owned(),
+        }
+    })
+    .await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let named_client = client.clone();
+    let named = tokio::spawn(async move { named_client.read_named(&["DM0:U", "TM0:U"]).await });
+    for _ in 0..100 {
+        if !received.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    assert_eq!(received.lock().unwrap().as_slice(), ["RDS DM0.U 1"]);
+
+    let query_client = client.clone();
+    let query = tokio::spawn(async move { query_client.query_model().await });
+    named.await.unwrap().unwrap();
+    query.await.unwrap().unwrap();
+
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RDS DM0.U 1", "RDS TM0.U 1", "?K"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn close_rejects_active_and_waiting_generation_then_reopen_accepts_only_new_work() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let first_seen = Arc::new(Notify::new());
+    let server_seen = Arc::new(Mutex::new(Vec::new()));
+    let server_notify = Arc::clone(&first_seen);
+    let server_records = Arc::clone(&server_seen);
+    tokio::spawn(async move {
+        let (mut first, _) = listener.accept().await.unwrap();
+        let first_command = read_test_command(&mut first).await;
+        server_records.lock().unwrap().push(first_command);
+        server_notify.notify_one();
+        let mut eof = [0u8; 1];
+        while first.read(&mut eof).await.unwrap_or(0) != 0 {}
+
+        let (mut second, _) = listener.accept().await.unwrap();
+        let second_command = read_test_command(&mut second).await;
+        server_records.lock().unwrap().push(second_command);
+        second.write_all(b"01\r").await.unwrap();
+    });
+
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let active_client = client.clone();
+    let active = tokio::spawn(async move { active_client.send_raw("WRITE").await });
+    first_seen.notified().await;
+    let waiting_client = client.clone();
+    let waiting = tokio::spawn(async move { waiting_client.query_model().await });
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    client.close().await.unwrap();
+    let active_error = active.await.unwrap().unwrap_err();
+    assert!(matches!(
+        active_error,
+        HostLinkError::OutcomeUnknown {
+            reason: HostLinkOutcomeUnknownReason::Closed,
+            ..
+        }
+    ));
+    assert!(matches!(waiting.await.unwrap(), Err(HostLinkError::Closed)));
+
+    client.open().await.unwrap();
+    client.query_model().await.unwrap();
+    assert_eq!(server_seen.lock().unwrap().as_slice(), ["WRITE", "?K"]);
+}
+
+#[tokio::test]
+async fn malformed_state_changing_response_is_outcome_unknown_without_retry() {
+    let (port, received) = start_scripted_server(|_| "MAYBE".to_owned()).await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let error = client
+        .change_mode(plc_comm_kv_hostlink::KvPlcMode::Run)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        HostLinkError::OutcomeUnknown {
+            reason: HostLinkOutcomeUnknownReason::MalformedResponse,
+            ..
+        }
+    ));
+    assert!(!client.is_open().await);
+    assert_eq!(received.lock().unwrap().as_slice(), ["M1"]);
+}
+
+#[tokio::test]
+async fn direct_bit_writes_accept_only_bool_values_before_transport() {
+    let (port, received) = start_scripted_server(|_| "OK".to_owned()).await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    assert!(matches!(
+        client.write("R0", 1_u8, None).await,
+        Err(HostLinkError::Protocol(_))
+    ));
+    assert!(matches!(
+        client.write_typed("R0", "BIT", 1_u8).await,
+        Err(HostLinkError::Protocol(_))
+    ));
+    assert!(matches!(
+        client.write_consecutive("R0", &[true, false], None).await,
+        Ok(())
+    ));
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["WRS R000 2 1 0"]
+    );
+}
+
+#[tokio::test]
+async fn raw_request_accepts_exact_capacity_and_rejects_one_over_without_state_change() {
+    let (port, received) = start_scripted_server(|_| "OK".to_owned()).await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let maximum = "A".repeat(65_536);
+    assert_eq!(client.send_raw(&maximum).await.unwrap(), b"OK");
+    let before = client.traffic_stats().await;
+    let error = client.send_raw(&"A".repeat(65_537)).await.unwrap_err();
+    assert!(matches!(error, HostLinkError::Protocol(_)));
+    assert!(client.is_open().await);
+    assert_eq!(client.traffic_stats().await, before);
+    assert_eq!(before.request_count, 1);
+    assert_eq!(before.tx_bytes, 65_537);
+    assert_eq!(received.lock().unwrap().len(), 1);
+    assert_eq!(received.lock().unwrap()[0].len(), 65_536);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropping_a_waiting_fifo_operation_sends_nothing() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let first_seen = Arc::new(Notify::new());
+    let release_first = Arc::new(Notify::new());
+    let server_received = Arc::clone(&received);
+    let server_seen = Arc::clone(&first_seen);
+    let server_release = Arc::clone(&release_first);
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let first = read_test_command(&mut stream).await;
+        server_received.lock().unwrap().push(first);
+        server_seen.notify_one();
+        server_release.notified().await;
+        stream.write_all(b"01\r").await.unwrap();
+        let second = read_test_command(&mut stream).await;
+        server_received.lock().unwrap().push(second);
+        stream.write_all(b"1\r").await.unwrap();
+    });
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let active_client = client.clone();
+    let active = tokio::spawn(async move { active_client.query_model().await });
+    first_seen.notified().await;
+    let mut waiting = Box::pin(client.read("DM99", Some("U")));
+    let waiting_poll = tokio::time::timeout(Duration::from_millis(5), waiting.as_mut()).await;
+    assert!(waiting_poll.is_err(), "poll={waiting_poll:?}");
+    drop(waiting);
+    release_first.notify_one();
+    active.await.unwrap().unwrap();
+    client.read("DM0", Some("U")).await.unwrap();
+
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["?K", "RD DM0.U"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn timeout_is_snapshotted_when_an_operation_enters_fifo() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let first_seen = Arc::new(Notify::new());
+    let release_first = Arc::new(Notify::new());
+    let server_seen = Arc::clone(&first_seen);
+    let server_release = Arc::clone(&release_first);
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        assert_eq!(read_test_command(&mut stream).await, "?K");
+        server_seen.notify_one();
+        server_release.notified().await;
+        stream.write_all(b"01\r").await.unwrap();
+
+        assert_eq!(read_test_command(&mut stream).await, "RD DM0.U");
+        tokio::time::sleep(Duration::from_millis(45)).await;
+        stream.write_all(b"1\r").await.unwrap();
+
+        assert_eq!(read_test_command(&mut stream).await, "RD DM1.U");
+        tokio::time::sleep(Duration::from_millis(45)).await;
+        let _ = stream.write_all(b"1\r").await;
+    });
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    options.timeout = Duration::from_millis(200);
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let active_client = client.clone();
+    let active = tokio::spawn(async move { active_client.query_model().await });
+    first_seen.notified().await;
+    let mut setter = Box::pin(client.set_timeout(Duration::from_millis(20)));
+    let setter_poll = tokio::time::timeout(Duration::from_millis(5), setter.as_mut()).await;
+    assert!(setter_poll.is_err(), "poll={setter_poll:?}");
+    let mut admitted = Box::pin(client.read("DM0", Some("U")));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(5), admitted.as_mut())
+            .await
+            .is_err()
+    );
+
+    release_first.notify_one();
+    active.await.unwrap().unwrap();
+    setter.await.unwrap();
+    admitted.await.unwrap();
+    assert_eq!(client.timeout().await, Duration::from_millis(20));
+
+    let error = client.read("DM1", Some("U")).await.unwrap_err();
+    assert!(matches!(error, HostLinkError::Timeout(_)));
+}
+
+#[tokio::test]
+async fn post_send_transport_failure_on_write_is_outcome_unknown() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        assert_eq!(read_test_command(&mut stream).await, "WR DM0.U 1");
+    });
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let error = client.write("DM0", 1_u16, Some("U")).await.unwrap_err();
+    assert!(matches!(
+        error,
+        HostLinkError::OutcomeUnknown {
+            reason: HostLinkOutcomeUnknownReason::Transport,
+            ..
+        }
+    ));
+    assert!(!client.is_open().await);
 }
 
 #[tokio::test]
@@ -161,7 +537,13 @@ async fn timeout_contract_has_three_second_default_rejects_zero_and_closes_timed
     options.timeout = Duration::from_millis(50);
     let client = HostLinkClient::connect(options).await.unwrap();
     let error = client.send_raw("READ").await.unwrap_err();
-    assert!(error.to_string().contains("timed out"));
+    assert!(matches!(
+        error,
+        HostLinkError::OutcomeUnknown {
+            reason: HostLinkOutcomeUnknownReason::Timeout,
+            ..
+        }
+    ));
     assert!(!client.is_open().await);
     let stats = client.traffic_stats().await;
     assert_eq!(stats.request_count, 1);
@@ -235,7 +617,13 @@ async fn tcp_timeout_is_one_deadline_for_a_trickled_response() {
 
     let started = tokio::time::Instant::now();
     let error = client.send_raw("READ").await.unwrap_err();
-    assert!(error.to_string().contains("timed out"));
+    assert!(matches!(
+        error,
+        HostLinkError::OutcomeUnknown {
+            reason: HostLinkOutcomeUnknownReason::Timeout,
+            ..
+        }
+    ));
     assert!(started.elapsed() < Duration::from_millis(200));
     assert!(!client.is_open().await);
     server.await.unwrap();
@@ -425,31 +813,6 @@ async fn direct_bit_response_rejects_case_folding_and_surrounding_whitespace() {
         );
         assert!(!client.is_open().await, "response={response:?}");
     }
-}
-
-#[tokio::test]
-async fn malformed_bit_read_for_rmw_is_closed_without_writing() {
-    let (port, received) = start_scripted_server(|command| match command.as_str() {
-        "RD DM300.U" => " 1".to_owned(),
-        _ => "OK".to_owned(),
-    })
-    .await;
-    let mut options = HostLinkConnectionOptions::new(
-        "127.0.0.1",
-        8501,
-        HostLinkTransportMode::Tcp,
-        "keyence:kv-8000",
-    )
-    .unwrap();
-    options.port = port;
-    let client = HostLinkClient::connect(options).await.unwrap();
-
-    assert!(client.write_bit_in_word("DM300", 0, true).await.is_err());
-    assert!(!client.is_open().await);
-    assert_eq!(
-        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
-        vec!["RD DM300.U"]
-    );
 }
 
 #[tokio::test]
@@ -689,47 +1052,6 @@ async fn unexpected_numeric_response_count_invalidates_transport() {
 }
 
 #[tokio::test]
-async fn concurrent_bit_in_word_updates_keep_both_bits() {
-    let word = Arc::new(Mutex::new(0_u16));
-    let server_word = Arc::clone(&word);
-    let (port, received) = start_scripted_server(move |command| {
-        if command == "RD DM300.U" {
-            return server_word.lock().unwrap().to_string();
-        }
-        if let Some(value) = command.strip_prefix("WR DM300.U ") {
-            *server_word.lock().unwrap() = value.parse().unwrap();
-            return "OK".to_owned();
-        }
-        "E1".to_owned()
-    })
-    .await;
-    let mut options = HostLinkConnectionOptions::new(
-        "127.0.0.1",
-        8501,
-        HostLinkTransportMode::Tcp,
-        "keyence:kv-8000",
-    )
-    .unwrap();
-    options.port = port;
-    let client = HostLinkClient::connect(options).await.unwrap();
-
-    let first = client.clone();
-    let second = client.clone();
-    let (first_result, second_result) = tokio::join!(
-        first.write_bit_in_word("DM300", 0, true),
-        second.write_bit_in_word("DM300", 1, true)
-    );
-    first_result.unwrap();
-    second_result.unwrap();
-
-    assert_eq!(*word.lock().unwrap(), 3);
-    assert_eq!(
-        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
-        vec!["RD DM300.U", "WR DM300.U 1", "RD DM300.U", "WR DM300.U 3"]
-    );
-}
-
-#[tokio::test]
 async fn tcp_eof_before_terminator_rejects_partial_response_and_closes_transport() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -842,7 +1164,10 @@ async fn udp_timeout_discards_delayed_response_before_next_request() {
     assert!(client.send_raw("FIRST").await.is_err());
     assert!(!client.is_open().await);
     client.set_timeout(Duration::from_secs(2)).await.unwrap();
-    assert!(client.send_raw("SECOND").await.is_err());
+    assert!(matches!(
+        client.send_raw("SECOND").await,
+        Err(HostLinkError::NotConnected)
+    ));
     client.open().await.unwrap();
     assert_eq!(client.send_raw("SECOND").await.unwrap(), b"SECOND");
     server.await.unwrap();
@@ -884,7 +1209,10 @@ async fn dropped_udp_request_poisons_transport_and_discards_delayed_response() {
     assert!(!client.is_open().await);
 
     release_tx.send(()).unwrap();
-    assert!(client.send_raw("SECOND").await.is_err());
+    assert!(matches!(
+        client.send_raw("SECOND").await,
+        Err(HostLinkError::NotConnected)
+    ));
     client.open().await.unwrap();
     assert_eq!(client.send_raw("SECOND").await.unwrap(), b"SECOND");
     server.await.unwrap();
@@ -939,10 +1267,6 @@ async fn float_write_to_every_direct_bit_family_is_rejected_before_transport() {
             "device={device} error={error}"
         );
     }
-
-    let queued = plc_comm_kv_hostlink::QueuedHostLinkClient::new(client);
-    let error = queued.write_typed("R0", "F", 1.0_f32).await.unwrap_err();
-    assert!(matches!(error, HostLinkError::Protocol(_)));
 }
 
 #[tokio::test]
@@ -1371,7 +1695,7 @@ async fn read_typed_empty_dtype_is_rejected() {
 }
 
 #[tokio::test]
-async fn read_comments_helper_and_named_snapshot_support_comment_values() {
+async fn read_comments_helper_and_named_read_support_comment_values() {
     let (port, received) = start_scripted_server(|command| match command.as_str() {
         "RDC DM150" => "MAIN COMMENT                    ".to_owned(),
         "RD DM100.U" => "321".to_owned(),
@@ -1496,7 +1820,7 @@ async fn at_write_is_rejected_before_opening_connection() {
 }
 
 #[tokio::test]
-async fn open_and_connect_returns_queued_client_that_uses_helper_api() {
+async fn open_and_connect_returns_fifo_client_that_uses_helper_api() {
     let (port, received) = start_scripted_server(|command| match command.as_str() {
         "RD DM10.U" => "123".to_owned(),
         _ => "E1".to_owned(),
@@ -1523,7 +1847,7 @@ async fn open_and_connect_returns_queued_client_that_uses_helper_api() {
 }
 
 #[tokio::test]
-async fn queued_client_supports_read_comments() {
+async fn ordinary_client_supports_read_comments() {
     let (port, received) = start_scripted_server(|command| match command.as_str() {
         "RDC DM10" => "ALARM TEXT                      ".to_owned(),
         _ => "E1".to_owned(),
@@ -1718,17 +2042,14 @@ async fn empty_named_reads_and_invalid_polling_are_rejected_without_transport() 
     )
     .unwrap();
     let client = HostLinkClient::new(options.clone());
-    let queued = plc_comm_kv_hostlink::QueuedHostLinkClient::new(HostLinkClient::new(options));
-
     assert!(client.read_named::<&str>(&[]).await.is_err());
-    assert!(queued.read_named::<&str>(&[]).await.is_err());
 
     let empty: [&str; 0] = [];
     let stream = plc_comm_kv_hostlink::poll(&client, &empty, Duration::from_millis(1));
     pin_mut!(stream);
     assert!(stream.next().await.unwrap().is_err());
 
-    let stream = queued.poll(&["DM0:U"], Duration::ZERO);
+    let stream = client.poll(&["DM0:U"], Duration::ZERO);
     pin_mut!(stream);
     assert!(stream.next().await.unwrap().is_err());
 }
@@ -1884,7 +2205,9 @@ where
                     let response = response_factory(command);
                     let mut frame = response;
                     frame.extend_from_slice(b"\r\n");
-                    stream.write_all(&frame).await.unwrap();
+                    if stream.write_all(&frame).await.is_err() {
+                        return;
+                    }
                 } else {
                     partial.push(*byte);
                 }
@@ -1892,4 +2215,19 @@ where
         }
     });
     (port, received)
+}
+
+async fn read_test_command(stream: &mut TcpStream) -> String {
+    let mut command = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        stream.read_exact(&mut byte).await.unwrap();
+        if matches!(byte[0], b'\r' | b'\n') {
+            if !command.is_empty() {
+                return String::from_utf8(command).unwrap();
+            }
+        } else {
+            command.push(byte[0]);
+        }
+    }
 }

@@ -4,22 +4,22 @@ Current active TODOs only.
 
 ## Current Status
 
-The eight approved implementation items are complete in the working tree. The
-evidence-dependent comment-encoding decision remains open, and no
-comment-decoder implementation change is authorized until `HL-EVAL-TODO-006`
-is approved.
+The approved implementation items and the six cross-library overhaul items are
+complete in the working tree. The evidence-dependent comment-encoding decision
+remains open, and no comment-decoder implementation change is authorized until
+`HL-EVAL-TODO-006` is approved.
 
 ### Verification evidence — 2026-08-01
 
-- Current-worktree formatting, Clippy, and test gates passed: 38 library tests
-  and 59 integration tests, with all runnable examples compiled.
+- Current-worktree formatting, Clippy, and test gates passed: 41 library tests
+  and 67 integration tests, with all executable examples compiled.
 - A synthetic current-worktree Git tree produced a self-contained source
   archive; clean extracted format/check/Clippy/rustdoc/test gates passed.
-- The crates.io package-content guard passed independently and kept tests and
-  repository-only tooling out of the registry package.
-- Codex self-review removed the remaining clone-capable `execute_async` gate
-  bypass, reran all affected gates, and compared the public contract with the
-  Python, Node-RED, and .NET implementations.
+- The crates.io package-content guard and `cargo package --allow-dirty` passed;
+  the package kept tests and repository-only tooling out of the registry crate.
+- Codex self-review removed the queued wrapper and bit-in-word write helper,
+  checked the FIFO/generation/error/deadline/read-plan contracts, fixed the
+  package-only Tokio feature finding, and reran every affected gate.
 - These deterministic validation and packaging corrections do not require
   live PLC communication. `HL-EVAL-TODO-006` is intentionally still open.
 
@@ -27,7 +27,7 @@ is approved.
 
 ### Implementation scope
 
-- Rust high-level Float32 write planning in direct and queued APIs
+- Rust high-level Float32 write planning in the ordinary FIFO client API
 - Every direct bit device family accepted by the address parser, including `Y`, `R`, `B`, `MR`, `LR`, `CR`, `VB`, `X`, `M`, and `L`
 
 ### Target contract
@@ -42,7 +42,7 @@ Calls that previously could emit unintended multi-bit writes now fail before com
 
 1. `Y0:F` and `R0:F` writes fail with the documented Rust argument-error variant before any transport call.
 2. Every supported direct bit family follows the same rejection path, while valid word-device Float32 writes retain their defined two-word encoding.
-3. Direct, queued, named, and helper write paths cannot bypass the validation.
+3. Client, named, and helper write paths cannot bypass the validation.
 4. Regression tests prove zero sends for rejected writes; live PLC writes are not required for this safety guard.
 
 ### Completion checklist
@@ -89,6 +89,10 @@ Incorrect numeric bounds and point counts change to their logical values. Displa
 - [x] Final acceptance criteria verified and the item marked complete.
 
 ## HL-EVAL-TODO-006 — Determine the Host Link device-comment encoding contract
+
+### User disposition
+
+Deferred by the user on 2026-08-01 for evidence investigation followed by implementation in the next Host Link implementation cycle. The current UTF-8-first/Shift_JIS-fallback behavior is not approved as the final contract. Do not change the decoder in the current implementation batch; investigate the exact profile-specific byte contract first, present the resulting target contract one item at a time, and implement only after explicit approval.
 
 ### Implementation scope
 
@@ -138,23 +142,23 @@ The current implementations try UTF-8 first and fall back to Shift_JIS. KEYENCE 
 
 ### Implementation scope
 
-- Direct bit, bit-in-word, named, typed, and queued read paths
-- Read-modify-write helpers that consume a PLC bit response before deciding whether to write
+- Direct bit, bit-in-word, named, and typed read paths
+- Strict Boolean caller input for direct-bit writes
 
 ### Target contract
 
-Caller write-input normalization and PLC-response parsing are separate. A PLC bit response token is accepted only when it is exactly `0`, `1`, `OFF`, or `ON`; `TRUE`, `FALSE`, lowercase forms, surrounding whitespace, and all other tokens are protocol errors that invalidate the connection. A malformed read in a read-modify-write operation must never be followed by a write.
+Caller write input and PLC-response parsing are separate. Direct-bit caller input is a Rust `bool` only. A PLC bit response token is accepted only when it is exactly `0`, `1`, `OFF`, or `ON`; `TRUE`, `FALSE`, lowercase forms, surrounding whitespace, and all other tokens are protocol errors that invalidate the connection. Client-side bit-in-word read-modify-write is not exposed.
 
 ### Compatibility impact
 
-Permissive PLC-response spellings are removed. Documented caller-side boolean write forms may remain only in the separate input parser.
+Permissive PLC-response spellings and numeric/text caller-side Boolean aliases are removed. The former bit-in-word read-modify-write helper is removed without an alias.
 
 ### Acceptance criteria
 
 1. Exact `0`, `1`, `OFF`, and `ON` map to the documented Boolean results in every response-consuming path.
 2. `TRUE`, `FALSE`, lowercase variants, whitespace variants, empty, and arbitrary tokens return the Rust protocol-error category and close the receiving connection.
-3. Direct bit, bit-in-word, named, typed, direct-client, and queued-client paths use the same response parser.
-4. A malformed read during bit-in-word read-modify-write produces zero write frames and no retry.
+3. Direct bit, bit-in-word, named, and typed paths use the same response parser.
+4. Public API/source inspection contains no bit-in-word write or read-modify-write helper.
 
 ### Completion checklist
 
@@ -170,7 +174,7 @@ Permissive PLC-response spellings are removed. Documented caller-side boolean wr
 
 ### Implementation scope
 
-- Timer/counter typed reads and composite helpers in direct and queued APIs
+- Timer/counter typed reads and composite helpers in the FIFO client API
 - Unsigned, signed, double-word, long, and hexadecimal response formats
 
 ### Target contract
@@ -235,21 +239,21 @@ Accidental IPv6 attempts fail deterministically instead of reaching an incompati
 
 ### Implementation scope
 
-- Named-read and polling helpers in direct and queued clients
+- Named-read and polling helpers in the ordinary FIFO client
 
 ### Target contract
 
-Named reads and polls require at least one address. Poll durations must be strictly greater than zero. Empty address collections and zero durations are rejected as caller input before communication, queue execution, or snapshot production.
+Named reads and polls require at least one address. Poll durations must be strictly greater than zero. Empty address collections and zero durations are rejected as caller input before communication, FIFO admission, or result production.
 
 ### Compatibility impact
 
-No-op reads and tight zero-duration polling loops no longer report success or produce empty snapshots.
+No-op reads and tight zero-duration polling loops no longer report success or produce empty results.
 
 ### Acceptance criteria
 
-1. Empty named-read and poll address collections fail before any send in direct and queued paths.
-2. A zero `Duration` fails before communication or snapshot production; positive durations remain supported.
-3. Rejected operations do not enter or delay the queued-client operation gate and are not retried.
+1. Empty named-read and poll address collections fail before any send.
+2. A zero `Duration` fails before communication or result production; positive durations remain supported.
+3. Rejected operations do not enter or delay the FIFO operation gate and are not retried.
 
 ### Completion checklist
 
@@ -261,28 +265,28 @@ No-op reads and tight zero-duration polling loops no longer report success or pr
 - [x] Documentation, migration notes, changelog, and generated API reference agree with the implementation.
 - [x] Final acceptance criteria verified and the item marked complete.
 
-## HL-EVAL-016 — Remove the public Rust queued-client gate bypass
+## HL-EVAL-016 — Remove the Rust queued-client surface
 
 ### Implementation scope
 
-- `QueuedHostLinkClient::inner_client()` visibility/API surface
-- Validation CLI or repository tooling that currently reaches the direct client through the queued wrapper
-- Operation-gate coverage for all public queued operations
+- Former queued wrapper, factories, callbacks, and inner-client visibility/API surface
+- Validation CLI and repository tooling
+- Operation-gate coverage for all public `HostLinkClient` operations
 
 ### Target contract
 
-General users cannot obtain a cloneable direct client from a queued client. The public `inner_client()` escape hatch is removed or made non-public, every public queued operation passes through the queued operation gate for its full logical operation, and repository validation tooling uses an explicit direct/internal construction path instead.
+One ordinary `HostLinkClient` owns FIFO admission and one wire turn across all clones. The former queued wrapper, callbacks, and bypasses are removed without aliases. Every public logical operation uses the ordinary client gate for its full logical operation, and repository tooling uses the same supported client surface.
 
 ### Compatibility impact
 
-This member was not part of the supported user contract, so its removal is recorded as cleanup of an unsupported escape hatch rather than preservation through an alias. Because it was technically `pub`, external source that called it can stop compiling; that fact and the migration to an explicitly chosen direct client must be stated in changelog/migration notes.
+External source using the queued type or its members stops compiling. Callers use `HostLinkClient`; no compatibility alias or second behavior remains.
 
 ### Acceptance criteria
 
-1. Public generated API documentation and compile tests show no way to retrieve or clone the queued client's inner direct client.
-2. Multi-segment named reads retain the gate for their complete logical operation, and the former `execute_async` direct-client callback cannot be used to clone an inner client around that gate.
-3. Repository validation CLI/tests use a direct or crate-internal path without reopening the public bypass.
-4. Direct-client users retain an explicit supported direct-client constructor; no automatic retry or compatibility alias is added.
+1. Public generated API documentation and source inspection contain no queued-client type, factory, callback, or alias.
+2. Multi-segment named reads retain one FIFO turn for their complete logical operation.
+3. Repository validation CLI/tests use the ordinary supported client without a bypass.
+4. `HostLinkClient::new`, `HostLinkClient::connect`, and `open_and_connect` remain explicit supported entry points; no automatic retry is added.
 
 ### Completion checklist
 

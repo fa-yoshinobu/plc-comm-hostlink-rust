@@ -3,7 +3,7 @@ use plc_comm_kv_hostlink::{
     HostLinkClient, HostLinkConnectionOptions, HostLinkMonitorWord, HostLinkTransportMode,
     HostLinkValue, KvDeviceRangeCatalog, KvDeviceRangeEntry, KvDeviceRangeSegment, KvPlcMode,
     TimerCounterValue, device_range_catalog_for_plc_profile, poll, read_comments, read_counter,
-    read_dwords, read_named, read_timer, read_timer_counter, read_words, write_bit_in_word,
+    read_dwords, read_named, read_timer, read_timer_counter, read_words,
 };
 use serde_json::{Value, json};
 
@@ -309,16 +309,6 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             let value = read_comments(&client, &address).await?;
             json!({"status": "success", "value": value})
         }
-        "write-bit-in-word" => {
-            if extra.len() < 2 {
-                json!({"status": "error", "message": "write-bit-in-word requires bit-index and bool value"})
-            } else {
-                let bit_index = extra[0].parse::<u8>()?;
-                let value = parse_bool(&extra[1]);
-                write_bit_in_word(&client, &address, bit_index, value).await?;
-                json!({"status": "success"})
-            }
-        }
         "read-named" => {
             let addresses = ([address.clone()]
                 .into_iter()
@@ -347,14 +337,14 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                     std::time::Duration::from_millis(interval_ms),
                 );
                 pin_mut!(stream);
-                let mut snapshots = Vec::new();
-                while let Some(snapshot) = stream.next().await {
-                    snapshots.push(normalize_named(&snapshot?));
-                    if snapshots.len() >= count {
+                let mut results = Vec::new();
+                while let Some(result) = stream.next().await {
+                    results.push(normalize_named(&result?));
+                    if results.len() >= count {
                         break;
                     }
                 }
-                json!({"status": "success", "snapshots": snapshots})
+                json!({"status": "success", "results": results})
             }
         }
         "read-words" => {
@@ -532,7 +522,7 @@ fn normalize_timer_counter(value: &TimerCounterValue) -> Value {
     })
 }
 
-fn normalize_named(values: &plc_comm_kv_hostlink::NamedSnapshot) -> Value {
+fn normalize_named(values: &plc_comm_kv_hostlink::NamedReadResult) -> Value {
     let mut map = serde_json::Map::new();
     for (key, value) in values {
         map.insert(key.clone(), normalize_value(value));

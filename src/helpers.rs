@@ -1,6 +1,7 @@
 use crate::address::{
     KvDeviceAddress, is_direct_bit_device_type, parse_device, parse_named_address_parts,
-    require_explicit_format, require_no_suffix, validate_device_count, validate_device_span,
+    rdc_device_types, require_explicit_format, require_no_suffix, validate_device_count,
+    validate_device_span, validate_device_type,
 };
 use crate::client::{HostLinkClient, HostLinkPayloadValue};
 use crate::error::HostLinkError;
@@ -24,7 +25,11 @@ pub enum HostLinkValue {
     Text(String),
 }
 
-pub type NamedSnapshot = IndexMap<String, HostLinkValue>;
+/// Ordered, all-or-error values returned by one named-read aggregate.
+///
+/// The aggregate may use more than one PLC request, so this type does not
+/// represent or guarantee one PLC-atomic snapshot.
+pub type NamedReadResult = IndexMap<String, HostLinkValue>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimerCounterValue {
@@ -47,6 +52,13 @@ impl TryFrom<HostLinkValue> for u16 {
 }
 
 impl HostLinkPayloadValue for HostLinkValue {
+    fn as_bool(&self) -> Option<bool> {
+        match self {
+            HostLinkValue::Bool(value) => Some(*value),
+            _ => None,
+        }
+    }
+
     fn as_integer(&self) -> Option<i128> {
         match self {
             HostLinkValue::U16(value) => Some(i128::from(*value)),
@@ -84,7 +96,68 @@ pub async fn read_comments(client: &HostLinkClient, device: &str) -> Result<Stri
     client.read_comments(device).await
 }
 
+fn validate_read_typed_request(device: &str, dtype: &str) -> Result<(), HostLinkError> {
+    let dtype = dtype.trim_start_matches('.').to_ascii_uppercase();
+    if dtype.trim().is_empty() {
+        return Err(HostLinkError::protocol(
+            "dtype is required; specify U, S, D, L, F, H, or BIT.",
+        ));
+    }
+    let parsed = parse_device(device)?;
+    if is_direct_bit_device_type(&parsed.device_type) && dtype == "F" {
+        return Err(HostLinkError::protocol(
+            "Float reads are not defined for direct bit devices.",
+        ));
+    }
+    match dtype.as_str() {
+        "F" => {
+            prepare_read_address(device, Some("U"), 2)?;
+        }
+        "BIT" => {
+            prepare_read_address(device, None, 1)?;
+        }
+        "U" | "S" | "D" | "L" | "H" => {
+            prepare_read_address(device, Some(dtype.as_str()), 1)?;
+        }
+        other => {
+            return Err(HostLinkError::protocol(format!(
+                "Unsupported logical data type '{other}'."
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_named_addresses(addresses: &[String]) -> Result<(), HostLinkError> {
+    for address in addresses {
+        let (base_address, dtype, bit_index) = parse_named_address_parts(address)?;
+        match dtype.as_str() {
+            "BIT_IN_WORD" => {
+                require_bit_in_word_index(address, bit_index)?;
+                prepare_read_address(&base_address, Some("U"), 1)?;
+            }
+            "COMMENT" => {
+                let parsed = parse_device(&base_address)?;
+                validate_device_type("RDC", &parsed.device_type, rdc_device_types())?;
+                require_no_suffix(&parsed, "RDC")?;
+            }
+            _ => validate_read_typed_request(&base_address, &dtype)?,
+        }
+    }
+    Ok(())
+}
+
 pub async fn read_typed(
+    client: &HostLinkClient,
+    device: &str,
+    dtype: &str,
+) -> Result<HostLinkValue, HostLinkError> {
+    validate_read_typed_request(device, dtype)?;
+    let (_turn, direct) = client.begin_turn().await?;
+    read_typed_impl(&direct, device, dtype).await
+}
+
+async fn read_typed_impl(
     client: &HostLinkClient,
     device: &str,
     dtype: &str,
@@ -246,7 +319,7 @@ pub async fn read_typed(
                         "Expected 1 hexadecimal response token but received {}",
                         tokens.len()
                     ));
-                    let _ = client.close().await;
+                    client.retire_transport().await;
                     return Err(error);
                 }
                 tokens[0].clone()
@@ -258,7 +331,7 @@ pub async fn read_typed(
                 let error = HostLinkError::protocol(
                     "Hexadecimal response token must contain 1..=4 hexadecimal digits",
                 );
-                let _ = client.close().await;
+                client.retire_transport().await;
                 return Err(error);
             }
             Ok(HostLinkValue::Text(token.to_ascii_uppercase()))
@@ -285,7 +358,15 @@ pub async fn read_timer_counter(
 
     require_no_suffix(&address, "read_timer_counter")?;
     let target = address.to_text()?;
-    let response = read_single_response(client, &target, Some("D")).await?;
+    let (_turn, direct) = client.begin_turn().await?;
+    read_timer_counter_impl(&direct, &target).await
+}
+
+async fn read_timer_counter_impl(
+    client: &HostLinkClient,
+    target: &str,
+) -> Result<TimerCounterValue, HostLinkError> {
+    let response = read_single_response(client, target, Some("D")).await?;
     let (status, current, preset) = close_on_protocol_error(
         client,
         parse_timer_counter_tokens::<u32>(
@@ -353,12 +434,9 @@ pub async fn write_typed<T: HostLinkPayloadValue>(
             client.write_consecutive(device, &words, Some("U")).await
         }
         "BIT" => {
-            let token = value.format_for_suffix("").trim().to_ascii_uppercase();
-            let parsed = match token.as_str() {
-                "1" | "ON" | "TRUE" => true,
-                "0" | "OFF" | "FALSE" => false,
-                _ => return Err(HostLinkError::protocol("Invalid BIT write value")),
-            };
+            let parsed = value
+                .as_bool()
+                .ok_or_else(|| HostLinkError::protocol("BIT writes require a bool value"))?;
             client.write(device, parsed, None).await
         }
         "H" => {
@@ -530,7 +608,7 @@ async fn read_single_parsed<T: FromStr>(
     let values =
         close_on_protocol_error(client, parse_all_tokens::<T>(&response, invalid_message)).await?;
     if values.len() != 1 {
-        client.close().await?;
+        client.retire_transport().await;
         return Err(HostLinkError::protocol(format!(
             "Response returned {} values; expected 1",
             values.len()
@@ -569,7 +647,7 @@ async fn read_consecutive_parsed<T: FromStr>(
     let values =
         close_on_protocol_error(client, parse_all_tokens(&response, invalid_message)).await?;
     if values.len() != count {
-        client.close().await?;
+        client.retire_transport().await;
         return Err(HostLinkError::protocol(format!(
             "Response returned {} values; expected {count}",
             values.len()
@@ -585,25 +663,16 @@ async fn close_on_protocol_error<T>(
     match result {
         Ok(value) => Ok(value),
         Err(error) => {
-            let _ = client.close().await;
+            client.retire_transport().await;
             Err(error)
         }
     }
 }
 
-pub async fn write_bit_in_word(
-    client: &HostLinkClient,
-    device: &str,
-    bit_index: u8,
-    value: bool,
-) -> Result<(), HostLinkError> {
-    client.write_bit_in_word(device, bit_index, value).await
-}
-
 pub async fn read_named<S: AsRef<str>>(
     client: &HostLinkClient,
     addresses: &[S],
-) -> Result<NamedSnapshot, HostLinkError> {
+) -> Result<NamedReadResult, HostLinkError> {
     let addr_list = addresses
         .iter()
         .map(|item| item.as_ref().to_owned())
@@ -613,19 +682,29 @@ pub async fn read_named<S: AsRef<str>>(
             "read_named addresses must not be empty.",
         ));
     }
+    validate_named_addresses(&addr_list)?;
+    let compiled = compile_read_named_plan(&addr_list);
+    read_named_compiled(client, &addr_list, compiled.as_ref()).await
+}
 
-    if let Some(plan) = compile_read_named_plan(&addr_list) {
-        execute_read_named_plan(client, &plan).await
+pub(crate) async fn read_named_compiled(
+    client: &HostLinkClient,
+    addresses: &[String],
+    compiled: Option<&CompiledReadNamedPlan>,
+) -> Result<NamedReadResult, HostLinkError> {
+    let (_turn, direct) = client.begin_turn().await?;
+    if let Some(plan) = compiled {
+        execute_read_named_plan(&direct, plan).await
     } else {
-        read_named_sequential(client, &addr_list).await
+        read_named_sequential(&direct, addresses).await
     }
 }
 
 pub(crate) async fn read_named_sequential(
     client: &HostLinkClient,
     addresses: &[String],
-) -> Result<NamedSnapshot, HostLinkError> {
-    let mut result = NamedSnapshot::new();
+) -> Result<NamedReadResult, HostLinkError> {
+    let mut result = NamedReadResult::new();
     for address in addresses {
         let (base_address, dtype, bit_index) = parse_named_address_parts(address)?;
         if dtype == "BIT_IN_WORD" {
@@ -655,7 +734,7 @@ pub(crate) async fn read_named_sequential(
         } else {
             result.insert(
                 address.clone(),
-                read_typed(client, &base_address, &dtype).await?,
+                read_typed_impl(client, &base_address, &dtype).await?,
             );
         }
     }
@@ -673,7 +752,7 @@ fn require_bit_in_word_index(address: &str, bit_index: Option<u8>) -> Result<u8,
 pub(crate) async fn execute_read_named_plan(
     client: &HostLinkClient,
     plan: &CompiledReadNamedPlan,
-) -> Result<NamedSnapshot, HostLinkError> {
+) -> Result<NamedReadResult, HostLinkError> {
     let mut resolved = vec![HostLinkValue::U16(0); plan.requests_in_input_order.len()];
     for segment in &plan.segments {
         match segment.mode {
@@ -698,7 +777,7 @@ pub(crate) async fn execute_read_named_plan(
         }
     }
 
-    let mut result = NamedSnapshot::new();
+    let mut result = NamedReadResult::new();
     for request in &plan.requests_in_input_order {
         result.insert(request.address.clone(), resolved[request.index].clone());
     }
@@ -709,7 +788,7 @@ pub fn poll<'a, S: AsRef<str> + 'a>(
     client: &'a HostLinkClient,
     addresses: &'a [S],
     interval: Duration,
-) -> impl Stream<Item = Result<NamedSnapshot, HostLinkError>> + 'a {
+) -> impl Stream<Item = Result<NamedReadResult, HostLinkError>> + 'a {
     async_stream::try_stream! {
         let addr_list = addresses.iter().map(|item| item.as_ref().to_owned()).collect::<Vec<_>>();
         if addr_list.is_empty() {
@@ -719,13 +798,10 @@ pub fn poll<'a, S: AsRef<str> + 'a>(
             Err(HostLinkError::protocol("poll interval must be greater than zero."))?;
         }
         let compiled = compile_read_named_plan(&addr_list);
+        validate_named_addresses(&addr_list)?;
         loop {
-            let snapshot = if let Some(plan) = &compiled {
-                execute_read_named_plan(client, plan).await?
-            } else {
-                read_named_sequential(client, &addr_list).await?
-            };
-            yield snapshot;
+            let result = read_named_compiled(client, &addr_list, compiled.as_ref()).await?;
+            yield result;
             tokio::time::sleep(interval).await;
         }
     }
@@ -755,8 +831,10 @@ pub async fn read_words_single_request(
     if count == 0 {
         return Err(HostLinkError::protocol("count must be 1 or greater."));
     }
+    prepare_read_address(device, Some("U"), count)?;
+    let (_turn, direct) = client.begin_turn().await?;
     read_consecutive_parsed::<u16>(
-        client,
+        &direct,
         device,
         count,
         Some("U"),
@@ -773,8 +851,10 @@ pub async fn read_dwords_single_request(
     if count == 0 {
         return Err(HostLinkError::protocol("count must be 1 or greater."));
     }
+    prepare_read_address(device, Some("D"), count)?;
+    let (_turn, direct) = client.begin_turn().await?;
     read_consecutive_parsed::<u32>(
-        client,
+        &direct,
         device,
         count,
         Some("D"),

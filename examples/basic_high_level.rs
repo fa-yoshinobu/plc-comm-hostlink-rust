@@ -1,4 +1,4 @@
-//! Basic high-level Host Link example using the queued client.
+//! Basic high-level Host Link example using the FIFO HostLinkClient.
 //!
 //! Usage:
 //!   cargo run --features cli --example basic_high_level -- <host> <port> <transport> <plc-profile>
@@ -28,10 +28,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let demo_result: Result<(), Box<dyn Error>> = async {
         client.write_typed("DM120", "U", dm0).await?;
 
-        let snapshot = client
+        let values = client
             .read_named(&["DM0:U", "DM1:S", "DM2:D", "DM4:F", "DM120.0"])
             .await?;
-        println!("{snapshot:?}");
+        println!("{values:?}");
         Ok(())
     }
     .await;

@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$Treeish = "HEAD",
-    [switch]$UseWorktreeAttributes
+    [switch]$UseWorktreeAttributes,
+    [switch]$UseCurrentWorktree
 )
 
 Set-StrictMode -Version Latest
@@ -12,48 +13,66 @@ $workspaceRoot = [System.IO.Directory]::GetParent($repositoryRoot).FullName
 $runId = [guid]::NewGuid().ToString("N")
 $archivePath = Join-Path $workspaceRoot ("plc-source-archive-$runId.zip")
 $extractPath = Join-Path $workspaceRoot ("plc-source-archive-$runId")
+$temporaryIndexPath = Join-Path $workspaceRoot ("plc-source-archive-$runId.index")
 
 $forbiddenFileNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 @(
     ".gitattributes",
-    ".gitignore",
-    ".pre-commit-config.yaml",
-    "AGENTS.md",
-    "release_check.bat",
-    "run_ci.bat",
-    "run-local-node-red.bat",
-    "TODO.md"
+    ".gitignore"
 ) | ForEach-Object { [void]$forbiddenFileNames.Add($_) }
 
 $forbiddenPrefixes = @(
     ".codex",
-    ".github",
     ".pio",
     ".tools",
     "build",
     "build_win",
-    "docsrc/maintainer",
-    "internal_docs",
     "local_folder",
-    "release-artifacts",
-    "scripts",
-    "tools"
+    "release-artifacts"
 )
 
 try {
-    & git -C $repositoryRoot rev-parse --verify "$Treeish`^{tree}" *> $null
+    $effectiveTreeish = $Treeish
+    if ($UseCurrentWorktree) {
+        $previousIndexFile = $env:GIT_INDEX_FILE
+        try {
+            $env:GIT_INDEX_FILE = $temporaryIndexPath
+            & git -C $repositoryRoot read-tree HEAD
+            if ($LASTEXITCODE -ne 0) {
+                throw "Cannot initialize the temporary current-worktree index."
+            }
+            & git -C $repositoryRoot add -A -- .
+            if ($LASTEXITCODE -ne 0) {
+                throw "Cannot stage the complete current worktree in the temporary index."
+            }
+            $effectiveTreeish = (& git -C $repositoryRoot write-tree).Trim()
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($effectiveTreeish)) {
+                throw "Cannot create the synthetic current-worktree tree."
+            }
+        }
+        finally {
+            if ($null -eq $previousIndexFile) {
+                Remove-Item Env:GIT_INDEX_FILE -ErrorAction SilentlyContinue
+            }
+            else {
+                $env:GIT_INDEX_FILE = $previousIndexFile
+            }
+        }
+    }
+
+    & git -C $repositoryRoot rev-parse --verify "$effectiveTreeish`^{tree}" *> $null
     if ($LASTEXITCODE -ne 0) {
-        throw "Cannot resolve treeish '$Treeish'."
+        throw "Cannot resolve treeish '$effectiveTreeish'."
     }
 
     $archiveArguments = @("archive", "--format=zip", "--output=$archivePath")
-    if ($UseWorktreeAttributes) {
+    if ($UseWorktreeAttributes -or $UseCurrentWorktree) {
         $archiveArguments += "--worktree-attributes"
     }
-    $archiveArguments += $Treeish
+    $archiveArguments += $effectiveTreeish
     & git -C $repositoryRoot @archiveArguments
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $archivePath)) {
-        throw "git archive failed for '$Treeish'."
+        throw "git archive failed for '$effectiveTreeish'."
     }
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -69,6 +88,27 @@ try {
     finally {
         $archive.Dispose()
     }
+    $trackedFiles = @(& git -C $repositoryRoot ls-tree -r --name-only $effectiveTreeish |
+        ForEach-Object { $_.Replace("\", "/") } |
+        Sort-Object -Unique)
+    if ($LASTEXITCODE -ne 0) { throw "Cannot enumerate tracked files for '$effectiveTreeish'." }
+
+    $requiredTracked = @($trackedFiles | Where-Object {
+        $_ -match '^(test|tests|\.github|docsrc/maintainer|internal_docs|scripts|tools)/' -or
+        $_ -in @("AGENTS.md", "TODO.md", "release_check.bat", "run_ci.bat")
+    })
+    $missingTracked = @($requiredTracked | Where-Object { $_ -notin $archiveFiles })
+    if ($missingTracked.Count -ne 0) {
+        throw "Source archive omits tracked validation or maintainer material: $($missingTracked -join ', ')"
+    }
+
+    foreach ($guide in @("GETTING_STARTED.md", "USAGE_GUIDE.md", "PROFILES.md", "GOTCHAS.md", "API_REFERENCE.md")) {
+        $guideCandidates = @("docsrc/user/$guide", "docs/$guide")
+        if (@($guideCandidates | Where-Object { $_ -in $archiveFiles }).Count -eq 0) {
+            throw "Source archive is missing standard user guide '$guide'."
+        }
+    }
+
 
     $forbidden = @(
         foreach ($path in $archiveFiles) {
@@ -88,7 +128,7 @@ try {
         }
     )
     if ($forbidden.Count -ne 0) {
-        throw "Source archive contains maintainer-only files: $($forbidden -join ', ')"
+        throw "Source archive contains forbidden generated or release-output files: $($forbidden -join ', ')"
     }
 
     $requiredRootFiles = @("CHANGELOG.md", "LICENSE", "README.md")
@@ -98,7 +138,7 @@ try {
     }
 
     $expectedSamples = @(
-        & git -C $repositoryRoot ls-tree -r --name-only $Treeish -- examples samples |
+        & git -C $repositoryRoot ls-tree -r --name-only $effectiveTreeish -- examples samples |
             ForEach-Object { $_.Replace("\", "/") } |
             Sort-Object -Unique
     )
@@ -121,7 +161,7 @@ try {
     }
 
     $expectedTests = @(
-        & git -C $repositoryRoot ls-tree -r --name-only $Treeish -- test tests |
+        & git -C $repositoryRoot ls-tree -r --name-only $effectiveTreeish -- test tests |
             ForEach-Object { $_.Replace("\", "/") } |
             Sort-Object -Unique
     )
@@ -178,9 +218,12 @@ try {
         Pop-Location
     }
 
-    Write-Host "[OK] Source archive contract passed: treeish=$Treeish files=$($archiveFiles.Count) samples=$($actualSamples.Count) tests=$($actualTests.Count)"
+    $sourceLabel = if ($UseCurrentWorktree) { "current-worktree" } else { $effectiveTreeish }
+    Write-Host "[OK] Source archive contract passed: source=$sourceLabel files=$($archiveFiles.Count) samples=$($actualSamples.Count) tests=$($actualTests.Count)"
 }
 finally {
     Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $extractPath -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $temporaryIndexPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath "$temporaryIndexPath.lock" -Force -ErrorAction SilentlyContinue
 }

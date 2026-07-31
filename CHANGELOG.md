@@ -17,13 +17,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Breaking: Replace the queued/direct split with one `HostLinkClient` that owns FIFO admission and one complete logical wire turn across all clones. Remove `QueuedHostLinkClient` without an alias; `open_and_connect` now returns `HostLinkClient`.
+- Breaking: Remove `write_bit_in_word`; bit-in-word notation remains read-only because client-side read-modify-write cannot be PLC-atomic. Direct-bit write inputs are now strictly `bool`.
+- Breaking: Rename the public named-read result type from `NamedSnapshot` to `NamedReadResult` without a compatibility alias; the old name incorrectly implied that a multi-request aggregate was one PLC-atomic snapshot. The verification CLI poll response key is likewise renamed from `snapshots` to `results`.
+- Library: Add dedicated `Timeout`, `Closed`, `Transport`, and `OutcomeUnknown` error categories. State-changing and raw operations report a machine-readable uncertain-outcome reason after a possible send, close the transport, and are never retried automatically. The reason set contains timeout, close, transport, and malformed response; it does not claim to return Rust future-drop cancellation.
+- Library: Capture timeout at FIFO admission, use one monotonic absolute deadline through send, complete receive framing, and response decoding, and invalidate active and waiting work by connection generation on `close`.
+- Library: Dropping a waiting future sends nothing. Dropping an active future returns no library result, poisons and retires the transport, and requires callers to treat a possibly transmitted state-changing operation as unknown; the next command returns `NotConnected` until explicit reopen.
+- Library: Make `read_named` and each poll cycle one all-or-error FIFO turn. Prevalidate the entire address set, preserve declared wire order, keep multiword values whole at segment boundaries, and document that multi-frame reads are not PLC-atomic; coherent reads require one request or a PLC-side snapshot/handshake.
+- Library: Enforce a 65,536-byte request-body cap in addition to the existing response-body cap; limit-plus-one fails before state or traffic changes. IPv4-only endpoint behavior remains the supported contract.
+- Tests: Add FIFO aggregate, close/reopen generation, future-drop retirement, uncertain write outcome, named-read preflight/order, multiword boundary, bool-only input, and exact capacity boundary coverage.
+- Release: Aligned artifact roles so the registry package contains consumer runtime, native API metadata, license, README, and ecosystem-native examples where applicable while excluding repository tests and maintainer tooling; the GitHub source archive retains tracked non-hardware validation and maintainer inputs.
 - Docs: README documentation links now include the shared Performance and Choosing a Language pages, and package registry metadata was expanded for discoverability. No functional change.
 - Library: Reject Float32 writes to direct-bit devices, empty named reads/polls, and zero polling intervals before transport.
 - Library: Interpret `R`/`MR`/`LR`/`CR` catalog endpoints as decimal bank plus a final two-digit bit field (`00..15`).
-- Library: Accept only exact documented direct-bit response tokens, validate every timer/counter composite field, and close the connection after malformed semantic responses; malformed bit read-modify-write responses never reach the write step.
+- Library: Accept only exact documented direct-bit response tokens, validate every timer/counter composite field, and close the connection after malformed semantic responses.
 - Library: Make Host Link endpoints explicitly IPv4-only. IPv6 literals are rejected before socket creation, hostname resolution selects only IPv4 results, and UDP uses an IPv4 local socket.
-- Library: Remove the public `QueuedHostLinkClient::inner_client()` escape hatch and the `execute_async` callback that could clone the inner direct client. Code that needs direct-client semantics must explicitly construct or connect a `HostLinkClient`; queued operations remain serialized for their complete logical operation.
+- Library: Removed the former queued-client inner-client escape hatch as an intermediate hardening step; the queued wrapper itself is now removed by the breaking FIFO-client change above.
 - CI: Include tests and fixtures in GitHub source archives and run the standard Cargo format, check, Clippy, documentation, and test gates from the extracted archive. The crates.io package remains minimal and excludes repository tests.
+- CI: Generate the `.crate`, inspect its extracted contents, compile its examples and rustdoc, and build a separate path consumer using only the extracted package; this independently proves that the consumer artifact excludes repository tests and is usable without the checkout.
+- CI: Build current-worktree source archives through an isolated temporary Git index so tracked modifications, non-ignored untracked files, and tracked deletions are all validated without changing the maintainer's real index.
+- CI: Added an explicit Rust 1.85 all-target/all-feature check so the crate's declared minimum compiler is tested independently from the stable-toolchain gate.
+- Docs: Documented Rust 1.85 as the declared minimum supported compiler in the getting-started guide.
 
 ## [3.2.1] - 2026-07-29
 

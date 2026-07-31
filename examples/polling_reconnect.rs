@@ -166,7 +166,10 @@ fn parse_args() -> Result<PollConfig, Box<dyn Error>> {
 }
 
 fn is_retryable_hostlink(error: &HostLinkError) -> bool {
-    matches!(error, HostLinkError::Connection(_))
+    matches!(
+        error,
+        HostLinkError::Transport { .. } | HostLinkError::Timeout(_) | HostLinkError::Closed
+    )
 }
 
 fn next_backoff(current: Duration, max: Duration) -> Duration {

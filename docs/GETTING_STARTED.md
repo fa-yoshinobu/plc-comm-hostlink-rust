@@ -2,6 +2,9 @@
 
 ## Requirements
 
+Use Rust 1.85 or newer. Rust 1.85 is the crate's declared minimum supported
+compiler version.
+
 Choose these values for the actual PLC before connecting:
 
 - host name resolving to IPv4, or an IPv4 address;
@@ -50,8 +53,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `HostLinkClient::new` creates a disconnected client. Call `open` before any
 command. An unconnected command returns `HostLinkError::NotConnected` without
-creating a socket. After timeout, cancellation, EOF, or transport failure,
-call `open` explicitly again; commands never reconnect or retry themselves.
+creating a socket. After timeout, EOF, transport failure, or an in-flight future
+being dropped, call `open` explicitly again; commands never reconnect or retry
+themselves. Dropping a future produces no library `Result`, and a caller that
+drops a possibly transmitted write must treat its PLC outcome as unknown.
 
 ## First controlled write
 

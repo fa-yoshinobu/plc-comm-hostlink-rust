@@ -5,7 +5,6 @@ use crate::address::{
 };
 use crate::error::HostLinkError;
 use crate::helpers::{HostLinkValue, parse_bool_token};
-use indexmap::IndexMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReadPlanValueKind {
@@ -50,80 +49,69 @@ pub(crate) struct CompiledReadNamedPlan {
 
 pub(crate) fn compile_read_named_plan(addresses: &[String]) -> Option<CompiledReadNamedPlan> {
     let mut requests_in_input_order = Vec::new();
-    let mut requests_by_device_type: IndexMap<String, Vec<ReadPlanRequest>> = IndexMap::new();
-
     for (index, address) in addresses.iter().enumerate() {
         let request = try_parse_optimizable_read_named_request(address, index)?;
-        requests_by_device_type
-            .entry(request.base_address.device_type.clone())
-            .or_default()
-            .push(request.clone());
         requests_in_input_order.push(request);
     }
 
     let mut segments = Vec::new();
-    for bucket in requests_by_device_type.values() {
-        let mut sorted = bucket.clone();
-        sorted.sort_by_key(|request| {
-            (
-                read_plan_number(request),
-                usize::MAX - get_word_width(request.kind),
-            )
-        });
+    let mut pending = Vec::new();
+    let mut current_start: Option<KvDeviceAddress> = None;
+    let mut current_start_number = 0u32;
+    let mut current_end_exclusive = 0u32;
+    let mut current_mode: Option<ReadPlanSegmentMode> = None;
 
-        let mut pending = Vec::new();
-        let mut current_start: Option<KvDeviceAddress> = None;
-        let mut current_start_number = 0u32;
-        let mut current_end_exclusive = 0u32;
-        let mut current_mode: Option<ReadPlanSegmentMode> = None;
+    for request in requests_in_input_order.iter().cloned() {
+        let request_start = read_plan_number(&request);
+        let request_end_exclusive =
+            request_start.checked_add(get_word_width(request.kind) as u32)?;
+        let request_mode = segment_mode_for_kind(request.kind);
+        let segment_limit =
+            read_plan_segment_limit(&request.base_address.device_type, request_mode);
+        let same_device_type = current_start
+            .as_ref()
+            .is_some_and(|start| start.device_type == request.base_address.device_type);
+        let exceeds_segment_limit = current_start.is_some()
+            && request_end_exclusive.checked_sub(current_start_number)? > segment_limit as u32;
+        let can_append = current_start.is_some()
+            && same_device_type
+            && current_mode == Some(request_mode)
+            && request_start >= current_start_number
+            && request_start <= current_end_exclusive
+            && !exceeds_segment_limit;
 
-        for request in sorted {
-            let request_start = read_plan_number(&request);
-            let request_end_exclusive =
-                request_start.checked_add(get_word_width(request.kind) as u32)?;
-            let request_mode = segment_mode_for_kind(request.kind);
-            let segment_limit =
-                read_plan_segment_limit(&request.base_address.device_type, request_mode);
-            let exceeds_segment_limit = current_start.is_some()
-                && request_end_exclusive.checked_sub(current_start_number)? > segment_limit as u32;
-            if current_start.is_none()
-                || request_start > current_end_exclusive
-                || current_mode != Some(request_mode)
-                || exceeds_segment_limit
-            {
-                if let Some(start_address) = current_start.take() {
-                    segments.push(ReadPlanSegment {
-                        start_address,
-                        start_number: current_start_number,
-                        count: (current_end_exclusive - current_start_number) as usize,
-                        mode: current_mode.unwrap_or(ReadPlanSegmentMode::Words),
-                        requests: pending.clone(),
-                    });
-                    pending.clear();
-                }
-                current_start = Some(KvDeviceAddress {
-                    device_type: request.base_address.device_type.clone(),
-                    number: request.base_address.number,
-                    suffix: String::new(),
+        if !can_append {
+            if let Some(start_address) = current_start.take() {
+                segments.push(ReadPlanSegment {
+                    start_address,
+                    start_number: current_start_number,
+                    count: (current_end_exclusive - current_start_number) as usize,
+                    mode: current_mode.unwrap_or(ReadPlanSegmentMode::Words),
+                    requests: std::mem::take(&mut pending),
                 });
-                current_start_number = request_start;
-                current_end_exclusive = request_end_exclusive;
-                current_mode = Some(request_mode);
-            } else if request_end_exclusive > current_end_exclusive {
-                current_end_exclusive = request_end_exclusive;
             }
-            pending.push(request);
-        }
-
-        if let Some(start_address) = current_start {
-            segments.push(ReadPlanSegment {
-                start_address,
-                start_number: current_start_number,
-                count: (current_end_exclusive - current_start_number) as usize,
-                mode: current_mode.unwrap_or(ReadPlanSegmentMode::Words),
-                requests: pending,
+            current_start = Some(KvDeviceAddress {
+                device_type: request.base_address.device_type.clone(),
+                number: request.base_address.number,
+                suffix: String::new(),
             });
+            current_start_number = request_start;
+            current_end_exclusive = request_end_exclusive;
+            current_mode = Some(request_mode);
+        } else if request_end_exclusive > current_end_exclusive {
+            current_end_exclusive = request_end_exclusive;
         }
+        pending.push(request);
+    }
+
+    if let Some(start_address) = current_start {
+        segments.push(ReadPlanSegment {
+            start_address,
+            start_number: current_start_number,
+            count: (current_end_exclusive - current_start_number) as usize,
+            mode: current_mode.unwrap_or(ReadPlanSegmentMode::Words),
+            requests: pending,
+        });
     }
 
     Some(CompiledReadNamedPlan {
@@ -281,4 +269,47 @@ pub(crate) fn resolve_direct_bit_value(
         .get(offset)
         .ok_or_else(|| HostLinkError::protocol("Batched direct bit response was too short"))?;
     Ok(HostLinkValue::Bool(parse_bool_token(token)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compile_read_named_plan;
+
+    #[test]
+    fn compiled_segments_preserve_declared_input_wire_order() {
+        let addresses = ["DM10:U", "DM9:U", "DM11:U"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let plan = compile_read_named_plan(&addresses).unwrap();
+
+        assert_eq!(
+            plan.segments
+                .iter()
+                .map(|segment| (segment.start_number, segment.count))
+                .collect::<Vec<_>>(),
+            vec![(10, 1), (9, 1), (11, 1)]
+        );
+    }
+
+    #[test]
+    fn multiword_value_moves_whole_to_next_segment_at_limit() {
+        let mut addresses = (0..999)
+            .map(|number| format!("DM{number}:U"))
+            .collect::<Vec<_>>();
+        addresses.push("DM999:D".to_owned());
+
+        let plan = compile_read_named_plan(&addresses).unwrap();
+        assert_eq!(plan.segments.len(), 2);
+        assert_eq!(
+            (plan.segments[0].start_number, plan.segments[0].count),
+            (0, 999)
+        );
+        assert_eq!(
+            (plan.segments[1].start_number, plan.segments[1].count),
+            (999, 2)
+        );
+        assert_eq!(plan.segments[1].requests.len(), 1);
+        assert_eq!(plan.segments[1].requests[0].address, "DM999:D");
+    }
 }

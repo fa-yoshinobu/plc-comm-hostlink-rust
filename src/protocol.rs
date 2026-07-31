@@ -1,6 +1,8 @@
 use crate::error::HostLinkError;
 use encoding_rs::SHIFT_JIS;
 
+pub(crate) const MAX_FRAME_BODY_BYTES: usize = 65_536;
+
 pub fn build_frame(body: &str) -> Result<Vec<u8>, HostLinkError> {
     if !body.is_ascii() {
         return Err(HostLinkError::protocol(
@@ -17,6 +19,11 @@ pub fn build_frame(body: &str) -> Result<Vec<u8>, HostLinkError> {
         ));
     }
     let body = body.as_bytes();
+    if body.len() > MAX_FRAME_BODY_BYTES {
+        return Err(HostLinkError::protocol(format!(
+            "Host Link command body exceeds {MAX_FRAME_BODY_BYTES} bytes"
+        )));
+    }
     let mut result = Vec::with_capacity(body.len() + 1);
     result.extend_from_slice(body);
     result.push(b'\r');
@@ -100,7 +107,7 @@ pub fn split_data_tokens(response_text: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::build_frame;
+    use super::{MAX_FRAME_BODY_BYTES, build_frame};
 
     #[test]
     fn frame_builder_preserves_body_and_appends_one_cr() {
@@ -111,5 +118,16 @@ mod tests {
     fn frame_builder_rejects_injected_terminators_and_non_ascii() {
         assert!(build_frame("RD DM0.U\rWR DM0.U 1").is_err());
         assert!(build_frame("RDC 日本語").is_err());
+    }
+
+    #[test]
+    fn frame_builder_accepts_exact_body_capacity_and_rejects_one_byte_over() {
+        let maximum = "A".repeat(MAX_FRAME_BODY_BYTES);
+        let frame = build_frame(&maximum).unwrap();
+        assert_eq!(frame.len(), MAX_FRAME_BODY_BYTES + 1);
+        assert_eq!(frame.last(), Some(&b'\r'));
+
+        let oversized = "A".repeat(MAX_FRAME_BODY_BYTES + 1);
+        assert!(build_frame(&oversized).is_err());
     }
 }

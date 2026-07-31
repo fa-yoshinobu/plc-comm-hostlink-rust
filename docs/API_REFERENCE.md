@@ -9,14 +9,15 @@ trace facilities are intentionally omitted from ordinary user documentation.
 | --- | --- |
 | Validated options | `HostLinkConnectionOptions::new(host, port, transport, plc_profile)` |
 | Disconnected client | `HostLinkClient::new` |
-| Connected direct client | `HostLinkClient::connect` |
-| Connected queued client | `open_and_connect`, `HostLinkClientFactory::open_and_connect` |
+| Connected client | `HostLinkClient::connect`, `open_and_connect`, `HostLinkClientFactory::open_and_connect` |
 | Lifecycle | `open`, `close`, `is_open` |
 | Session values | `timeout`, `set_timeout`, `plc_profile` |
 | Transport selection | `HostLinkTransportMode::{Tcp, Udp}` |
 
 Endpoints are IPv4-only. IPv6 literals are caller errors; hostnames without an
 IPv4 result fail as connection errors before protocol communication.
+Request and response bodies have an internal 65,536-byte cap. There is no
+caller-controlled receive capacity; public results own their dynamic storage.
 
 ## PLC operations
 
@@ -44,7 +45,8 @@ IPv4 result fail as connection errors before protocol communication.
 
 Numeric low-level methods require a base device plus an explicit format.
 Direct bit methods use an unsuffixed device. Suffix-bearing low-level device
-strings are rejected.
+strings are rejected. Direct-bit writes require `bool`; numeric and textual
+aliases are rejected before transport.
 
 `HostLinkClock.year` is the explicit two-digit PLC year and must be `0..=99`.
 Semantic reads validate command-derived response counts. Direct-bit responses
@@ -63,17 +65,19 @@ generation and enforce the exact registered token count.
 | Purpose | API |
 | --- | --- |
 | Typed value | `HostLinkValue`, `read_typed`, `write_typed` |
-| Named snapshot | `NamedSnapshot`, `read_named` |
+| Named read result | `NamedReadResult`, `read_named` |
 | Polling | `poll` |
 | Timer/counter composite | `TimerCounterValue`, `read_timer_counter`, `read_timer`, `read_counter` |
 | Word reads | `read_words`, `read_words_single_request` |
 | Dword reads | `read_dwords`, `read_dwords_single_request` |
 | Word writes | `write_words_single_request` |
 | Dword writes | `write_dwords_single_request` |
-| Bit in word | `write_bit_in_word` |
 
 All word/Dword helpers are single-request operations. There are no chunked
-exports.
+exports. `read_named` is the only automatic multi-request read aggregate: it
+preserves input wire order, keeps multiword values whole, owns one FIFO turn,
+and returns no partial result. A multi-frame named read is not PLC-atomic;
+coherent readers must use one request or a PLC-side snapshot/handshake.
 
 Hexadecimal typed reads require exactly one token containing 1..4 hexadecimal
 digits. Timer/counter composite reads require exactly three semantic tokens,
@@ -98,18 +102,29 @@ other than `HostLinkValue::U16` return an error instead of producing zero.
 
 ## Errors
 
-`HostLinkError` distinguishes protocol validation, `NotConnected`, transport
-connection failure, and PLC rejection. PLC errors retain the returned code and
-response; the crate does not embed copied manual error descriptions.
+`HostLinkError` distinguishes `Protocol`, `Timeout`, `Closed`, `NotConnected`,
+`Transport`, `Plc`, and `OutcomeUnknown`. PLC errors retain the returned code
+and response; the crate does not embed copied manual error descriptions.
+`OutcomeUnknown` has a machine-readable reason for timeout, close, transport
+failure, or malformed response. It is used when a state-changing request may
+have reached the PLC and the future returns a library `Result`; no automatic
+retry occurs.
+
+Dropping a Rust future is caller-observed cancellation and returns no
+`HostLinkError`. A waiting drop sends nothing. A drop after transmission may
+have started poisons and retires the transport, so the next operation returns
+`NotConnected` until an explicit `open`; the caller must treat a state-changing
+outcome as unknown. `HostLinkOutcomeUnknownReason` therefore has no cancellation
+variant, and a dropped future is distinct from a returned library `Timeout`.
 
 The complete generated Rust API for a release is available through docs.rs.
 
-`QueuedHostLinkClient` intentionally has no public inner-client getter. Every
-queued operation owns its complete queue gate; use `HostLinkClient` explicitly
-when direct-client behavior is required.
+Every `HostLinkClient` owns a FIFO admission queue and one wire turn shared by
+its clones. `close` invalidates active and waiting work from the old generation;
+only work admitted after an explicit reopen may use the new transport.
 
 ## Traffic statistics
 
-`HostLinkClient::traffic_stats().await` and the queued equivalent return `HostLinkTrafficStats`.
+`HostLinkClient::traffic_stats().await` returns `HostLinkTrafficStats`.
 TCP receive bytes count the body plus the first CR/LF terminator, independent of separator
 segmentation; UDP receive bytes count the complete datagram.

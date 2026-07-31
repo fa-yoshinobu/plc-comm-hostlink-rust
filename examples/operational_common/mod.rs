@@ -46,10 +46,10 @@ impl CsvWriter {
         }
     }
 
-    async fn write_snapshot(
+    async fn write_result(
         &self,
         endpoint: &PlcEndpoint,
-        snapshot: &BTreeMap<String, String>,
+        values: &BTreeMap<String, String>,
     ) -> MonitorResult<()> {
         let _guard = self.lock.lock().await;
         if let Some(parent) = self.path.parent() {
@@ -71,7 +71,7 @@ impl CsvWriter {
             writeln!(file, "timestamp,plc,tag,value").map_err(|error| error.to_string())?;
         }
         let timestamp = timestamp();
-        for (tag, value) in snapshot {
+        for (tag, value) in values {
             writeln!(file, "{timestamp},{},{tag},{value}", endpoint.name)
                 .map_err(|error| error.to_string())?;
         }
@@ -216,11 +216,11 @@ pub async fn monitor_endpoint(
         }
 
         let active = client.as_ref().expect("client was just connected");
-        match read_snapshot(active, &tags).await {
-            Ok(snapshot) => {
-                log_state(&endpoint.name, "read", &format_snapshot(&snapshot));
+        match read_values(active, &tags).await {
+            Ok(values) => {
+                log_state(&endpoint.name, "read", &format_values(&values));
                 if let Some(csv_writer) = &writer {
-                    csv_writer.write_snapshot(&endpoint, &snapshot).await?;
+                    csv_writer.write_result(&endpoint, &values).await?;
                 }
                 completed += 1;
                 if cycles.is_none_or(|limit| completed < limit) {
@@ -306,7 +306,7 @@ fn options_for(endpoint: &PlcEndpoint) -> MonitorResult<HostLinkConnectionOption
     Ok(options)
 }
 
-async fn read_snapshot(
+async fn read_values(
     client: &HostLinkClient,
     tags: &[TagSpec],
 ) -> Result<BTreeMap<String, String>, HostLinkError> {
@@ -315,26 +315,29 @@ async fn read_snapshot(
         .map(|tag| tag.address.as_str())
         .collect::<Vec<_>>();
     let values = client.read_named(&addresses).await?;
-    let mut snapshot = BTreeMap::new();
+    let mut result = BTreeMap::new();
     for tag in tags {
         let value = values.get(&tag.address).ok_or_else(|| {
-            HostLinkError::protocol(format!("named snapshot omitted {}", tag.address))
+            HostLinkError::protocol(format!("named read omitted {}", tag.address))
         })?;
-        snapshot.insert(tag.name.clone(), format!("{value:?}"));
+        result.insert(tag.name.clone(), format!("{value:?}"));
     }
-    Ok(snapshot)
+    Ok(result)
 }
 
 fn is_retryable_hostlink(error: &HostLinkError) -> bool {
-    matches!(error, HostLinkError::Connection(_))
+    matches!(
+        error,
+        HostLinkError::Transport { .. } | HostLinkError::Timeout(_) | HostLinkError::Closed
+    )
 }
 
 fn next_backoff(current: Duration, max: Duration) -> Duration {
     Duration::from_secs_f64((current.as_secs_f64() * 2.0).min(max.as_secs_f64()))
 }
 
-fn format_snapshot(snapshot: &BTreeMap<String, String>) -> String {
-    snapshot
+fn format_values(values: &BTreeMap<String, String>) -> String {
+    values
         .iter()
         .map(|(tag, value)| format!("{tag}={value}"))
         .collect::<Vec<_>>()
