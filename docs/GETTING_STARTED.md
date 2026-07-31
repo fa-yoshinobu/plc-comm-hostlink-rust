@@ -4,13 +4,17 @@
 
 Choose these values for the actual PLC before connecting:
 
-- host name or IP address;
+- host name resolving to IPv4, or an IPv4 address;
 - destination port in `1..=65535`;
 - `HostLinkTransportMode::Tcp` or `HostLinkTransportMode::Udp`;
 - the exact canonical PLC profile from [PROFILES.md](PROFILES.md).
 
 The library does not infer any of those endpoint conditions. Communication
 timeout may be omitted and is then 3 seconds.
+
+The endpoint contract is IPv4-only because the target PLC configuration is
+IPv4. IPv6 literals fail before socket creation; a hostname with no IPv4
+result fails without sending a Host Link command.
 
 ## Add the crate
 
@@ -69,6 +73,7 @@ println!("{readback:?}");
 | Command returns `NotConnected` | Call `open` or use `HostLinkClient::connect`/`open_and_connect`. |
 | Numeric read rejects the input | Pass a base device and an explicit format; do not pass `DM100.D` to low-level APIs. |
 | A large read is rejected before transport | Reduce it to the one-request limit. The library does not split requests. |
+| IPv6 endpoint is rejected | Configure the PLC's IPv4 address or a hostname with an IPv4 result. |
 
 Shared setup and troubleshooting material is published on the
 [PLC communication documentation site](https://fa-yoshinobu.github.io/plc-comm-docs-site/).

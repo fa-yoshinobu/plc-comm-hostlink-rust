@@ -406,6 +406,53 @@ async fn direct_bit_response_accepts_only_documented_tokens() {
 }
 
 #[tokio::test]
+async fn direct_bit_response_rejects_case_folding_and_surrounding_whitespace() {
+    for response in ["on", "TRUE", " ON", "ON "] {
+        let (port, _) = start_scripted_server(move |_| response.to_owned()).await;
+        let mut options = HostLinkConnectionOptions::new(
+            "127.0.0.1",
+            8501,
+            HostLinkTransportMode::Tcp,
+            "keyence:kv-8000",
+        )
+        .unwrap();
+        options.port = port;
+        let client = HostLinkClient::connect(options).await.unwrap();
+
+        assert!(
+            client.read("R0", None).await.is_err(),
+            "response={response:?}"
+        );
+        assert!(!client.is_open().await, "response={response:?}");
+    }
+}
+
+#[tokio::test]
+async fn malformed_bit_read_for_rmw_is_closed_without_writing() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RD DM300.U" => " 1".to_owned(),
+        _ => "OK".to_owned(),
+    })
+    .await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    assert!(client.write_bit_in_word("DM300", 0, true).await.is_err());
+    assert!(!client.is_open().await);
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RD DM300.U"]
+    );
+}
+
+#[tokio::test]
 async fn monitor_reads_require_registration_and_exact_registered_count() {
     let unconnected = HostLinkClient::new(
         HostLinkConnectionOptions::new(
@@ -873,6 +920,32 @@ async fn read_typed_and_write_typed_support_float_suffix() {
 }
 
 #[tokio::test]
+async fn float_write_to_every_direct_bit_family_is_rejected_before_transport() {
+    let options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    let client = HostLinkClient::new(options);
+
+    for device in [
+        "Y0", "R0", "B0", "MR0", "LR0", "CR0", "VB0", "X0", "M0", "L0",
+    ] {
+        let error = client.write_typed(device, "F", 1.0_f32).await.unwrap_err();
+        assert!(
+            matches!(error, HostLinkError::Protocol(_)),
+            "device={device} error={error}"
+        );
+    }
+
+    let queued = plc_comm_kv_hostlink::QueuedHostLinkClient::new(client);
+    let error = queued.write_typed("R0", "F", 1.0_f32).await.unwrap_err();
+    assert!(matches!(error, HostLinkError::Protocol(_)));
+}
+
+#[tokio::test]
 async fn read_typed_write_typed_and_read_named_support_hex_suffix() {
     let (port, received) = start_scripted_server(|command| match command.as_str() {
         "RD DM210.H" => "00ff".to_owned(),
@@ -1043,6 +1116,111 @@ async fn read_timer_counter_returns_status_current_and_preset() {
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
         vec!["RD T10.D"]
     );
+}
+
+#[tokio::test]
+async fn timer_counter_composites_validate_status_current_and_preset() {
+    for (dtype, response) in [
+        ("U", "2,00010,00020"),
+        ("S", "0,invalid,20"),
+        ("D", "0,10,invalid"),
+        ("L", "0,invalid,20"),
+        ("H", "0,00FF,10000"),
+    ] {
+        let (port, _) = start_scripted_server(move |_| response.to_owned()).await;
+        let mut options = HostLinkConnectionOptions::new(
+            "127.0.0.1",
+            8501,
+            HostLinkTransportMode::Tcp,
+            "keyence:kv-8000",
+        )
+        .unwrap();
+        options.port = port;
+        let client = HostLinkClient::connect(options).await.unwrap();
+
+        assert!(read_typed(&client, "T0", dtype).await.is_err());
+        assert!(!client.is_open().await);
+    }
+}
+
+#[tokio::test]
+async fn timer_counter_composites_accept_exact_type_boundaries() {
+    for (dtype, response, expected) in [
+        ("U", "1,0,65535", HostLinkValue::U16(u16::MAX)),
+        ("S", "0,-32768,32767", HostLinkValue::I16(i16::MAX)),
+        ("D", "1,0,4294967295", HostLinkValue::U32(u32::MAX)),
+        (
+            "L",
+            "0,-2147483648,2147483647",
+            HostLinkValue::I32(i32::MAX),
+        ),
+        ("H", "1,0000,ffff", HostLinkValue::Text("FFFF".to_owned())),
+    ] {
+        let (port, _) = start_scripted_server(move |_| response.to_owned()).await;
+        let mut options = HostLinkConnectionOptions::new(
+            "127.0.0.1",
+            8501,
+            HostLinkTransportMode::Tcp,
+            "keyence:kv-8000",
+        )
+        .unwrap();
+        options.port = port;
+        let client = HostLinkClient::connect(options).await.unwrap();
+
+        assert_eq!(read_typed(&client, "T0", dtype).await.unwrap(), expected);
+    }
+}
+
+#[tokio::test]
+async fn timer_counter_composites_reject_overflow_missing_and_extra_fields() {
+    for (dtype, response) in [
+        ("U", "0,65536,1"),
+        ("U", "0,1,65536"),
+        ("S", "0,-32769,1"),
+        ("S", "0,1,32768"),
+        ("D", "0,4294967296,1"),
+        ("D", "0,1,4294967296"),
+        ("L", "0,-2147483649,1"),
+        ("L", "0,1,2147483648"),
+        ("H", "0,10000,1"),
+        ("H", "0,1,10000"),
+        ("U", "0,1"),
+        ("U", "0,1,2,3"),
+    ] {
+        let (port, _) = start_scripted_server(move |_| response.to_owned()).await;
+        let mut options = HostLinkConnectionOptions::new(
+            "127.0.0.1",
+            8501,
+            HostLinkTransportMode::Tcp,
+            "keyence:kv-8000",
+        )
+        .unwrap();
+        options.port = port;
+        let client = HostLinkClient::connect(options).await.unwrap();
+
+        assert!(
+            read_typed(&client, "T0", dtype).await.is_err(),
+            "dtype={dtype} response={response}"
+        );
+        assert!(!client.is_open().await);
+    }
+}
+
+#[tokio::test]
+async fn timer_counter_helper_rejects_malformed_composite_and_closes_transport() {
+    let (port, _) = start_scripted_server(|_| "garbage,garbage,123".to_owned()).await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    assert!(client.read_timer_counter("T0").await.is_err());
+    assert!(!client.is_open().await);
 }
 
 #[tokio::test]
@@ -1528,6 +1706,44 @@ async fn poll_reuses_compiled_plan_for_each_cycle() {
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
         vec!["RDS DM100.U 3", "RDS DM100.U 3"]
     );
+}
+
+#[tokio::test]
+async fn empty_named_reads_and_invalid_polling_are_rejected_without_transport() {
+    let options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    let client = HostLinkClient::new(options.clone());
+    let queued = plc_comm_kv_hostlink::QueuedHostLinkClient::new(HostLinkClient::new(options));
+
+    assert!(client.read_named::<&str>(&[]).await.is_err());
+    assert!(queued.read_named::<&str>(&[]).await.is_err());
+
+    let empty: [&str; 0] = [];
+    let stream = plc_comm_kv_hostlink::poll(&client, &empty, Duration::from_millis(1));
+    pin_mut!(stream);
+    assert!(stream.next().await.unwrap().is_err());
+
+    let stream = queued.poll(&["DM0:U"], Duration::ZERO);
+    pin_mut!(stream);
+    assert!(stream.next().await.unwrap().is_err());
+}
+
+#[tokio::test]
+async fn ipv6_literals_are_rejected_for_tcp_and_udp_before_transport() {
+    for transport in [HostLinkTransportMode::Tcp, HostLinkTransportMode::Udp] {
+        let options =
+            HostLinkConnectionOptions::new("::1", 8501, transport, "keyence:kv-8000").unwrap();
+        let client = HostLinkClient::new(options);
+
+        let error = client.open().await.unwrap_err();
+        assert!(matches!(error, HostLinkError::Protocol(_)));
+        assert!(!client.is_open().await);
+    }
 }
 
 #[tokio::test]

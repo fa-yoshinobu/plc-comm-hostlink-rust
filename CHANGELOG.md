@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Docs: README documentation links now include the shared Performance and Choosing a Language pages, and package registry metadata was expanded for discoverability. No functional change.
+- Library: Reject Float32 writes to direct-bit devices, empty named reads/polls, and zero polling intervals before transport.
+- Library: Interpret `R`/`MR`/`LR`/`CR` catalog endpoints as decimal bank plus a final two-digit bit field (`00..15`).
+- Library: Accept only exact documented direct-bit response tokens, validate every timer/counter composite field, and close the connection after malformed semantic responses; malformed bit read-modify-write responses never reach the write step.
+- Library: Make Host Link endpoints explicitly IPv4-only. IPv6 literals are rejected before socket creation, hostname resolution selects only IPv4 results, and UDP uses an IPv4 local socket.
+- Library: Remove the public `QueuedHostLinkClient::inner_client()` escape hatch and the `execute_async` callback that could clone the inner direct client. Code that needs direct-client semantics must explicitly construct or connect a `HostLinkClient`; queued operations remain serialized for their complete logical operation.
+- CI: Include tests and fixtures in GitHub source archives and run the standard Cargo format, check, Clippy, documentation, and test gates from the extracted archive. The crates.io package remains minimal and excludes repository tests.
 
 ## [3.2.1] - 2026-07-29
 

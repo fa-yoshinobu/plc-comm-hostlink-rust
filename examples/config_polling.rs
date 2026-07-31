@@ -7,7 +7,7 @@ mod operational_common;
 
 use operational_common::{
     CsvWriter, MonitorResult, PlcEndpoint, TagSpec, format_endpoint, format_tags, monitor_endpoint,
-    parse_transport,
+    parse_positive_duration, parse_transport, positive_duration,
 };
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -95,21 +95,22 @@ fn parse_args() -> MonitorResult<Args> {
                     require_value(&mut iter, "--cycles")?
                         .parse()
                         .map_err(|e| format!("{e}"))?,
-                )
+                );
+                if cycles == Some(0) {
+                    return Err("--cycles must be greater than zero".to_string());
+                }
             }
             "--initial-backoff" => {
-                initial_backoff = Some(Duration::from_secs_f64(
-                    require_value(&mut iter, "--initial-backoff")?
-                        .parse::<f64>()
-                        .map_err(|e| format!("{e}"))?,
-                ));
+                initial_backoff = Some(parse_positive_duration(
+                    &require_value(&mut iter, "--initial-backoff")?,
+                    "--initial-backoff",
+                )?);
             }
             "--max-backoff" => {
-                max_backoff = Some(Duration::from_secs_f64(
-                    require_value(&mut iter, "--max-backoff")?
-                        .parse::<f64>()
-                        .map_err(|e| format!("{e}"))?,
-                ));
+                max_backoff = Some(parse_positive_duration(
+                    &require_value(&mut iter, "--max-backoff")?,
+                    "--max-backoff",
+                )?);
             }
             "--help" | "-h" => return Err(usage()),
             other => return Err(format!("unexpected argument: {other}\n{}", usage())),
@@ -132,6 +133,10 @@ fn build_plan(args: &Args) -> MonitorResult<PollingPlan> {
     let defaults = root.get("defaults").and_then(Value::as_object);
     let default_timeout_ms = u64_field(defaults, "timeout_ms").unwrap_or(3000);
     let default_interval = f64_field(defaults, "interval").unwrap_or(1.0);
+    if default_timeout_ms == 0 {
+        return Err("defaults.timeout_ms must be greater than zero".to_string());
+    }
+    let default_interval = positive_duration(default_interval, "defaults.interval")?;
 
     let mut endpoints = Vec::new();
     let mut tags_by_plc = Vec::new();
@@ -158,22 +163,31 @@ fn build_plan(args: &Args) -> MonitorResult<PollingPlan> {
             .and_then(Value::as_str)
             .ok_or_else(|| format!("plcs[{index}] requires transport"))
             .and_then(parse_transport)?;
+        let timeout_ms = object
+            .get("timeout_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(default_timeout_ms);
+        if timeout_ms == 0 {
+            return Err(format!(
+                "plcs[{index}].timeout_ms must be greater than zero"
+            ));
+        }
+        let interval = if let Some(value) = object.get("interval") {
+            let seconds = value
+                .as_f64()
+                .ok_or_else(|| format!("plcs[{index}].interval must be a number"))?;
+            positive_duration(seconds, &format!("plcs[{index}].interval"))?
+        } else {
+            default_interval
+        };
         endpoints.push(PlcEndpoint {
             name: name.to_string(),
             host: host.to_string(),
             plc_profile: profile.to_string(),
             port,
             transport,
-            timeout_ms: object
-                .get("timeout_ms")
-                .and_then(Value::as_u64)
-                .unwrap_or(default_timeout_ms),
-            interval: Duration::from_secs_f64(
-                object
-                    .get("interval")
-                    .and_then(Value::as_f64)
-                    .unwrap_or(default_interval),
-            ),
+            timeout_ms,
+            interval,
         });
         tags_by_plc.push(parse_tags(object.get("tags"), name)?);
     }
@@ -184,23 +198,28 @@ fn build_plan(args: &Args) -> MonitorResult<PollingPlan> {
         args.cycles.or_else(|| {
             root.get("cycles")
                 .and_then(Value::as_u64)
-                .map(|value| value as usize)
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|value| *value > 0)
         })
     };
-    let initial_backoff = args.initial_backoff.unwrap_or_else(|| {
-        Duration::from_secs_f64(
+    let initial_backoff = match args.initial_backoff {
+        Some(value) => value,
+        None => positive_duration(
             root.get("initial_backoff")
                 .and_then(Value::as_f64)
                 .unwrap_or(1.0),
-        )
-    });
-    let max_backoff = args.max_backoff.unwrap_or_else(|| {
-        Duration::from_secs_f64(
+            "initial_backoff",
+        )?,
+    };
+    let max_backoff = match args.max_backoff {
+        Some(value) => value,
+        None => positive_duration(
             root.get("max_backoff")
                 .and_then(Value::as_f64)
                 .unwrap_or(30.0),
-        )
-    });
+            "max_backoff",
+        )?,
+    };
     if max_backoff < initial_backoff {
         return Err("max_backoff must be greater than or equal to initial_backoff".to_string());
     }

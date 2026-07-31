@@ -6,6 +6,9 @@
 all endpoint and profile choices. Timeout defaults to 3 seconds and must be
 greater than zero when changed.
 
+TCP and UDP are IPv4-only. Hostnames are resolved, but only IPv4 results are
+used; IPv6 literals are rejected before a socket is created.
+
 ```rust
 use plc_comm_kv_hostlink::{
     HostLinkClient, HostLinkConnectionOptions, HostLinkTransportMode,
@@ -47,6 +50,9 @@ High-level addresses use a colon for the value type:
 | `DM100.0` through `DM100.F` | bit 0 through bit 15 in one word |
 
 Therefore, `DM100.D` means bit 13, while `DM100:D` means an unsigned Dword.
+Float32 (`F`) writes are defined only for word devices. Supplying a direct-bit
+device is rejected before frame construction and is never reinterpreted as
+consecutive bit writes.
 
 Low-level numeric APIs require a base device and a separate format:
 
@@ -82,7 +88,9 @@ let snapshot = client
 ```
 
 `read_named` may combine compatible adjacent values into one request, but it
-does not exceed one-request protocol limits. `poll` reuses the compiled plan
+does not exceed one-request protocol limits. Named reads and polls require at
+least one address, and poll intervals must be greater than zero; invalid input
+fails before queue execution or communication. `poll` reuses the compiled plan
 for each cycle.
 
 ## Bit-in-word writes
@@ -145,7 +153,9 @@ local offset is returned and is not replaced with UTC.
 `open_and_connect` returns `QueuedHostLinkClient`, which serializes public
 operations. Direct `HostLinkClient` requests are also serialized per client
 instance; the queued wrapper additionally provides an application operation
-boundary for helper workflows.
+boundary for helper workflows. The queued client does not expose its inner
+direct client. Applications that require direct-client semantics construct or
+connect a `HostLinkClient` explicitly.
 
 ## Traffic statistics
 

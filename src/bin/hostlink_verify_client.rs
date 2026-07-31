@@ -1,8 +1,8 @@
 use futures_util::{StreamExt, pin_mut};
 use plc_comm_kv_hostlink::{
-    HostLinkConnectionOptions, HostLinkMonitorWord, HostLinkTransportMode, HostLinkValue,
-    KvDeviceRangeCatalog, KvDeviceRangeEntry, KvDeviceRangeSegment, KvPlcMode, TimerCounterValue,
-    device_range_catalog_for_plc_profile, open_and_connect, read_comments, read_counter,
+    HostLinkClient, HostLinkConnectionOptions, HostLinkMonitorWord, HostLinkTransportMode,
+    HostLinkValue, KvDeviceRangeCatalog, KvDeviceRangeEntry, KvDeviceRangeSegment, KvPlcMode,
+    TimerCounterValue, device_range_catalog_for_plc_profile, poll, read_comments, read_counter,
     read_dwords, read_named, read_timer, read_timer_counter, read_words, write_bit_in_word,
 };
 use serde_json::{Value, json};
@@ -88,28 +88,28 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
         parse_transport(&transport)?,
         &plc_profile,
     )?;
-    let client = open_and_connect(options).await?;
+    let client = HostLinkClient::new(options);
+    client.open().await?;
 
     let result = match command.as_str() {
         "query-model" => {
-            let model = client.inner_client().query_model().await?;
+            let model = client.query_model().await?;
             json!({"status": "success", "code": model.code, "model": model.model})
         }
         "confirm-mode" => {
-            let mode = client.inner_client().confirm_operating_mode().await?;
+            let mode = client.confirm_operating_mode().await?;
             json!({"status": "success", "mode": (mode as u8).to_string()})
         }
         "check-error" => {
-            let value = client.inner_client().check_error_no().await?;
+            let value = client.check_error_no().await?;
             json!({"status": "success", "value": value})
         }
         "clear-error" => {
-            client.inner_client().clear_error().await?;
+            client.clear_error().await?;
             json!({"status": "success"})
         }
         "set-time-now" => {
             client
-                .inner_client()
                 .set_time(plc_comm_kv_hostlink::HostLinkClock::now_local()?)
                 .await?;
             json!({"status": "success"})
@@ -123,10 +123,7 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             if mode_text.trim().is_empty() {
                 json!({"status": "error", "message": "change-mode requires RUN or PROGRAM"})
             } else {
-                client
-                    .inner_client()
-                    .change_mode(parse_mode(&mode_text)?)
-                    .await?;
+                client.change_mode(parse_mode(&mode_text)?).await?;
                 json!({"status": "success"})
             }
         }
@@ -139,34 +136,28 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             if bank_text.trim().is_empty() {
                 json!({"status": "error", "message": "switch-bank requires bank number"})
             } else {
-                client
-                    .inner_client()
-                    .switch_bank(bank_text.parse()?)
-                    .await?;
+                client.switch_bank(bank_text.parse()?).await?;
                 json!({"status": "success"})
             }
         }
         "read-bit" => {
-            let values = client.inner_client().read(&address, None).await?;
+            let values = client.read(&address, None).await?;
             json!({"status": "success", "value": values.first().cloned().unwrap_or_else(|| "0".to_owned())})
         }
         "write-bit" => {
             if extra.is_empty() {
                 json!({"status": "error", "message": "write-bit requires a bool value"})
             } else {
-                client
-                    .inner_client()
-                    .write(&address, parse_bool(&extra[0]), None)
-                    .await?;
+                client.write(&address, parse_bool(&extra[0]), None).await?;
                 json!({"status": "success"})
             }
         }
         "forced-set" => {
-            client.inner_client().forced_set(&address).await?;
+            client.forced_set(&address).await?;
             json!({"status": "success"})
         }
         "forced-reset" => {
-            client.inner_client().forced_reset(&address).await?;
+            client.forced_reset(&address).await?;
             json!({"status": "success"})
         }
         "forced-set-consecutive" => {
@@ -174,7 +165,6 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                 json!({"status": "error", "message": "forced-set-consecutive requires count"})
             } else {
                 client
-                    .inner_client()
                     .forced_set_consecutive(&address, extra[0].parse()?)
                     .await?;
                 json!({"status": "success"})
@@ -185,7 +175,6 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                 json!({"status": "error", "message": "forced-reset-consecutive requires count"})
             } else {
                 client
-                    .inner_client()
                     .forced_reset_consecutive(&address, extra[0].parse()?)
                     .await?;
                 json!({"status": "success"})
@@ -200,10 +189,7 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             if devices.is_empty() {
                 json!({"status": "error", "message": "register-monitor-bits requires at least one address"})
             } else {
-                client
-                    .inner_client()
-                    .register_monitor_bits(&devices)
-                    .await?;
+                client.register_monitor_bits(&devices).await?;
                 json!({"status": "success"})
             }
         }
@@ -216,11 +202,8 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             if devices.is_empty() {
                 json!({"status": "error", "message": "monitor-bits requires at least one address"})
             } else {
-                client
-                    .inner_client()
-                    .register_monitor_bits(&devices)
-                    .await?;
-                let values = client.inner_client().read_monitor_bits().await?;
+                client.register_monitor_bits(&devices).await?;
+                let values = client.read_monitor_bits().await?;
                 json!({"status": "success", "values": values})
             }
         }
@@ -234,10 +217,7 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                 json!({"status": "error", "message": "register-monitor-words requires at least one address"})
             } else {
                 let entries = parse_monitor_words(&devices)?;
-                client
-                    .inner_client()
-                    .register_monitor_words(&entries)
-                    .await?;
+                client.register_monitor_words(&entries).await?;
                 json!({"status": "success"})
             }
         }
@@ -251,11 +231,8 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                 json!({"status": "error", "message": "monitor-words requires at least one address"})
             } else {
                 let entries = parse_monitor_words(&devices)?;
-                client
-                    .inner_client()
-                    .register_monitor_words(&entries)
-                    .await?;
-                let values = client.inner_client().read_monitor_words().await?;
+                client.register_monitor_words(&entries).await?;
+                let values = client.read_monitor_words().await?;
                 json!({"status": "success", "values": values})
             }
         }
@@ -289,7 +266,6 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                 json!({"status": "error", "message": "write-set-value requires --dtype and one value"})
             } else {
                 client
-                    .inner_client()
                     .write_set_value(&address, extra[0].parse::<i64>()?, Some(&dtype))
                     .await?;
                 json!({"status": "success"})
@@ -304,7 +280,6 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                     .map(|item| item.parse::<i64>())
                     .collect::<Result<Vec<_>, _>>()?;
                 client
-                    .inner_client()
                     .write_set_value_consecutive(&address, &values, Some(&dtype))
                     .await?;
                 json!({"status": "success"})
@@ -319,19 +294,19 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             }
         }
         "read-timer-counter" => {
-            let value = read_timer_counter(client.inner_client(), &address).await?;
+            let value = read_timer_counter(&client, &address).await?;
             json!({"status": "success", "value": normalize_timer_counter(&value)})
         }
         "read-timer" => {
-            let value = read_timer(client.inner_client(), &address).await?;
+            let value = read_timer(&client, &address).await?;
             json!({"status": "success", "value": normalize_timer_counter(&value)})
         }
         "read-counter" => {
-            let value = read_counter(client.inner_client(), &address).await?;
+            let value = read_counter(&client, &address).await?;
             json!({"status": "success", "value": normalize_timer_counter(&value)})
         }
         "read-comments" => {
-            let value = read_comments(client.inner_client(), &address).await?;
+            let value = read_comments(&client, &address).await?;
             json!({"status": "success", "value": value})
         }
         "write-bit-in-word" => {
@@ -340,7 +315,7 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             } else {
                 let bit_index = extra[0].parse::<u8>()?;
                 let value = parse_bool(&extra[1]);
-                write_bit_in_word(client.inner_client(), &address, bit_index, value).await?;
+                write_bit_in_word(&client, &address, bit_index, value).await?;
                 json!({"status": "success"})
             }
         }
@@ -353,7 +328,7 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             if addresses.is_empty() {
                 json!({"status": "error", "message": "read-named requires at least one address"})
             } else {
-                let values = read_named(client.inner_client(), &addresses).await?;
+                let values = read_named(&client, &addresses).await?;
                 json!({"status": "success", "values": normalize_named(&values)})
             }
         }
@@ -366,7 +341,11 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             if addresses.is_empty() {
                 json!({"status": "error", "message": "poll requires at least one address"})
             } else {
-                let stream = client.poll(&addresses, std::time::Duration::from_millis(interval_ms));
+                let stream = poll(
+                    &client,
+                    &addresses,
+                    std::time::Duration::from_millis(interval_ms),
+                );
                 pin_mut!(stream);
                 let mut snapshots = Vec::new();
                 while let Some(snapshot) = stream.next().await {
@@ -382,7 +361,7 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             if extra.is_empty() {
                 json!({"status": "error", "message": "read-words requires count"})
             } else {
-                let values = read_words(client.inner_client(), &address, extra[0].parse()?).await?;
+                let values = read_words(&client, &address, extra[0].parse()?).await?;
                 json!({"status": "success", "values": values.into_iter().map(|value| value.to_string()).collect::<Vec<_>>()})
             }
         }
@@ -390,8 +369,7 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             if extra.is_empty() {
                 json!({"status": "error", "message": "read-dwords requires count"})
             } else {
-                let values =
-                    read_dwords(client.inner_client(), &address, extra[0].parse()?).await?;
+                let values = read_dwords(&client, &address, extra[0].parse()?).await?;
                 json!({"status": "success", "values": values.into_iter().map(|value| value.to_string()).collect::<Vec<_>>()})
             }
         }
@@ -400,7 +378,6 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                 json!({"status": "error", "message": "read-expansion requires buffer address, count, and dtype"})
             } else {
                 let values = client
-                    .inner_client()
                     .read_expansion_unit_buffer(
                         address.parse()?,
                         extra[0].parse()?,
@@ -420,7 +397,6 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                     .map(|item| parse_typed_value(&dtype, item))
                     .collect::<Result<Vec<_>, _>>()?;
                 client
-                    .inner_client()
                     .write_expansion_unit_buffer(
                         address.parse()?,
                         extra[0].parse()?,

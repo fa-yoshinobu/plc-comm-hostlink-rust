@@ -1,8 +1,9 @@
-//! Device range sample comparison and write/readback diagnostic.
+//! Device range evidence-collection and write/readback diagnostic.
 //!
 //! This intentionally writes test values to sampled addresses and restores the
-//! original values. Run it only against a PLC and address range prepared for
-//! validation.
+//! original numeric values. Direct bits are reset to OFF. Run it only against
+//! a development/test PLC and address range prepared for validation; this is
+//! not production-operation guidance.
 //!
 //! Usage:
 //!   cargo run --features cli --example kv_device_range_sample_compare -- <host> <port> <transport> <plc-profile>
@@ -318,6 +319,11 @@ async fn exercise_point(
     let original = read_value(client, address, kind)
         .await
         .map_err(|error| ("read", error.to_string()))?;
+    let restore_value = if kind == ValueKind::Bit {
+        HostLinkValue::Bool(false)
+    } else {
+        original.clone()
+    };
     let (value_a, value_b) = test_values(address, &original, kind);
     let mut restore_needed = false;
 
@@ -336,7 +342,7 @@ async fn exercise_point(
     .await;
 
     let restore_result = if restore_needed {
-        Some(write_value(client, address, kind, original).await)
+        Some(write_value(client, address, kind, restore_value).await)
     } else {
         None
     };
@@ -403,7 +409,7 @@ fn kind_for(entry: &KvDeviceRangeEntry) -> ValueKind {
 
 fn dtype_for(kind: ValueKind) -> &'static str {
     match kind {
-        ValueKind::Bit => "",
+        ValueKind::Bit => "BIT",
         ValueKind::Word => "U",
         ValueKind::Dword => "D",
     }
@@ -415,8 +421,8 @@ fn test_values(
     kind: ValueKind,
 ) -> (HostLinkValue, HostLinkValue) {
     match (kind, original) {
-        (ValueKind::Bit, HostLinkValue::Bool(value)) => {
-            (HostLinkValue::Bool(!*value), HostLinkValue::Bool(*value))
+        (ValueKind::Bit, HostLinkValue::Bool(_)) => {
+            (HostLinkValue::Bool(true), HostLinkValue::Bool(false))
         }
         (ValueKind::Word, HostLinkValue::U16(original)) => {
             let mut a = seeded_u16(address, 0x1111);
@@ -451,7 +457,7 @@ fn test_values(
 fn effective_lower_bound(segment: &KvDeviceRangeSegment) -> u32 {
     // Avoid low real-I/O relay points during live write/readback checks.
     if segment.device.eq_ignore_ascii_case("R") {
-        segment.lower_bound.max(200)
+        segment.lower_bound.max(2 * 16)
     } else {
         segment.lower_bound
     }
@@ -545,44 +551,14 @@ fn sample_numbers_between(lower_bound: u32, upper_bound: u32, count: usize) -> V
 }
 
 fn normalize_sample_number(
-    device_type: &str,
+    _device_type: &str,
     number: u32,
     lower_bound: u32,
     upper_bound: u32,
     _kind: ValueKind,
 ) -> Option<u32> {
     let number = number.clamp(lower_bound, upper_bound);
-    if !uses_bit_bank_address(device_type) {
-        return Some(number);
-    }
-
-    nearest_valid_bit_bank_number(number, lower_bound, upper_bound)
-}
-
-fn nearest_valid_bit_bank_number(number: u32, lower_bound: u32, upper_bound: u32) -> Option<u32> {
-    let bank = number / 100;
-    let bit = (number % 100).min(15);
-    let mut candidates = Vec::new();
-    for candidate_bank in [
-        bank,
-        bank.saturating_add(1),
-        bank.saturating_sub(1),
-        lower_bound / 100,
-        upper_bound / 100,
-    ] {
-        for candidate_bit in [bit, 0, 15] {
-            let candidate = candidate_bank
-                .checked_mul(100)
-                .and_then(|base| base.checked_add(candidate_bit))?;
-            if candidate >= lower_bound && candidate <= upper_bound && candidate % 100 <= 15 {
-                candidates.push(candidate);
-            }
-        }
-    }
-
-    candidates
-        .into_iter()
-        .min_by_key(|candidate| candidate.abs_diff(number))
+    Some(number)
 }
 
 fn uses_bit_bank_address(device_type: &str) -> bool {
@@ -590,6 +566,14 @@ fn uses_bit_bank_address(device_type: &str) -> bool {
 }
 
 fn format_address(device_type: &str, number: u32) -> Result<String, HostLinkError> {
+    let number = if uses_bit_bank_address(device_type) {
+        (number / 16)
+            .checked_mul(100)
+            .and_then(|bank| bank.checked_add(number % 16))
+            .ok_or_else(|| HostLinkError::protocol("bit-bank address overflow"))?
+    } else {
+        number
+    };
     KvDeviceAddress {
         device_type: device_type.to_ascii_uppercase(),
         number,

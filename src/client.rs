@@ -16,11 +16,11 @@ use crate::protocol::{
     split_data_tokens,
 };
 use std::fmt::Write as _;
-use std::future::Future;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpStream, UdpSocket};
+use tokio::net::{TcpStream, UdpSocket, lookup_host};
 use tokio::sync::Mutex;
 use tokio::time::{Instant, timeout_at};
 
@@ -66,10 +66,7 @@ fn validate_response_tokens(tokens: &[String], data_format: &str) -> Result<(), 
     }
     for token in tokens {
         let valid = match data_format {
-            "" => matches!(
-                token.trim().to_ascii_uppercase().as_str(),
-                "0" | "1" | "ON" | "OFF"
-            ),
+            "" => matches!(token.as_str(), "0" | "1" | "ON" | "OFF"),
             ".U" => token.parse::<u16>().is_ok(),
             ".S" => token.parse::<i16>().is_ok(),
             ".D" => token.parse::<u32>().is_ok(),
@@ -417,6 +414,12 @@ impl HostLinkClient {
         let response = self
             .send_decoded(&format!("RD {}", address.to_text()?))
             .await?;
+        if suffix.is_empty() && response.trim() != response {
+            self.close().await?;
+            return Err(HostLinkError::protocol(
+                "Direct bit response must not contain surrounding whitespace",
+            ));
+        }
         let tokens = split_data_tokens(&response);
         let expected = read_response_token_count(&address.device_type, &suffix);
         if let Err(error) = validate_response_token_count(&tokens, expected) {
@@ -444,6 +447,12 @@ impl HostLinkClient {
         let response = self
             .send_decoded(&format!("RDS {} {}", address.to_text()?, count))
             .await?;
+        if suffix.is_empty() && response.trim() != response {
+            self.close().await?;
+            return Err(HostLinkError::protocol(
+                "Direct bit response must not contain surrounding whitespace",
+            ));
+        }
         let tokens = split_data_tokens(&response);
         if let Err(error) = validate_response_token_count(&tokens, count) {
             self.close().await?;
@@ -579,6 +588,12 @@ impl HostLinkClient {
             .monitor_bit_count
             .ok_or_else(|| HostLinkError::protocol("Monitor bits must be registered before MBR"))?;
         let response = inner.send_decoded("MBR").await?;
+        if response.trim() != response {
+            inner.close();
+            return Err(HostLinkError::protocol(
+                "Direct bit response must not contain surrounding whitespace",
+            ));
+        }
         let tokens = split_data_tokens(&response);
         if let Err(error) = validate_response_token_count(&tokens, expected) {
             inner.close();
@@ -887,18 +902,32 @@ impl HostLinkClient {
 
         let mut inner = self.inner.lock().await;
         let response = inner.send_decoded(&format!("RD {address_text}")).await?;
+        if response.trim() != response {
+            inner.close();
+            return Err(HostLinkError::protocol(
+                "Bit-in-word response must not contain surrounding whitespace",
+            ));
+        }
         let tokens = split_data_tokens(&response);
-        let current = if is_direct_bit_device_type(&address.device_type) {
-            helpers::pack_direct_bit_tokens(&tokens, 16, device)? as u16
+        let current_result = if is_direct_bit_device_type(&address.device_type) {
+            helpers::pack_direct_bit_tokens(&tokens, 16, device).map(|value| value as u16)
         } else {
             if tokens.len() != 1 {
-                return Err(HostLinkError::protocol(
+                Err(HostLinkError::protocol(
                     "Bit-in-word read did not return exactly one unsigned word",
-                ));
+                ))
+            } else {
+                tokens[0]
+                    .parse::<u16>()
+                    .map_err(|_| HostLinkError::protocol("Invalid unsigned 16-bit response"))
             }
-            tokens[0]
-                .parse::<u16>()
-                .map_err(|_| HostLinkError::protocol("Invalid unsigned 16-bit response"))?
+        };
+        let current = match current_result {
+            Ok(value) => value,
+            Err(error) => {
+                inner.close();
+                return Err(error);
+            }
         };
         let next = if value {
             current | (1 << bit_index)
@@ -949,26 +978,24 @@ impl ClientInner {
             return Err(HostLinkError::protocol("invalid Host Link endpoint"));
         }
         let connect_deadline = checked_deadline(self.options.timeout)?;
+        let endpoints = resolve_ipv4_endpoints(
+            self.options.host.as_str(),
+            self.options.port,
+            connect_deadline,
+        )
+        .await?;
 
         let transport = match self.options.transport {
             HostLinkTransportMode::Tcp => {
-                let stream = timeout_at(
-                    connect_deadline,
-                    TcpStream::connect((self.options.host.as_str(), self.options.port)),
-                )
-                .await
-                .map_err(|_| HostLinkError::connection("tcp connect timed out"))??;
+                let stream = connect_tcp_ipv4(&endpoints, connect_deadline).await?;
                 stream.set_nodelay(true)?;
                 Transport::Tcp(stream)
             }
             HostLinkTransportMode::Udp => {
                 let socket = UdpSocket::bind("0.0.0.0:0").await?;
-                timeout_at(
-                    connect_deadline,
-                    socket.connect((self.options.host.as_str(), self.options.port)),
-                )
-                .await
-                .map_err(|_| HostLinkError::connection("udp connect timed out"))??;
+                timeout_at(connect_deadline, socket.connect(endpoints[0]))
+                    .await
+                    .map_err(|_| HostLinkError::connection("udp connect timed out"))??;
                 Transport::Udp(socket)
             }
         };
@@ -1118,7 +1145,7 @@ impl QueuedHostLinkClient {
         }
     }
 
-    pub fn inner_client(&self) -> &HostLinkClient {
+    fn inner_client(&self) -> &HostLinkClient {
         &self.client
     }
 
@@ -1138,15 +1165,6 @@ impl QueuedHostLinkClient {
     pub async fn close(&self) -> Result<(), HostLinkError> {
         let _guard = self.gate.lock().await;
         self.client.close().await
-    }
-
-    pub async fn execute_async<F, Fut, T>(&self, operation: F) -> Result<T, HostLinkError>
-    where
-        F: FnOnce(&HostLinkClient) -> Fut,
-        Fut: Future<Output = Result<T, HostLinkError>>,
-    {
-        let _guard = self.gate.lock().await;
-        operation(&self.client).await
     }
 
     #[doc(hidden)]
@@ -1217,6 +1235,11 @@ impl QueuedHostLinkClient {
         &self,
         addresses: &[S],
     ) -> Result<helpers::NamedSnapshot, HostLinkError> {
+        if addresses.is_empty() {
+            return Err(HostLinkError::protocol(
+                "read_named addresses must not be empty.",
+            ));
+        }
         let _guard = self.gate.lock().await;
         helpers::read_named(&self.client, addresses).await
     }
@@ -1228,6 +1251,12 @@ impl QueuedHostLinkClient {
     ) -> impl futures_core::Stream<Item = Result<helpers::NamedSnapshot, HostLinkError>> + 'a {
         async_stream::try_stream! {
             let addr_list = addresses.iter().map(|item| item.as_ref().to_owned()).collect::<Vec<_>>();
+            if addr_list.is_empty() {
+                Err(HostLinkError::protocol("poll addresses must not be empty."))?;
+            }
+            if interval.is_zero() {
+                Err(HostLinkError::protocol("poll interval must be greater than zero."))?;
+            }
             let compiled = crate::read_plan::compile_read_named_plan(&addr_list);
             loop {
                 let snapshot = {
@@ -1259,6 +1288,69 @@ fn checked_deadline(duration: Duration) -> Result<Instant, HostLinkError> {
     Instant::now()
         .checked_add(duration)
         .ok_or_else(|| HostLinkError::protocol("timeout is too large to form an absolute deadline"))
+}
+
+async fn resolve_ipv4_endpoints(
+    host: &str,
+    port: u16,
+    deadline: Instant,
+) -> Result<Vec<SocketAddr>, HostLinkError> {
+    let literal_text = host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(host);
+    if let Ok(literal) = literal_text.parse::<IpAddr>() {
+        return match literal {
+            IpAddr::V4(address) => Ok(vec![SocketAddr::new(IpAddr::V4(address), port)]),
+            IpAddr::V6(_) => Err(HostLinkError::protocol(
+                "Host Link endpoints are IPv4-only; IPv6 literals are not supported",
+            )),
+        };
+    }
+
+    let resolved = timeout_at(deadline, lookup_host((host, port)))
+        .await
+        .map_err(|_| HostLinkError::connection("endpoint resolution timed out"))?
+        .map_err(|error| {
+            HostLinkError::connection(format!("endpoint resolution failed: {error}"))
+        })?;
+    select_ipv4_endpoints(host, resolved.collect())
+}
+
+fn select_ipv4_endpoints(
+    host: &str,
+    resolved: Vec<SocketAddr>,
+) -> Result<Vec<SocketAddr>, HostLinkError> {
+    let endpoints = resolved
+        .into_iter()
+        .filter(SocketAddr::is_ipv4)
+        .collect::<Vec<_>>();
+    if endpoints.is_empty() {
+        return Err(HostLinkError::connection(format!(
+            "Host Link hostname '{host}' did not resolve to an IPv4 address"
+        )));
+    }
+    Ok(endpoints)
+}
+
+async fn connect_tcp_ipv4(
+    endpoints: &[SocketAddr],
+    deadline: Instant,
+) -> Result<TcpStream, HostLinkError> {
+    let mut last_error = None;
+    for endpoint in endpoints {
+        match timeout_at(deadline, TcpStream::connect(endpoint)).await {
+            Ok(Ok(stream)) => return Ok(stream),
+            Ok(Err(error)) => last_error = Some(error),
+            Err(_) => return Err(HostLinkError::connection("tcp connect timed out")),
+        }
+    }
+    Err(HostLinkError::connection(format!(
+        "tcp connect failed for every resolved IPv4 endpoint: {}",
+        last_error
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| "no endpoint".to_owned())
+    )))
 }
 
 async fn write_all_with_timeout(
@@ -1402,5 +1494,31 @@ async fn recv_tcp_line(
                 )));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::select_ipv4_endpoints;
+    use std::net::SocketAddr;
+
+    #[test]
+    fn hostname_resolution_requires_at_least_one_ipv4_result() {
+        let ipv6_only = vec!["[::1]:8501".parse::<SocketAddr>().unwrap()];
+        let error = select_ipv4_endpoints("ipv6-only.example", ipv6_only).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("did not resolve to an IPv4 address")
+        );
+
+        let mixed = vec![
+            "[::1]:8501".parse::<SocketAddr>().unwrap(),
+            "127.0.0.1:8501".parse::<SocketAddr>().unwrap(),
+        ];
+        assert_eq!(
+            select_ipv4_endpoints("mixed.example", mixed).unwrap(),
+            vec!["127.0.0.1:8501".parse::<SocketAddr>().unwrap()]
+        );
     }
 }

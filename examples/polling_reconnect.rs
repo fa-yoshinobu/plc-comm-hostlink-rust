@@ -8,6 +8,17 @@ use std::error::Error;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 
+fn positive_duration(seconds: f64, name: &str) -> Result<Duration, Box<dyn Error>> {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return Err(format!("{name} must be a finite number greater than zero").into());
+    }
+    let duration = Duration::try_from_secs_f64(seconds)?;
+    if duration.is_zero() {
+        return Err(format!("{name} must be greater than zero").into());
+    }
+    Ok(duration)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let config = parse_args()?;
@@ -150,7 +161,7 @@ fn parse_args() -> Result<PollConfig, Box<dyn Error>> {
         plc_profile: args[4].clone(),
         device: args.get(5).cloned().unwrap_or_else(|| "DM100".to_string()),
         dtype: args.get(6).cloned().unwrap_or_else(|| "U".to_string()),
-        interval: Duration::from_secs_f64(interval),
+        interval: positive_duration(interval, "interval-seconds")?,
     })
 }
 

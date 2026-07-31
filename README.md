@@ -6,6 +6,9 @@
 
 Rust library for KEYENCE KV Host Link PLC communication.
 
+Host Link endpoints are IPv4-only. An IPv4 literal or a hostname that resolves
+to IPv4 is accepted; IPv6 literals and IPv6-only hostnames are rejected.
+
 ## PLC Comm Family
 
 This library is part of the plc-comm family. See the [package matrix](https://fa-yoshinobu.github.io/plc-comm-docs-site/package-matrix/) for protocol, language, registry, and install-command mapping.
@@ -79,6 +82,11 @@ For a zero-code connectivity check, see [PLC Scope](https://github.com/fa-yoshin
 | License | [MIT](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/blob/main/LICENSE) |
 | Registry | [crates.io](https://crates.io/crates/plc-comm-kv-hostlink) |
 | Package | `plc-comm-kv-hostlink` |
+
+GitHub source archives include the test suite and its fixtures so a source
+checkout/archive can run the standard Cargo gates. The crates.io package is a
+separate minimal distribution and does not include repository tests or
+maintainer tooling.
 
 ## Commercial support
 

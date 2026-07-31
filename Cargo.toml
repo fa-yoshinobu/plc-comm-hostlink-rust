@@ -19,7 +19,6 @@ include = [
     "docs/**",
     "src/**",
     "examples/**",
-    "tests/**",
 ]
 
 [lib]

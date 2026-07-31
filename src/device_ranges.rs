@@ -720,6 +720,9 @@ fn parse_segment_number(
     if matches!(default_device, "X" | "Y") {
         return parse_xym_segment_number(trimmed);
     }
+    if matches!(default_device, "R" | "MR" | "LR" | "CR") {
+        return parse_bit_bank_segment_number(trimmed);
+    }
     match notation {
         KvDeviceRangeNotation::Decimal => trimmed.parse().ok(),
         KvDeviceRangeNotation::Hexadecimal => u32::from_str_radix(trimmed, 16).ok(),
@@ -737,6 +740,24 @@ fn parse_xym_segment_number(text: &str) -> Option<u32> {
         bank_text.parse::<u32>().ok()?
     };
     let bit = u32::from_str_radix(bit_text, 16).ok()?;
+    bank.checked_mul(16)?.checked_add(bit)
+}
+
+fn parse_bit_bank_segment_number(text: &str) -> Option<u32> {
+    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let split = text.len().saturating_sub(2);
+    let (bank_text, bit_text) = text.split_at(split);
+    let bank = if bank_text.is_empty() {
+        0
+    } else {
+        bank_text.parse::<u32>().ok()?
+    };
+    let bit = bit_text.parse::<u32>().ok()?;
+    if bit > 15 {
+        return None;
+    }
     bank.checked_mul(16)?.checked_add(bit)
 }
 
@@ -1056,6 +1077,27 @@ mod tests {
             error
                 .to_string()
                 .contains("Invalid device range start 'DMX'")
+        );
+
+        let error =
+            parse_segment_bounds("R000-R016", KvDeviceRangeNotation::Decimal, "R").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Invalid device range end 'R016'")
+        );
+    }
+
+    #[test]
+    fn decimal_bit_bank_ranges_use_two_digit_bit_positions() {
+        assert_eq!(
+            parse_segment_bounds("R00000-R199915", KvDeviceRangeNotation::Decimal, "R").unwrap(),
+            (0, Some(1999 * 16 + 15), Some(2000 * 16))
+        );
+        assert_eq!(
+            parse_segment_bounds("MR000000-MR399915", KvDeviceRangeNotation::Decimal, "MR")
+                .unwrap(),
+            (0, Some(3999 * 16 + 15), Some(4000 * 16))
         );
     }
 

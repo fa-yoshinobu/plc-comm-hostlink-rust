@@ -4,6 +4,24 @@ This record maps the approved workspace decisions to the Rust implementation.
 Breaking compatibility is intentional where it conflicts with an explicit,
 single-request, profile-safe contract.
 
+## 2026-08-01 target-state migration
+
+- Float32 writes to direct-bit devices now fail before transport. Use a word
+  device for `F`, or use `BIT`/bit operations for a direct-bit device.
+- Direct-bit response decoding no longer trims or case-folds tokens. PLC
+  responses must be exactly `0`, `1`, `OFF`, or `ON`; malformed responses
+  close the connection generation.
+- Timer/counter composite reads validate status, current, and preset fields.
+- Host Link endpoints are IPv4-only. Replace IPv6 literals with the PLC IPv4
+  endpoint or a hostname that has an IPv4 result.
+- Empty named reads/polls and zero poll durations are caller errors.
+- `QueuedHostLinkClient::inner_client()` and the clone-capable `execute_async`
+  callback are no longer public. Construct or connect `HostLinkClient`
+  explicitly when direct semantics are needed; do not bypass the queued
+  operation gate.
+- GitHub source archives now include tests and fixtures. This does not expand
+  the crates.io package, whose explicit include list remains minimal.
+
 ## Acceptance matrix
 
 | Decision | Implementation | Tests | Checks | Codex review | Claude review | Findings | Live/disposition | Docs | Final |

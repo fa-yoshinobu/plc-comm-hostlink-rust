@@ -2,6 +2,7 @@
 
 use plc_comm_kv_hostlink::{
     HostLinkClient, HostLinkConnectionOptions, HostLinkError, HostLinkTransportMode,
+    parse_logical_address,
 };
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
@@ -87,19 +88,38 @@ pub fn parse_transport(value: &str) -> MonitorResult<String> {
 }
 
 pub fn parse_tag_spec(value: &str) -> MonitorResult<TagSpec> {
-    if let Some((name, address)) = value.split_once('=') {
+    let (name, address) = if let Some((name, address)) = value.split_once('=') {
         if name.is_empty() || address.is_empty() {
             return Err("expected NAME=ADDRESS".to_string());
         }
-        return Ok(TagSpec {
-            name: name.to_string(),
-            address: address.to_string(),
-        });
-    }
+        (name.to_string(), address)
+    } else {
+        (normalize_tag_name(value), value)
+    };
+    parse_logical_address(address).map_err(|error| error.to_string())?;
     Ok(TagSpec {
-        name: normalize_tag_name(value),
-        address: value.to_string(),
+        name,
+        address: address.to_string(),
     })
+}
+
+pub fn parse_positive_duration(value: &str, name: &str) -> MonitorResult<Duration> {
+    let seconds = value
+        .parse::<f64>()
+        .map_err(|error| format!("{name}: {error}"))?;
+    positive_duration(seconds, name)
+}
+
+pub fn positive_duration(seconds: f64, name: &str) -> MonitorResult<Duration> {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return Err(format!("{name} must be a finite number greater than zero"));
+    }
+    let duration =
+        Duration::try_from_secs_f64(seconds).map_err(|error| format!("{name}: {error}"))?;
+    if duration.is_zero() {
+        return Err(format!("{name} must be greater than zero"));
+    }
+    Ok(duration)
 }
 
 pub fn parse_plc_spec(
@@ -107,6 +127,12 @@ pub fn parse_plc_spec(
     timeout_ms: u64,
     interval: Duration,
 ) -> MonitorResult<PlcEndpoint> {
+    if timeout_ms == 0 {
+        return Err("timeout_ms must be greater than zero".to_string());
+    }
+    if interval.is_zero() {
+        return Err("interval must be greater than zero".to_string());
+    }
     let Some((name, rest)) = value.split_once('=') else {
         return Err("expected NAME=HOST,PROFILE,PORT,TRANSPORT".to_string());
     };
@@ -261,6 +287,9 @@ fn normalize_tag_name(address: &str) -> String {
 }
 
 fn options_for(endpoint: &PlcEndpoint) -> MonitorResult<HostLinkConnectionOptions> {
+    if endpoint.timeout_ms == 0 {
+        return Err("timeout_ms must be greater than zero".to_string());
+    }
     let transport = match endpoint.transport.as_str() {
         "udp" => HostLinkTransportMode::Udp,
         "tcp" => HostLinkTransportMode::Tcp,
@@ -281,10 +310,16 @@ async fn read_snapshot(
     client: &HostLinkClient,
     tags: &[TagSpec],
 ) -> Result<BTreeMap<String, String>, HostLinkError> {
+    let addresses = tags
+        .iter()
+        .map(|tag| tag.address.as_str())
+        .collect::<Vec<_>>();
+    let values = client.read_named(&addresses).await?;
     let mut snapshot = BTreeMap::new();
     for tag in tags {
-        let (device, dtype) = split_address(&tag.address).map_err(HostLinkError::protocol)?;
-        let value = client.read_typed(device, dtype).await?;
+        let value = values.get(&tag.address).ok_or_else(|| {
+            HostLinkError::protocol(format!("named snapshot omitted {}", tag.address))
+        })?;
         snapshot.insert(tag.name.clone(), format!("{value:?}"));
     }
     Ok(snapshot)

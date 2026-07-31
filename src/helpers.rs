@@ -136,7 +136,11 @@ pub async fn read_typed(
                 Ok(HostLinkValue::I16(
                     close_on_protocol_error(
                         client,
-                        parse_last_token(&response, "Invalid signed 16-bit response"),
+                        parse_timer_counter_tokens::<i16>(
+                            &response,
+                            "Invalid signed 16-bit timer/counter response",
+                        )
+                        .map(|(_, _, preset)| preset),
                     )
                     .await?,
                 ))
@@ -158,7 +162,11 @@ pub async fn read_typed(
                 Ok(HostLinkValue::U32(
                     close_on_protocol_error(
                         client,
-                        parse_last_token(&response, "Invalid unsigned 32-bit response"),
+                        parse_timer_counter_tokens::<u32>(
+                            &response,
+                            "Invalid unsigned 32-bit timer/counter response",
+                        )
+                        .map(|(_, _, preset)| preset),
                     )
                     .await?,
                 ))
@@ -180,7 +188,11 @@ pub async fn read_typed(
                 Ok(HostLinkValue::I32(
                     close_on_protocol_error(
                         client,
-                        parse_last_token(&response, "Invalid signed 32-bit response"),
+                        parse_timer_counter_tokens::<i32>(
+                            &response,
+                            "Invalid signed 32-bit timer/counter response",
+                        )
+                        .map(|(_, _, preset)| preset),
                     )
                     .await?,
                 ))
@@ -202,7 +214,11 @@ pub async fn read_typed(
                 Ok(HostLinkValue::U16(
                     close_on_protocol_error(
                         client,
-                        parse_last_token(&response, "Invalid unsigned 16-bit response"),
+                        parse_timer_counter_tokens::<u16>(
+                            &response,
+                            "Invalid unsigned 16-bit timer/counter response",
+                        )
+                        .map(|(_, _, preset)| preset),
                     )
                     .await?,
                 ))
@@ -221,18 +237,10 @@ pub async fn read_typed(
         "H" => {
             let response = read_single_response(client, &device, Some("H")).await?;
             let composite = is_timer_counter_composite_device(&device)?;
-            let tokens = crate::protocol::split_data_tokens(&response);
             let token = if composite {
-                if tokens.len() != 3 {
-                    let error = HostLinkError::protocol(format!(
-                        "Expected 3 timer/counter hexadecimal response tokens but received {}",
-                        tokens.len()
-                    ));
-                    let _ = client.close().await;
-                    return Err(error);
-                }
-                tokens.last().expect("length checked")
+                close_on_protocol_error(client, parse_timer_counter_hex_preset(&response)).await?
             } else {
+                let tokens = crate::protocol::split_data_tokens(&response);
                 if tokens.len() != 1 {
                     let error = HostLinkError::protocol(format!(
                         "Expected 1 hexadecimal response token but received {}",
@@ -241,7 +249,7 @@ pub async fn read_typed(
                     let _ = client.close().await;
                     return Err(error);
                 }
-                &tokens[0]
+                tokens[0].clone()
             };
             let token = token.trim();
             if !(1..=4).contains(&token.len())
@@ -278,25 +286,18 @@ pub async fn read_timer_counter(
     require_no_suffix(&address, "read_timer_counter")?;
     let target = address.to_text()?;
     let response = read_single_response(client, &target, Some("D")).await?;
-    let values = close_on_protocol_error(
+    let (status, current, preset) = close_on_protocol_error(
         client,
-        parse_all_tokens::<u32>(
+        parse_timer_counter_tokens::<u32>(
             &response,
             "Invalid timer/counter status/current/preset response",
         ),
     )
     .await?;
-    if values.len() != 3 {
-        let error = HostLinkError::protocol(
-            "Timer/counter response must contain exactly status/current/preset.",
-        );
-        let _ = client.close().await;
-        return Err(error);
-    }
     Ok(TimerCounterValue {
-        status: values[0],
-        current: values[1],
-        preset: values[2],
+        status,
+        current,
+        preset,
     })
 }
 
@@ -330,6 +331,12 @@ pub async fn write_typed<T: HostLinkPayloadValue>(
     if dtype.trim().is_empty() {
         return Err(HostLinkError::protocol(
             "dtype is required; specify U, S, D, L, F, or BIT.",
+        ));
+    }
+    let parsed_device = parse_device(device)?;
+    if dtype == "F" && is_direct_bit_device_type(&parsed_device.device_type) {
+        return Err(HostLinkError::protocol(
+            "Float writes are not defined for direct bit devices.",
         ));
     }
     match dtype.as_str() {
@@ -373,18 +380,12 @@ pub async fn write_typed<T: HostLinkPayloadValue>(
 }
 
 pub(crate) fn parse_bool_token(token: &str) -> Result<bool, HostLinkError> {
-    let token = token.trim();
-    if token == "1" || token.eq_ignore_ascii_case("ON") || token.eq_ignore_ascii_case("TRUE") {
-        Ok(true)
-    } else if token == "0"
-        || token.eq_ignore_ascii_case("OFF")
-        || token.eq_ignore_ascii_case("FALSE")
-    {
-        Ok(false)
-    } else {
-        Err(HostLinkError::protocol(format!(
+    match token {
+        "1" | "ON" => Ok(true),
+        "0" | "OFF" => Ok(false),
+        _ => Err(HostLinkError::protocol(format!(
             "Invalid direct bit response token: {token}"
-        )))
+        ))),
     }
 }
 
@@ -419,10 +420,10 @@ fn is_timer_counter_composite_device(device: &str) -> Result<bool, HostLinkError
     Ok(matches!(address.device_type.as_str(), "T" | "C"))
 }
 
-fn parse_last_token<T: FromStr>(
+fn parse_timer_counter_tokens<T: FromStr>(
     response_text: &str,
     invalid_message: &'static str,
-) -> Result<T, HostLinkError> {
+) -> Result<(u32, T, T), HostLinkError> {
     let tokens = response_tokens(response_text).collect::<Vec<_>>();
     if tokens.len() != 3 {
         return Err(HostLinkError::protocol(format!(
@@ -430,9 +431,49 @@ fn parse_last_token<T: FromStr>(
             tokens.len()
         )));
     }
-    tokens[2]
+    let status = match tokens[0] {
+        "0" => 0,
+        "1" => 1,
+        other => {
+            return Err(HostLinkError::protocol(format!(
+                "Invalid timer/counter status token: {other}"
+            )));
+        }
+    };
+    let current = tokens[1]
         .parse::<T>()
-        .map_err(|_| HostLinkError::protocol(invalid_message))
+        .map_err(|_| HostLinkError::protocol(invalid_message))?;
+    let preset = tokens[2]
+        .parse::<T>()
+        .map_err(|_| HostLinkError::protocol(invalid_message))?;
+    Ok((status, current, preset))
+}
+
+fn parse_timer_counter_hex_preset(response_text: &str) -> Result<String, HostLinkError> {
+    let tokens = response_tokens(response_text).collect::<Vec<_>>();
+    if tokens.len() != 3 {
+        return Err(HostLinkError::protocol(format!(
+            "Timer/counter response must contain exactly 3 tokens, received {}",
+            tokens.len()
+        )));
+    }
+    if !matches!(tokens[0], "0" | "1") {
+        return Err(HostLinkError::protocol(format!(
+            "Invalid timer/counter status token: {}",
+            tokens[0]
+        )));
+    }
+    for token in &tokens[1..] {
+        if !(1..=4).contains(&token.len())
+            || !token.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || u16::from_str_radix(token, 16).is_err()
+        {
+            return Err(HostLinkError::protocol(
+                "Invalid timer/counter hexadecimal 16-bit response",
+            ));
+        }
+    }
+    Ok(tokens[2].to_ascii_uppercase())
 }
 
 fn parse_all_tokens<T: FromStr>(
@@ -511,15 +552,7 @@ async fn read_single_bool(
     data_format: Option<&str>,
 ) -> Result<bool, HostLinkError> {
     let response = read_single_response(client, device, data_format).await?;
-    let tokens = response_tokens(&response).collect::<Vec<_>>();
-    if tokens.len() != 1 {
-        client.close().await?;
-        return Err(HostLinkError::protocol(format!(
-            "Response returned {} values; expected 1",
-            tokens.len()
-        )));
-    }
-    close_on_protocol_error(client, parse_bool_token(tokens[0])).await
+    close_on_protocol_error(client, parse_bool_token(&response)).await
 }
 
 async fn read_consecutive_parsed<T: FromStr>(
@@ -576,7 +609,9 @@ pub async fn read_named<S: AsRef<str>>(
         .map(|item| item.as_ref().to_owned())
         .collect::<Vec<_>>();
     if addr_list.is_empty() {
-        return Ok(NamedSnapshot::new());
+        return Err(HostLinkError::protocol(
+            "read_named addresses must not be empty.",
+        ));
     }
 
     if let Some(plan) = compile_read_named_plan(&addr_list) {
@@ -677,6 +712,12 @@ pub fn poll<'a, S: AsRef<str> + 'a>(
 ) -> impl Stream<Item = Result<NamedSnapshot, HostLinkError>> + 'a {
     async_stream::try_stream! {
         let addr_list = addresses.iter().map(|item| item.as_ref().to_owned()).collect::<Vec<_>>();
+        if addr_list.is_empty() {
+            Err(HostLinkError::protocol("poll addresses must not be empty."))?;
+        }
+        if interval.is_zero() {
+            Err(HostLinkError::protocol("poll interval must be greater than zero."))?;
+        }
         let compiled = compile_read_named_plan(&addr_list);
         loop {
             let snapshot = if let Some(plan) = &compiled {

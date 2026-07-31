@@ -7,7 +7,11 @@ This checklist governs crates.io and GitHub publication for this repository.
 1. Use a clean release branch and run `release_check.bat` before the version exists in crates.io.
 2. Confirm `Cargo.toml`, runtime version metadata, CHANGELOG, user docs, examples, and public API agree.
 3. Enumerate every unchecked repository TODO and maintainer checkbox. Pass it, mark it explicitly not required, or record an item-by-item release disposition in the active release GOAL.
-4. Run `cargo package` and inspect the crate before creating the immutable annotated tag.
+4. Run `scripts/check_source_archive.ps1` and require the extracted GitHub
+   source archive to pass format, check, Clippy, rustdoc, and all-target tests.
+5. Run `scripts/check_package_contents.ps1`, then `cargo package`; inspect the
+   crate and confirm repository tests and maintainer tooling are absent before
+   creating the immutable annotated tag.
 
 ## Publication Integrity Gate
 

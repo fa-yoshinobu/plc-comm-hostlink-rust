@@ -8,7 +8,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-$archivePath = Join-Path ([System.IO.Path]::GetTempPath()) ("plc-source-archive-" + [guid]::NewGuid().ToString("N") + ".zip")
+$workspaceRoot = [System.IO.Directory]::GetParent($repositoryRoot).FullName
+$runId = [guid]::NewGuid().ToString("N")
+$archivePath = Join-Path $workspaceRoot ("plc-source-archive-$runId.zip")
+$extractPath = Join-Path $workspaceRoot ("plc-source-archive-$runId")
 
 $forbiddenFileNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 @(
@@ -34,8 +37,6 @@ $forbiddenPrefixes = @(
     "local_folder",
     "release-artifacts",
     "scripts",
-    "test",
-    "tests",
     "tools"
 )
 
@@ -119,8 +120,67 @@ try {
         throw "Source archive sample set differs from the tracked sample set: $differenceText"
     }
 
-    Write-Host "[OK] Source archive contract passed: treeish=$Treeish files=$($archiveFiles.Count) samples=$($actualSamples.Count)"
+    $expectedTests = @(
+        & git -C $repositoryRoot ls-tree -r --name-only $Treeish -- test tests |
+            ForEach-Object { $_.Replace("\", "/") } |
+            Sort-Object -Unique
+    )
+    if ($LASTEXITCODE -ne 0) {
+        throw "Cannot enumerate tests for '$Treeish'."
+    }
+    if ($expectedTests.Count -eq 0) {
+        throw "No tracked files were found under test/ or tests/."
+    }
+
+    $actualTests = @(
+        $archiveFiles |
+            Where-Object { $_.StartsWith("test/") -or $_.StartsWith("tests/") } |
+            Sort-Object -Unique
+    )
+    $testDifference = @(Compare-Object -ReferenceObject $expectedTests -DifferenceObject $actualTests -CaseSensitive)
+    if ($testDifference.Count -ne 0) {
+        $differenceText = ($testDifference | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" }) -join "; "
+        throw "Source archive test set differs from the tracked test set: $differenceText"
+    }
+
+    Expand-Archive -LiteralPath $archivePath -DestinationPath $extractPath
+    Push-Location $extractPath
+    try {
+        & cargo fmt --all -- --check
+        if ($LASTEXITCODE -ne 0) {
+            throw "cargo fmt failed from the extracted source archive."
+        }
+        & cargo check --all-targets --all-features
+        if ($LASTEXITCODE -ne 0) {
+            throw "cargo check failed from the extracted source archive."
+        }
+        & cargo clippy --all-targets --all-features -- -D warnings
+        if ($LASTEXITCODE -ne 0) {
+            throw "cargo clippy failed from the extracted source archive."
+        }
+        $previousRustdocFlags = $env:RUSTDOCFLAGS
+        $env:RUSTDOCFLAGS = "-D warnings"
+        try {
+            & cargo doc --no-deps --all-features
+            if ($LASTEXITCODE -ne 0) {
+                throw "cargo doc failed from the extracted source archive."
+            }
+        }
+        finally {
+            $env:RUSTDOCFLAGS = $previousRustdocFlags
+        }
+        & cargo test --all-targets --all-features
+        if ($LASTEXITCODE -ne 0) {
+            throw "cargo test failed from the extracted source archive."
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    Write-Host "[OK] Source archive contract passed: treeish=$Treeish files=$($archiveFiles.Count) samples=$($actualSamples.Count) tests=$($actualTests.Count)"
 }
 finally {
     Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $extractPath -Recurse -Force -ErrorAction SilentlyContinue
 }

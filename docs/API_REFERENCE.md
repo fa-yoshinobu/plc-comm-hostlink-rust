@@ -15,6 +15,9 @@ trace facilities are intentionally omitted from ordinary user documentation.
 | Session values | `timeout`, `set_timeout`, `plc_profile` |
 | Transport selection | `HostLinkTransportMode::{Tcp, Udp}` |
 
+Endpoints are IPv4-only. IPv6 literals are caller errors; hostnames without an
+IPv4 result fail as connection errors before protocol communication.
+
 ## PLC operations
 
 | Purpose | API |
@@ -45,7 +48,8 @@ strings are rejected.
 
 `HostLinkClock.year` is the explicit two-digit PLC year and must be `0..=99`.
 Semantic reads validate command-derived response counts. Direct-bit responses
-accept only `0`, `1`, `OFF`, or `ON`, while numeric reads of direct-bit devices require 16 or
+accept only the exact tokens `0`, `1`, `OFF`, or `ON` without trimming or case
+folding, while numeric reads of direct-bit devices require 16 or
 32 response points according to the explicit format. Malformed semantic
 responses close the connection generation.
 UDP responses require a CR/LF terminator; missing framing closes the transport.
@@ -72,7 +76,11 @@ All word/Dword helpers are single-request operations. There are no chunked
 exports.
 
 Hexadecimal typed reads require exactly one token containing 1..4 hexadecimal
-digits (timer/counter composite reads require their exact three-token shape).
+digits. Timer/counter composite reads require exactly three semantic tokens,
+status `0` or `1`, and valid current and preset fields for the requested type.
+Malformed semantic responses close the connection. Float32 writes are
+word-device-only. Named reads and polls require a non-empty address set, and
+poll intervals must be greater than zero.
 Converting `HostLinkValue` to `u16` is fallible through `TryFrom`; variants
 other than `HostLinkValue::U16` return an error instead of producing zero.
 
@@ -95,6 +103,10 @@ connection failure, and PLC rejection. PLC errors retain the returned code and
 response; the crate does not embed copied manual error descriptions.
 
 The complete generated Rust API for a release is available through docs.rs.
+
+`QueuedHostLinkClient` intentionally has no public inner-client getter. Every
+queued operation owns its complete queue gate; use `HostLinkClient` explicitly
+when direct-client behavior is required.
 
 ## Traffic statistics
 

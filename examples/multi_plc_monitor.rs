@@ -7,7 +7,7 @@ mod operational_common;
 
 use operational_common::{
     MonitorResult, TagSpec, format_endpoint, format_tags, monitor_endpoint, parse_plc_spec,
-    parse_tag_spec,
+    parse_positive_duration, parse_tag_spec,
 };
 use std::time::Duration;
 use tokio::task::JoinSet;
@@ -91,13 +91,15 @@ fn parse_args() -> MonitorResult<Args> {
                 args.timeout_ms = require_value(&mut iter, "--timeout-ms")?
                     .parse()
                     .map_err(|e| format!("{e}"))?;
+                if args.timeout_ms == 0 {
+                    return Err("--timeout-ms must be greater than zero".to_string());
+                }
             }
             "--interval" => {
-                args.interval = Duration::from_secs_f64(
-                    require_value(&mut iter, "--interval")?
-                        .parse::<f64>()
-                        .map_err(|e| format!("{e}"))?,
-                );
+                args.interval = parse_positive_duration(
+                    &require_value(&mut iter, "--interval")?,
+                    "--interval",
+                )?;
             }
             "--cycles" => {
                 args.cycles = Some(
@@ -105,20 +107,21 @@ fn parse_args() -> MonitorResult<Args> {
                         .parse()
                         .map_err(|e| format!("{e}"))?,
                 );
+                if args.cycles == Some(0) {
+                    return Err("--cycles must be greater than zero".to_string());
+                }
             }
             "--initial-backoff" => {
-                args.initial_backoff = Duration::from_secs_f64(
-                    require_value(&mut iter, "--initial-backoff")?
-                        .parse::<f64>()
-                        .map_err(|e| format!("{e}"))?,
-                );
+                args.initial_backoff = parse_positive_duration(
+                    &require_value(&mut iter, "--initial-backoff")?,
+                    "--initial-backoff",
+                )?;
             }
             "--max-backoff" => {
-                args.max_backoff = Duration::from_secs_f64(
-                    require_value(&mut iter, "--max-backoff")?
-                        .parse::<f64>()
-                        .map_err(|e| format!("{e}"))?,
-                );
+                args.max_backoff = parse_positive_duration(
+                    &require_value(&mut iter, "--max-backoff")?,
+                    "--max-backoff",
+                )?;
             }
             "--dry-run" => args.dry_run = true,
             "--help" | "-h" => return Err(usage()),
