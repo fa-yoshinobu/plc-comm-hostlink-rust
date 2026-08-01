@@ -2,9 +2,10 @@ use encoding_rs::SHIFT_JIS;
 use futures_util::{StreamExt, pin_mut};
 use plc_comm_kv_hostlink::{
     HostLinkAddress, HostLinkClient, HostLinkCommentEncoding, HostLinkConnectionOptions,
-    HostLinkError, HostLinkMonitorWord, HostLinkOutcomeUnknownReason, HostLinkTransportMode,
-    HostLinkValue, KvDeviceAddress, KvLogicalAddress, open_and_connect, read_comment_bytes,
-    read_comments, read_dwords, read_typed, read_words, write_dwords_single_request,
+    HostLinkError, HostLinkMonitorWord, HostLinkOutcomeUnknownReason, HostLinkPayloadValue,
+    HostLinkTransportMode, HostLinkValue, KvDeviceAddress, KvLogicalAddress, open_and_connect,
+    read_comment_bytes, read_comments, read_dwords, read_typed, read_words,
+    write_dwords_single_request,
 };
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -2494,6 +2495,121 @@ async fn expansion_unit_buffer_uses_address_suffix_command_form() {
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
         vec!["URD 01 100.U 2", "UWR 02 200.S 2 7 8"]
     );
+}
+
+struct CustomPayloadValue {
+    accepted: bool,
+}
+
+struct EmptyPayloadValue;
+
+impl HostLinkPayloadValue for EmptyPayloadValue {
+    fn format_for_suffix(&self, _suffix: &str) -> Result<String, HostLinkError> {
+        Ok(String::new())
+    }
+}
+
+impl HostLinkPayloadValue for CustomPayloadValue {
+    fn format_for_suffix(&self, suffix: &str) -> Result<String, HostLinkError> {
+        if self.accepted && suffix == ".U" {
+            Ok("77".to_owned())
+        } else {
+            Err(HostLinkError::protocol(format!(
+                "custom value does not support suffix '{suffix}'"
+            )))
+        }
+    }
+}
+
+#[tokio::test]
+async fn fallible_custom_formatter_propagates_through_normal_write_without_transport_fallback() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "WR DM0.U 77" => "OK".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    assert_eq!(
+        CustomPayloadValue { accepted: true }
+            .format_for_suffix(".U")
+            .unwrap(),
+        "77"
+    );
+    let mut output = String::from("unchanged");
+    let error = CustomPayloadValue { accepted: false }
+        .append_to_payload(".U", &mut output)
+        .unwrap_err();
+    assert!(error.to_string().contains("custom value"));
+    assert_eq!(output, "unchanged");
+
+    client
+        .write("DM0", CustomPayloadValue { accepted: true }, Some("U"))
+        .await
+        .unwrap();
+    let before = client.traffic_stats().await;
+    let error = client
+        .write("DM1", CustomPayloadValue { accepted: false }, Some("U"))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("custom value"));
+    assert_eq!(client.traffic_stats().await, before);
+    let error = client
+        .write("DM2", EmptyPayloadValue, Some("U"))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("empty token"));
+    assert_eq!(client.traffic_stats().await, before);
+    assert_eq!(received.lock().unwrap().as_slice(), ["WR DM0.U 77"]);
+}
+
+#[tokio::test]
+async fn invalid_builtin_formatting_fails_all_normal_write_shapes_before_transport() {
+    let options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    let client = HostLinkClient::new(options);
+
+    assert!(client.write("DM0", 65_536_u32, Some("U")).await.is_err());
+    assert!(
+        client
+            .write_consecutive("DM0", &[0_i32, 65_536_i32], Some("U"))
+            .await
+            .is_err()
+    );
+    assert!(
+        client
+            .write_set_value("T0", 32_768_i32, Some("S"))
+            .await
+            .is_err()
+    );
+    assert!(
+        client
+            .write_set_value_consecutive("T0", &[0_i64, 4_294_967_296_i64], Some("D"))
+            .await
+            .is_err()
+    );
+    assert!(
+        client
+            .write_expansion_unit_buffer(1, 0, &[0_i64, 2_147_483_648_i64], "L")
+            .await
+            .is_err()
+    );
+    assert!(client.write_typed("DM0", "U", 65_536_u32).await.is_err());
+    assert_eq!(client.traffic_stats().await.request_count, 0);
+    assert!(!client.is_open().await);
 }
 
 #[tokio::test]

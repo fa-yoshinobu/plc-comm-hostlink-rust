@@ -71,10 +71,30 @@ impl HostLinkPayloadValue for HostLinkValue {
         }
     }
 
-    fn format_for_suffix(&self, data_format: &str) -> String {
-        let mut value = String::new();
-        let _ = self.append_to_payload(data_format, &mut value);
-        value
+    fn format_for_suffix(&self, data_format: &str) -> Result<String, HostLinkError> {
+        match self {
+            HostLinkValue::U16(value) => value.format_for_suffix(data_format),
+            HostLinkValue::I16(value) => value.format_for_suffix(data_format),
+            HostLinkValue::U32(value) => value.format_for_suffix(data_format),
+            HostLinkValue::I32(value) => value.format_for_suffix(data_format),
+            HostLinkValue::F32(value) => value.format_for_suffix(data_format),
+            HostLinkValue::Bool(value) => value.format_for_suffix(data_format),
+            HostLinkValue::Text(value) => value.format_for_suffix(data_format),
+        }
+    }
+
+    fn as_float(&self) -> Option<f64> {
+        match self {
+            HostLinkValue::F32(value) => Some(f64::from(*value)),
+            _ => None,
+        }
+    }
+
+    fn as_text(&self) -> Option<&str> {
+        match self {
+            HostLinkValue::Text(value) => Some(value.as_str()),
+            _ => None,
+        }
     }
 
     fn append_to_payload(
@@ -466,10 +486,15 @@ pub async fn write_typed<T: HostLinkPayloadValue>(
     }
     match dtype.as_str() {
         "F" => {
-            let single = value
-                .format_for_suffix("")
-                .parse::<f32>()
-                .map_err(|_| HostLinkError::protocol("Invalid float32 input"))?;
+            let single = if let Some(value) = value.as_float() {
+                value as f32
+            } else if let Some(text) = value.as_text() {
+                text.trim()
+                    .parse::<f32>()
+                    .map_err(|_| HostLinkError::protocol("Invalid float32 input"))?
+            } else {
+                return Err(HostLinkError::protocol("Invalid float32 input"));
+            };
             if !single.is_finite() {
                 return Err(HostLinkError::protocol("Float32 input must be finite"));
             }
@@ -488,7 +513,9 @@ pub async fn write_typed<T: HostLinkPayloadValue>(
                 u16::try_from(integer)
                     .map_err(|_| HostLinkError::protocol("Invalid hexadecimal 16-bit input"))?
             } else {
-                let token = value.format_for_suffix("");
+                let token = value
+                    .as_text()
+                    .ok_or_else(|| HostLinkError::protocol("Invalid hexadecimal 16-bit input"))?;
                 u16::from_str_radix(token.trim(), 16)
                     .map_err(|_| HostLinkError::protocol("Invalid hexadecimal 16-bit input"))?
             };

@@ -50,6 +50,14 @@ Direct bit methods use an unsuffixed device. Suffix-bearing low-level device
 strings are rejected. Direct-bit writes require `bool`; numeric and textual
 aliases are rejected before transport.
 
+Custom low-level write values implement `HostLinkPayloadValue`.
+`format_for_suffix` returns `Result<String, HostLinkError>` and must return
+`Err` for an unsupported suffix or invalid value. The default
+`append_to_payload` appends only a complete successful token; formatter errors
+and an empty returned token are rejected without changing the output. Failures
+propagate through direct, consecutive, set-value, expansion-buffer, and typed
+writes before transport. There is no infallible compatibility formatter.
+
 `HostLinkClock.year` is the explicit two-digit PLC year and must be `0..=99`.
 Semantic reads validate command-derived response counts. Direct-bit responses
 accept only the exact tokens `0`, `1`, `OFF`, or `ON` without trimming or case

@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Breaking: `HostLinkPayloadValue::format_for_suffix` now returns `Result<String, HostLinkError>`. Built-in and custom values must reject unsupported suffixes and out-of-range values; the default append path and all normal writes propagate the error without producing or sending a fallback token.
 - Breaking: Float32 parsing, formatting, typed access, named reads, and polling now accept only canonical ordinary `.U` word families (`DM`, `EM`, `FM`, `ZF`, `W`, `TM`, `Z`, `CM`, `VM`, `D`, `E`, `F`); direct-bit and special-response families such as `R`, `T`, `C`, and `AT` fail before FIFO admission and transport.
 - Breaking: Named reads and polling now reject semantically duplicate keys after device, address, dtype, bit-index, and scalar-count normalization; spelling variants no longer create two keys, while distinct dtype views, bit indices, and overlapping spans remain valid.
 - Breaking: Replace the queued/direct split with one `HostLinkClient` that owns FIFO admission and one complete logical wire turn across all clones. Remove `QueuedHostLinkClient` without an alias; `open_and_connect` now returns `HostLinkClient`.
