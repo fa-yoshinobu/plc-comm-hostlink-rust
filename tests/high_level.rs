@@ -1,10 +1,10 @@
 use encoding_rs::SHIFT_JIS;
 use futures_util::{StreamExt, pin_mut};
 use plc_comm_kv_hostlink::{
-    HostLinkClient, HostLinkCommentEncoding, HostLinkConnectionOptions, HostLinkError,
-    HostLinkMonitorWord, HostLinkOutcomeUnknownReason, HostLinkTransportMode, HostLinkValue,
-    open_and_connect, read_comment_bytes, read_comments, read_dwords, read_typed, read_words,
-    write_dwords_single_request,
+    HostLinkAddress, HostLinkClient, HostLinkCommentEncoding, HostLinkConnectionOptions,
+    HostLinkError, HostLinkMonitorWord, HostLinkOutcomeUnknownReason, HostLinkTransportMode,
+    HostLinkValue, KvDeviceAddress, KvLogicalAddress, open_and_connect, read_comment_bytes,
+    read_comments, read_dwords, read_typed, read_words, write_dwords_single_request,
 };
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -108,7 +108,11 @@ async fn read_named_preserves_descending_input_wire_order() {
 
 #[tokio::test]
 async fn read_named_prevalidates_every_address_before_first_send() {
-    let (port, received) = start_scripted_server(|_| "1".to_owned()).await;
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RDS DM0.U 3" => "1 2 3".to_owned(),
+        _ => "1".to_owned(),
+    })
+    .await;
     let mut options = HostLinkConnectionOptions::new(
         "127.0.0.1",
         8501,
@@ -127,6 +131,28 @@ async fn read_named_prevalidates_every_address_before_first_send() {
     assert!(matches!(error, HostLinkError::Protocol(_)));
     assert!(received.lock().unwrap().is_empty());
     assert_eq!(client.traffic_stats().await.request_count, 0);
+
+    for duplicates in [
+        ["DM0:U", "DM0:U"],
+        ["dm0:u", "DM0000:U"],
+        ["R0:BIT", "R000:BIT"],
+    ] {
+        let error = client.read_named(&duplicates).await.unwrap_err();
+        assert!(matches!(&error, HostLinkError::Protocol(_)));
+        assert!(error.to_string().contains("semantically duplicated"));
+        assert!(received.lock().unwrap().is_empty());
+        assert_eq!(client.traffic_stats().await.request_count, 0);
+    }
+
+    let values = client
+        .read_named(&["dm0:u", "DM0:S", "DM0.0", "DM0.1", "DM0:D", "DM1:D"])
+        .await
+        .unwrap();
+    assert_eq!(
+        values.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec!["dm0:u", "DM0:S", "DM0.0", "DM0.1", "DM0:D", "DM1:D"]
+    );
+    assert_eq!(received.lock().unwrap().as_slice(), ["RDS DM0.U 3"]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1289,6 +1315,108 @@ async fn float_write_to_every_direct_bit_family_is_rejected_before_transport() {
             matches!(error, HostLinkError::Protocol(_)),
             "device={device} error={error}"
         );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn special_family_float32_rejects_before_fifo_and_transport() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let first_seen = Arc::new(Notify::new());
+    let release_first = Arc::new(Notify::new());
+    let server_seen = Arc::clone(&first_seen);
+    let server_release = Arc::clone(&release_first);
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        assert_eq!(read_test_command(&mut stream).await, "?K");
+        server_seen.notify_one();
+        server_release.notified().await;
+        stream.write_all(b"01\r").await.unwrap();
+    });
+
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let active_client = client.clone();
+    let active = tokio::spawn(async move { active_client.query_model().await });
+    first_seen.notified().await;
+
+    for device in ["R0", "T0", "C0", "AT0"] {
+        let read_error =
+            tokio::time::timeout(Duration::from_millis(50), client.read_typed(device, "F"))
+                .await
+                .expect("invalid Float32 read queued behind the active FIFO turn")
+                .unwrap_err();
+        assert!(matches!(read_error, HostLinkError::Protocol(_)));
+
+        let write_error = tokio::time::timeout(
+            Duration::from_millis(50),
+            client.write_typed(device, "F", 1.0_f32),
+        )
+        .await
+        .expect("invalid Float32 write queued behind the active FIFO turn")
+        .unwrap_err();
+        assert!(matches!(write_error, HostLinkError::Protocol(_)));
+
+        let address = format!("{device}:F");
+        let addresses = [address.as_str()];
+        let named_error =
+            tokio::time::timeout(Duration::from_millis(50), client.read_named(&addresses))
+                .await
+                .expect("invalid named Float32 read queued behind the active FIFO turn")
+                .unwrap_err();
+        assert!(matches!(named_error, HostLinkError::Protocol(_)));
+
+        let mut stream = Box::pin(client.poll(&addresses, Duration::from_millis(1)));
+        let poll_error = tokio::time::timeout(Duration::from_millis(50), stream.next())
+            .await
+            .expect("invalid Float32 poll queued behind the active FIFO turn")
+            .expect("poll ended without its validation error")
+            .unwrap_err();
+        assert!(matches!(poll_error, HostLinkError::Protocol(_)));
+    }
+
+    release_first.notify_one();
+    active.await.unwrap().unwrap();
+    assert_eq!(client.traffic_stats().await.request_count, 1);
+}
+
+#[test]
+fn float32_parser_normalizer_and_hand_built_formatter_share_family_validation() {
+    assert_eq!(
+        HostLinkAddress::normalize_logical("dm0:f").unwrap(),
+        "DM0:F"
+    );
+    for device in ["R0", "T0", "C0", "AT0"] {
+        let text = format!("{device}:F");
+        assert!(HostLinkAddress::parse_logical(&text).is_err());
+        assert!(HostLinkAddress::normalize_logical(&text).is_err());
+        assert!(HostLinkAddress::try_parse_logical(&text).is_none());
+
+        let hand_built = KvLogicalAddress {
+            base_address: KvDeviceAddress {
+                device_type: device.trim_end_matches('0').to_owned(),
+                number: 0,
+                suffix: String::new(),
+            },
+            data_type: "F".to_owned(),
+            bit_index: None,
+        };
+        assert!(hand_built.to_text().is_err());
+
+        let low_level = KvDeviceAddress {
+            device_type: device.trim_end_matches('0').to_owned(),
+            number: 0,
+            suffix: ".F".to_owned(),
+        };
+        assert!(HostLinkAddress::format(&low_level).is_err());
     }
 }
 

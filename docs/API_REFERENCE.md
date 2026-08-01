@@ -80,13 +80,21 @@ exports. `read_named` is the only automatic multi-request read aggregate: it
 preserves input wire order, keeps multiword values whole, owns one FIFO turn,
 and returns no partial result. A multi-frame named read is not PLC-atomic;
 coherent readers must use one request or a PLC-side snapshot/handshake.
+Named keys must be semantically unique by device family, numeric address,
+dtype, bit index, and scalar count. Spelling-only variants are rejected before
+FIFO admission, while distinct dtype views, bit indices, and overlapping spans
+remain valid. Result keys preserve the original input strings.
 
 Hexadecimal typed reads require exactly one token containing 1..4 hexadecimal
 digits. Timer/counter composite reads require exactly three semantic tokens,
 status `0` or `1`, and valid current and preset fields for the requested type.
-Malformed semantic responses close the connection. Float32 writes are
-word-device-only. Named reads and polls require a non-empty address set, and
-poll intervals must be greater than zero.
+Malformed semantic responses close the connection. Float32 parsing,
+formatting, reads, and writes use canonical family metadata and accept only the
+ordinary `.U` families `DM`, `EM`, `FM`, `ZF`, `W`, `TM`, `Z`, `CM`, `VM`,
+`D`, `E`, and `F`. Direct-bit and special-response families such as `R`, `T`,
+`C`, and `AT` reject `:F` before FIFO admission and transport. Named reads and
+polls require a non-empty address set, and poll intervals must be greater than
+zero.
 
 Every comment text read requires `HostLinkCommentEncoding::Utf8` or
 `HostLinkCommentEncoding::Cp932`. `Cp932` is CP932/Windows-31J and is the

@@ -1,7 +1,7 @@
 use crate::address::{
     KvDeviceAddress, is_direct_bit_device_type, parse_device, parse_named_address_parts,
-    rdc_device_types, require_explicit_format, require_no_suffix, validate_device_count,
-    validate_device_span, validate_device_type,
+    rdc_device_types, require_explicit_format, require_float32_eligible_device_type,
+    require_no_suffix, validate_device_count, validate_device_span, validate_device_type,
 };
 use crate::client::{HostLinkClient, HostLinkPayloadValue};
 use crate::error::HostLinkError;
@@ -12,6 +12,7 @@ use crate::read_plan::{
 };
 use futures_core::Stream;
 use indexmap::IndexMap;
+use std::collections::HashSet;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -116,10 +117,8 @@ fn validate_read_typed_request(device: &str, dtype: &str) -> Result<(), HostLink
         ));
     }
     let parsed = parse_device(device)?;
-    if is_direct_bit_device_type(&parsed.device_type) && dtype == "F" {
-        return Err(HostLinkError::protocol(
-            "Float reads are not defined for direct bit devices.",
-        ));
+    if dtype == "F" {
+        require_float32_eligible_device_type(&parsed.device_type)?;
     }
     match dtype.as_str() {
         "F" => {
@@ -158,8 +157,10 @@ fn validate_named_addresses_with_comment_policy(
     allow_comments: bool,
 ) -> Result<bool, HostLinkError> {
     let mut has_comment = false;
+    let mut semantic_keys = HashSet::new();
     for address in addresses {
         let (base_address, dtype, bit_index) = parse_named_address_parts(address)?;
+        let parsed = parse_device(&base_address)?;
         match dtype.as_str() {
             "BIT_IN_WORD" => {
                 require_bit_in_word_index(address, bit_index)?;
@@ -172,11 +173,22 @@ fn validate_named_addresses_with_comment_policy(
                     ));
                 }
                 has_comment = true;
-                let parsed = parse_device(&base_address)?;
                 validate_device_type("RDC", &parsed.device_type, rdc_device_types())?;
                 require_no_suffix(&parsed, "RDC")?;
             }
             _ => validate_read_typed_request(&base_address, &dtype)?,
+        }
+        let semantic_bit_index = (dtype == "BIT_IN_WORD").then_some(bit_index).flatten();
+        if !semantic_keys.insert((
+            parsed.device_type,
+            parsed.number,
+            dtype,
+            semantic_bit_index,
+            1usize,
+        )) {
+            return Err(HostLinkError::protocol(format!(
+                "Named read address '{address}' is semantically duplicated."
+            )));
         }
     }
     Ok(has_comment)
@@ -207,12 +219,11 @@ async fn read_typed_impl(
     let parsed_device = parse_device(&device)?;
     let direct_bit_device = is_direct_bit_device_type(&parsed_device.device_type);
 
+    if dtype == "F" {
+        require_float32_eligible_device_type(&parsed_device.device_type)?;
+    }
+
     if direct_bit_device && dtype != "BIT" {
-        if dtype == "F" {
-            return Err(HostLinkError::protocol(
-                "Float reads are not defined for direct bit devices.",
-            ));
-        }
         let expected = if matches!(dtype.as_str(), "D" | "L") {
             32
         } else {
@@ -450,10 +461,8 @@ pub async fn write_typed<T: HostLinkPayloadValue>(
         ));
     }
     let parsed_device = parse_device(device)?;
-    if dtype == "F" && is_direct_bit_device_type(&parsed_device.device_type) {
-        return Err(HostLinkError::protocol(
-            "Float writes are not defined for direct bit devices.",
-        ));
+    if dtype == "F" {
+        require_float32_eligible_device_type(&parsed_device.device_type)?;
     }
     match dtype.as_str() {
         "F" => {
