@@ -124,6 +124,24 @@ fn validate_response_tokens(tokens: &[String], data_format: &str) -> Result<(), 
     Ok(())
 }
 
+fn validate_and_normalize_response_tokens(
+    tokens: &mut [String],
+    data_format: &str,
+) -> Result<(), HostLinkError> {
+    validate_response_tokens(tokens, data_format)?;
+    if data_format == ".H" {
+        for token in tokens {
+            let value = u16::from_str_radix(token, 16).map_err(|_| {
+                HostLinkError::protocol(format!(
+                    "Invalid response token '{token}' for data format '{data_format}'"
+                ))
+            })?;
+            *token = format!("{value:04X}");
+        }
+    }
+    Ok(())
+}
+
 fn validate_response_token_count(tokens: &[String], expected: usize) -> Result<(), HostLinkError> {
     if tokens.len() != expected {
         return Err(HostLinkError::protocol(format!(
@@ -284,7 +302,12 @@ struct ClientControl {
 
 enum Transport {
     Tcp(TcpStream),
-    Udp(UdpSocket),
+    Udp(UdpTransport),
+}
+
+struct UdpTransport {
+    endpoint: SocketAddr,
+    predecessor: Option<UdpSocket>,
 }
 
 struct ClientInner {
@@ -296,7 +319,7 @@ struct ClientInner {
     tcp_read_buf: Vec<u8>,
     udp_read_buf: Vec<u8>,
     monitor_bit_count: Option<usize>,
-    monitor_word_count: Option<usize>,
+    monitor_word_formats: Option<Vec<String>>,
     // Set before the first transport await and cleared only after a complete
     // response. If the future is dropped, the next operation replaces the
     // poisoned transport before sending another request.
@@ -320,7 +343,7 @@ impl HostLinkClient {
                 tcp_read_buf: vec![0u8; 8192],
                 udp_read_buf: vec![0u8; UDP_RECEIVE_BUFFER_SIZE],
                 monitor_bit_count: None,
-                monitor_word_count: None,
+                monitor_word_formats: None,
                 exchange_incomplete: false,
                 last_request_may_have_been_sent: false,
                 active_deadline: None,
@@ -545,7 +568,7 @@ impl HostLinkClient {
             }
         };
         let may_have_been_sent = inner.last_request_may_have_been_sent;
-        if result.is_err() {
+        if matches!(&result, Err(error) if !matches!(error, HostLinkError::Plc { .. })) {
             inner.close();
         }
         classify_operation_result(result, state_changing, may_have_been_sent)
@@ -663,13 +686,18 @@ impl HostLinkClient {
                 "Direct bit response must not contain surrounding whitespace",
             ));
         }
-        let tokens = split_data_tokens(&response);
+        let mut tokens = split_data_tokens(&response);
         let expected = read_response_token_count(&address.device_type, &suffix);
         if let Err(error) = validate_response_token_count(&tokens, expected) {
             direct.retire_transport().await;
             return Err(error);
         }
-        if let Err(error) = validate_response_tokens(&tokens, &suffix) {
+        let response_format = if is_direct_bit_device_type(&address.device_type) {
+            ""
+        } else {
+            suffix.as_str()
+        };
+        if let Err(error) = validate_and_normalize_response_tokens(&mut tokens, response_format) {
             direct.retire_transport().await;
             return Err(error);
         }
@@ -696,12 +724,12 @@ impl HostLinkClient {
                 "Direct bit response must not contain surrounding whitespace",
             ));
         }
-        let tokens = split_data_tokens(&response);
+        let mut tokens = split_data_tokens(&response);
         if let Err(error) = validate_response_token_count(&tokens, count) {
             direct.retire_transport().await;
             return Err(error);
         }
-        if let Err(error) = validate_response_tokens(&tokens, &suffix) {
+        if let Err(error) = validate_and_normalize_response_tokens(&mut tokens, &suffix) {
             direct.retire_transport().await;
             return Err(error);
         }
@@ -801,6 +829,7 @@ impl HostLinkClient {
         }
 
         let mut command = String::from("MWS");
+        let mut formats = Vec::with_capacity(devices.len());
         for device in devices {
             let (device, data_format) = match device {
                 HostLinkMonitorWord::Numeric {
@@ -814,6 +843,7 @@ impl HostLinkClient {
             let suffix = require_explicit_format(&address, data_format)?;
             validate_device_span(&address.device_type, address.number, &suffix, 1)?;
             address.suffix = suffix.clone();
+            formats.push(suffix);
             command.push(' ');
             command.push_str(&address.to_text()?);
         }
@@ -827,7 +857,7 @@ impl HostLinkClient {
                 error,
             ));
         }
-        direct.inner.lock().await.monitor_word_count = Some(devices.len());
+        direct.inner.lock().await.monitor_word_formats = Some(formats);
         Ok(())
     }
 
@@ -858,19 +888,28 @@ impl HostLinkClient {
 
     pub async fn read_monitor_words(&self) -> Result<Vec<String>, HostLinkError> {
         let (_turn, direct) = self.begin_turn().await?;
-        let expected = direct
+        let formats = direct
             .inner
             .lock()
             .await
-            .monitor_word_count
+            .monitor_word_formats
+            .clone()
             .ok_or_else(|| {
                 HostLinkError::protocol("Monitor words must be registered before MWR")
             })?;
         let response = direct.send_decoded_direct("MWR", false).await?;
-        let tokens = split_data_tokens(&response);
-        if let Err(error) = validate_response_token_count(&tokens, expected) {
+        let mut tokens = split_data_tokens(&response);
+        if let Err(error) = validate_response_token_count(&tokens, formats.len()) {
             direct.retire_transport().await;
             return Err(error);
+        }
+        for (token, data_format) in tokens.iter_mut().zip(&formats) {
+            if let Err(error) =
+                validate_and_normalize_response_tokens(std::slice::from_mut(token), data_format)
+            {
+                direct.retire_transport().await;
+                return Err(error);
+            }
         }
         Ok(tokens)
     }
@@ -927,12 +966,12 @@ impl HostLinkClient {
         let command = format!("RDE {} {}", address.to_text()?, count);
         let (_turn, direct) = self.begin_turn().await?;
         let response = direct.send_decoded_direct(&command, false).await?;
-        let tokens = split_data_tokens(&response);
+        let mut tokens = split_data_tokens(&response);
         if let Err(error) = validate_response_token_count(&tokens, count) {
             direct.retire_transport().await;
             return Err(error);
         }
-        if let Err(error) = validate_response_tokens(&tokens, &suffix) {
+        if let Err(error) = validate_and_normalize_response_tokens(&mut tokens, &suffix) {
             direct.retire_transport().await;
             return Err(error);
         }
@@ -1037,12 +1076,12 @@ impl HostLinkClient {
         let command = format!("URD {unit_no:02} {address}{suffix} {count}");
         let (_turn, direct) = self.begin_turn().await?;
         let response = direct.send_decoded_direct(&command, false).await?;
-        let tokens = split_data_tokens(&response);
+        let mut tokens = split_data_tokens(&response);
         if let Err(error) = validate_response_token_count(&tokens, count) {
             direct.retire_transport().await;
             return Err(error);
         }
-        if let Err(error) = validate_response_tokens(&tokens, &suffix) {
+        if let Err(error) = validate_and_normalize_response_tokens(&mut tokens, &suffix) {
             direct.retire_transport().await;
             return Err(error);
         }
@@ -1275,13 +1314,10 @@ impl ClientInner {
                 stream.set_nodelay(true)?;
                 Transport::Tcp(stream)
             }
-            HostLinkTransportMode::Udp => {
-                let socket = UdpSocket::bind("0.0.0.0:0").await?;
-                timeout_at(connect_deadline, socket.connect(endpoints[0]))
-                    .await
-                    .map_err(|_| HostLinkError::timeout("udp connect"))??;
-                Transport::Udp(socket)
-            }
+            HostLinkTransportMode::Udp => Transport::Udp(UdpTransport {
+                endpoint: endpoints[0],
+                predecessor: None,
+            }),
         };
 
         self.transport = Some(transport);
@@ -1299,7 +1335,7 @@ impl ClientInner {
         self.exchange_incomplete = false;
         self.active_deadline = None;
         self.monitor_bit_count = None;
-        self.monitor_word_count = None;
+        self.monitor_word_formats = None;
     }
 
     async fn send_raw_bytes(
@@ -1377,32 +1413,48 @@ impl ClientInner {
         let deadline = checked_deadline(timeout)?;
         self.active_deadline = Some(deadline);
         self.exchange_incomplete = true;
-        self.last_request_may_have_been_sent = true;
+        self.last_request_may_have_been_sent = false;
         let exchange_result = match self.transport.as_mut() {
             Some(Transport::Tcp(stream)) => {
-                match write_all_with_timeout(stream, &frame, deadline).await {
-                    Ok(()) => {
-                        self.traffic_stats.request_count += 1;
-                        self.traffic_stats.tx_bytes += frame.len() as u64;
-                        recv_tcp_line(
-                            stream,
-                            &mut self.rx_buf,
-                            &mut self.rx_start,
-                            &mut self.rx_count,
-                            &mut self.tcp_read_buf,
-                            deadline,
-                        )
-                        .await
-                    }
-                    Err(err) => Err(err),
+                let preflight = reject_unowned_tcp_response(stream, &mut self.tcp_read_buf, true);
+                self.last_request_may_have_been_sent = preflight.is_ok();
+                match preflight {
+                    Err(error) => Err(error),
+                    Ok(()) => match write_all_with_timeout(stream, &frame, deadline).await {
+                        Ok(()) => {
+                            self.traffic_stats.request_count += 1;
+                            self.traffic_stats.tx_bytes += frame.len() as u64;
+                            recv_tcp_line(
+                                stream,
+                                &mut self.rx_buf,
+                                &mut self.rx_start,
+                                &mut self.rx_count,
+                                &mut self.tcp_read_buf,
+                                deadline,
+                            )
+                            .await
+                        }
+                        Err(err) => Err(err),
+                    },
                 }
             }
-            Some(Transport::Udp(socket)) => {
-                match send_udp_with_timeout(socket, &frame, deadline).await {
+            Some(Transport::Udp(transport)) => {
+                let predecessor_endpoint = transport
+                    .predecessor
+                    .as_ref()
+                    .map(UdpSocket::local_addr)
+                    .transpose()?;
+                let mut socket =
+                    create_udp_request_socket(transport.endpoint, predecessor_endpoint, deadline)
+                        .await?;
+                drop(transport.predecessor.take());
+                self.last_request_may_have_been_sent = true;
+                let result = match send_udp_with_timeout(&mut socket, &frame, deadline).await {
                     Ok(()) => {
                         self.traffic_stats.request_count += 1;
                         self.traffic_stats.tx_bytes += frame.len() as u64;
-                        match recv_udp_with_timeout(socket, &mut self.udp_read_buf, deadline).await
+                        match recv_udp_with_timeout(&mut socket, &mut self.udp_read_buf, deadline)
+                            .await
                         {
                             Ok(()) if matches!(self.udp_read_buf.last(), Some(b'\r' | b'\n')) => {
                                 let raw = self.udp_read_buf.clone();
@@ -1416,7 +1468,11 @@ impl ClientInner {
                         }
                     }
                     Err(err) => Err(err),
+                };
+                if result.is_ok() {
+                    transport.predecessor = Some(socket);
                 }
+                result
             }
             None => Err(HostLinkError::connection("transport was not opened")),
         };
@@ -1589,6 +1645,70 @@ async fn send_udp_with_timeout(
     Ok(())
 }
 
+async fn create_udp_request_socket(
+    endpoint: SocketAddr,
+    predecessor_endpoint: Option<SocketAddr>,
+    deadline: Instant,
+) -> Result<UdpSocket, HostLinkError> {
+    create_udp_request_socket_bound(
+        "0.0.0.0:0".parse().expect("valid IPv4 wildcard endpoint"),
+        endpoint,
+        predecessor_endpoint,
+        deadline,
+    )
+    .await
+}
+
+async fn create_udp_request_socket_bound(
+    bind_endpoint: SocketAddr,
+    endpoint: SocketAddr,
+    predecessor_endpoint: Option<SocketAddr>,
+    deadline: Instant,
+) -> Result<UdpSocket, HostLinkError> {
+    for _ in 0..16 {
+        let socket = timeout_at(deadline, UdpSocket::bind(bind_endpoint))
+            .await
+            .map_err(|_| HostLinkError::timeout("udp bind"))??;
+        timeout_at(deadline, socket.connect(endpoint))
+            .await
+            .map_err(|_| HostLinkError::timeout("udp connect"))??;
+        let local_endpoint = socket.local_addr()?;
+        if predecessor_endpoint.is_none_or(|previous| local_endpoint != previous) {
+            return Ok(socket);
+        }
+    }
+    Err(HostLinkError::connection(
+        "udp bind did not allocate a distinct local endpoint",
+    ))
+}
+
+fn reject_unowned_tcp_response(
+    stream: &TcpStream,
+    tcp_read_buf: &mut [u8],
+    eof_is_error: bool,
+) -> Result<(), HostLinkError> {
+    loop {
+        match stream.try_read(tcp_read_buf) {
+            Ok(0) if eof_is_error => {
+                return Err(HostLinkError::connection("Connection closed by PLC"));
+            }
+            Ok(0) => return Ok(()),
+            Ok(read) => {
+                if tcp_read_buf[..read]
+                    .iter()
+                    .any(|byte| !matches!(byte, b'\r' | b'\n'))
+                {
+                    return Err(HostLinkError::protocol(
+                        "Received an unowned extra TCP response before sending the next request",
+                    ));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
 async fn recv_udp_with_timeout(
     socket: &mut UdpSocket,
     buffer: &mut Vec<u8>,
@@ -1674,6 +1794,12 @@ async fn recv_tcp_line(
             while skip < *rx_count && matches!(rx_buf[*rx_start + skip], b'\r' | b'\n') {
                 skip += 1;
             }
+            if skip < *rx_count {
+                return Err(HostLinkError::protocol(
+                    "Received more than one non-empty TCP response for one request",
+                ));
+            }
+            reject_unowned_tcp_response(stream, tcp_read_buf, false)?;
             let line = rx_buf[*rx_start..*rx_start + skip].to_vec();
             let counted_len = found_idx + 1;
             *rx_start += skip;
@@ -1750,6 +1876,34 @@ mod endpoint_tests {
             select_ipv4_endpoints("mixed.example", mixed).unwrap(),
             vec!["127.0.0.1:8501".parse::<SocketAddr>().unwrap()]
         );
+    }
+}
+
+#[cfg(test)]
+mod udp_generation_tests {
+    use super::create_udp_request_socket_bound;
+    use std::time::Duration;
+    use tokio::net::UdpSocket;
+    use tokio::time::Instant;
+
+    #[tokio::test]
+    async fn successor_bind_failure_leaves_the_callers_predecessor_alive() {
+        let predecessor = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        predecessor.connect("127.0.0.1:9").await.unwrap();
+        let predecessor_endpoint = predecessor.local_addr().unwrap();
+        let blocker = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let blocked_endpoint = blocker.local_addr().unwrap();
+
+        let result = create_udp_request_socket_bound(
+            blocked_endpoint,
+            "127.0.0.1:9".parse().unwrap(),
+            Some(predecessor_endpoint),
+            Instant::now() + Duration::from_secs(1),
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(predecessor.local_addr().unwrap(), predecessor_endpoint);
     }
 }
 

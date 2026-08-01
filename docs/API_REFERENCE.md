@@ -65,10 +65,17 @@ folding, while numeric reads of direct-bit devices require 16 or
 32 response points according to the explicit format. Malformed semantic
 responses close the connection generation.
 UDP responses require a CR/LF terminator; missing framing closes the transport.
+Each admitted UDP operation owns a newly bound and connected socket generation;
+the logical client remains open after success, but a successful request socket
+is never reused. TCP accepts one non-empty response per request and retires the
+connection when it receives an additional unowned non-empty response.
 All non-format commands, including forced control, monitor-bit registration,
 comment reads, and timer/counter helpers, reject suffix-bearing devices.
 Monitor reads require a successful registration in the current connection
-generation and enforce the exact registered token count.
+generation and enforce the exact registered token count. Word-monitor
+registration also preserves each entry's ordered format, and `MWR` validates
+each token against its corresponding `.U`, `.S`, `.H`, `.D`, `.L`, or direct-bit
+format before returning any values.
 
 ## High-level helpers
 
@@ -93,16 +100,17 @@ dtype, bit index, and scalar count. Spelling-only variants are rejected before
 FIFO admission, while distinct dtype views, bit indices, and overlapping spans
 remain valid. Result keys preserve the original input strings.
 
-Hexadecimal typed reads require exactly one token containing 1..4 hexadecimal
-digits. Timer/counter composite reads require exactly three semantic tokens,
+Semantic `.H` reads validate 1..4 hexadecimal digits and return exactly four
+uppercase digits (`0000` through `FFFF`); raw reads and write spelling are not
+normalized. Timer/counter composite reads require exactly three semantic tokens,
 status `0` or `1`, and valid current and preset fields for the requested type.
 Malformed semantic responses close the connection. Float32 parsing,
 formatting, reads, and writes use canonical family metadata and accept only the
-ordinary `.U` families `DM`, `EM`, `FM`, `ZF`, `W`, `TM`, `Z`, `CM`, `VM`,
-`D`, `E`, and `F`. Direct-bit and special-response families such as `R`, `T`,
-`C`, and `AT` reject `:F` before FIFO admission and transport. Named reads and
-polls require a non-empty address set, and poll intervals must be greater than
-zero.
+ordinary `.U` families `DM`, `EM`, `FM`, `ZF`, `W`, `TM`, `CM`, `VM`,
+`D`, `E`, and `F`. Direct-bit, `Z`, and special-response families such as `R`,
+`T`, `C`, and `AT` reject `:F` before FIFO admission and transport. Named reads
+and polls require a non-empty address set, and poll intervals must be greater
+than zero.
 
 Every comment text read requires `HostLinkCommentEncoding::Utf8` or
 `HostLinkCommentEncoding::Cp932`. `Cp932` is CP932/Windows-31J and is the
@@ -116,8 +124,8 @@ terminator-free `RDC` payload, including trailing ASCII-space padding.
 UTF-8 decoding preserves an initial `EF BB BF` as `U+FEFF`; it is comment data,
 not a removable transport signature. The same bytes are invalid under `Cp932`.
 Syntactically valid PLC `E0` through `E9` replies return `HostLinkError::Plc`
-without retiring the connection; malformed framing or payload decoding retires
-it.
+without retiring the connection for every semantic command, including writes;
+malformed framing or payload decoding retires it.
 
 The ordinary `read_named` and `poll` APIs reject `:COMMENT` entries before
 transport. Use `read_named_with_comment_encoding` or

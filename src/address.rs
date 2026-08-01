@@ -192,7 +192,10 @@ pub(crate) fn default_format_by_device_type(device_type: &str) -> &'static str {
 }
 
 pub(crate) fn is_float32_eligible_device_type(device_type: &str) -> bool {
-    default_format_by_device_type(device_type) == ".U"
+    matches!(
+        device_type,
+        "CM" | "D" | "DM" | "E" | "EM" | "F" | "FM" | "TM" | "VM" | "W" | "ZF"
+    )
 }
 
 pub(crate) fn require_float32_eligible_device_type(device_type: &str) -> Result<(), HostLinkError> {
@@ -248,7 +251,7 @@ fn format_xym_bit_number(number: u32) -> String {
 }
 
 pub(crate) fn is_optimizable_read_named_device_type(device_type: &str) -> bool {
-    is_float32_eligible_device_type(device_type)
+    default_format_by_device_type(device_type) == ".U"
 }
 
 pub(crate) fn parse_named_address_parts(
@@ -714,9 +717,8 @@ mod tests {
 
     #[test]
     fn float32_eligible_families_match_canonical_metadata_exhaustively() {
-        let expected = BTreeSet::from([
-            "CM", "D", "DM", "E", "EM", "F", "FM", "TM", "VM", "W", "Z", "ZF",
-        ]);
+        let expected =
+            BTreeSet::from(["CM", "D", "DM", "E", "EM", "F", "FM", "TM", "VM", "W", "ZF"]);
         let actual = DEVICE_TYPES_PARSE_ORDER
             .iter()
             .copied()
@@ -740,7 +742,7 @@ mod tests {
         };
         assert_eq!(dm.to_text().unwrap(), "DM0:F");
 
-        for device in ["R0", "T0", "C0", "AT0"] {
+        for device in ["R0", "T0", "C0", "AT0", "Z0"] {
             for data_type in ["F", "f", ".F"] {
                 let address = KvLogicalAddress {
                     base_address: parse_device(device).unwrap(),

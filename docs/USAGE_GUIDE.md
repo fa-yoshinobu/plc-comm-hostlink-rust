@@ -29,6 +29,14 @@ option or receive-buffer-size option. TCP and UDP responses have an internal
 absolute body cap of 65,536 bytes. Request bodies use the same 65,536-byte cap;
 one byte over is rejected before client state or traffic counters change.
 
+One non-pipelined TCP request owns exactly one non-empty response. Additional
+CR/LF separators are ignored, but a second non-empty response received before
+another request owns it is a protocol error and retires the connection. For
+UDP, `open` represents a logical session: every admitted operation uses a new
+connected IPv4 UDP socket and source endpoint. The preceding successful socket
+stays bound only until its successor has bound a different endpoint, so a
+duplicate or delayed datagram cannot become the next operation's response.
+
 `open` is idempotent while the same transport remains healthy. Transport
 failure, timeout, EOF, or response overflow closes that transport. If the
 caller drops an in-flight command future, the future returns no library
@@ -53,10 +61,15 @@ High-level addresses use a colon for the value type:
 
 Therefore, `DM100.D` means bit 13, while `DM100:D` means an unsigned Dword.
 Float32 (`F`) parsing, formatting, reads, and writes are defined only for the
-canonical ordinary `.U` families `DM`, `EM`, `FM`, `ZF`, `W`, `TM`, `Z`, `CM`,
-`VM`, `D`, `E`, and `F`. Direct-bit and special-response families such as `R`,
-`T`, `C`, and `AT` reject `:F` before FIFO admission and frame construction;
+canonical ordinary `.U` families `DM`, `EM`, `FM`, `ZF`, `W`, `TM`, `CM`,
+`VM`, `D`, `E`, and `F`. Direct-bit, `Z`, and special-response families such as
+`R`, `T`, `C`, and `AT` reject `:F` before FIFO admission and frame construction;
 they are never reinterpreted as consecutive word or bit operations.
+
+Every semantic `.H` result is the canonical four-character uppercase form
+`0000` through `FFFF`. Short or lowercase PLC tokens are accepted only after
+16-bit hexadecimal validation and are then padded, for example `a` becomes
+`000A`. Raw response APIs and hexadecimal write-frame spelling are unchanged.
 
 Low-level numeric APIs require a base device and a separate format:
 
@@ -119,7 +132,9 @@ let values = client
 All addresses are copied and validated before the first send. Compatible
 adjacent values may share a request; when a request limit is reached, a new
 request starts only at a declared value boundary, so a Dword or Float32 value
-is never split. Requests retain declared input order.
+is never split. A descending address ends the current segment and starts a new
+one; later ascending contiguous addresses may extend that new segment. Requests
+and returned values retain declared input order.
 
 Named keys must be semantically unique by device family, numeric address,
 dtype, bit index, and scalar count. Case and leading zeros do not make a second
@@ -198,7 +213,8 @@ decode the remaining payload. It never retries the other codec or inserts
 replacement characters, and a malformed payload retires the connection.
 An exact, correctly framed PLC `E0` through `E9` response returns
 `HostLinkError::Plc` without retiring the connection, so a later command may
-reuse it.
+reuse it. This applies to all semantic commands, including state-changing
+commands; malformed framing and malformed non-PLC payloads still retire it.
 Tabs, full-width spaces, other Unicode whitespace, and spaces inside the
 comment are preserved. `read_comment_bytes` excludes only the transport CR/LF
 terminator and returns the exact payload, including trailing ASCII spaces; use

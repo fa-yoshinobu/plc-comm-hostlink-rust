@@ -400,7 +400,12 @@ async fn read_typed_impl(
                 client.retire_transport().await;
                 return Err(error);
             }
-            Ok(HostLinkValue::Text(token.to_ascii_uppercase()))
+            let value = u16::from_str_radix(token, 16).map_err(|_| {
+                HostLinkError::protocol(
+                    "Hexadecimal response token must contain 1..=4 hexadecimal digits",
+                )
+            })?;
+            Ok(HostLinkValue::Text(format!("{value:04X}")))
         }
         "BIT" => Ok(HostLinkValue::Bool(
             read_single_bool(client, &device, None).await?,
@@ -622,7 +627,10 @@ fn parse_timer_counter_hex_preset(response_text: &str) -> Result<String, HostLin
             ));
         }
     }
-    Ok(tokens[2].to_ascii_uppercase())
+    let preset = u16::from_str_radix(tokens[2], 16).map_err(|_| {
+        HostLinkError::protocol("Invalid timer/counter hexadecimal 16-bit response")
+    })?;
+    Ok(format!("{preset:04X}"))
 }
 
 fn parse_all_tokens<T: FromStr>(

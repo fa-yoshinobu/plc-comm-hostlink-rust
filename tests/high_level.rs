@@ -1349,7 +1349,7 @@ async fn special_family_float32_rejects_before_fifo_and_transport() {
     let active = tokio::spawn(async move { active_client.query_model().await });
     first_seen.notified().await;
 
-    for device in ["R0", "T0", "C0", "AT0"] {
+    for device in ["R0", "T0", "C0", "AT0", "Z0"] {
         let read_error =
             tokio::time::timeout(Duration::from_millis(50), client.read_typed(device, "F"))
                 .await
@@ -1395,7 +1395,7 @@ fn float32_parser_normalizer_and_hand_built_formatter_share_family_validation() 
         HostLinkAddress::normalize_logical("dm0:f").unwrap(),
         "DM0:F"
     );
-    for device in ["R0", "T0", "C0", "AT0"] {
+    for device in ["R0", "T0", "C0", "AT0", "Z0"] {
         let text = format!("{device}:F");
         assert!(HostLinkAddress::parse_logical(&text).is_err());
         assert!(HostLinkAddress::normalize_logical(&text).is_err());
@@ -1418,6 +1418,12 @@ fn float32_parser_normalizer_and_hand_built_formatter_share_family_validation() 
             suffix: ".F".to_owned(),
         };
         assert!(HostLinkAddress::format(&low_level).is_err());
+    }
+
+    for text in ["Z1:F", "z1:f", "Z1:.F"] {
+        assert!(HostLinkAddress::parse_logical(text).is_err(), "{text}");
+        assert!(HostLinkAddress::normalize_logical(text).is_err(), "{text}");
+        assert!(HostLinkAddress::try_parse_logical(text).is_none(), "{text}");
     }
 }
 

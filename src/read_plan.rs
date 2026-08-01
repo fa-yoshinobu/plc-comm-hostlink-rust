@@ -71,12 +71,15 @@ pub(crate) fn compile_read_named_plan(addresses: &[String]) -> Option<CompiledRe
         let same_device_type = current_start
             .as_ref()
             .is_some_and(|start| start.device_type == request.base_address.device_type);
+        let descends_before_segment_start =
+            current_start.is_some() && request_start < current_start_number;
         let exceeds_segment_limit = current_start.is_some()
-            && request_end_exclusive.checked_sub(current_start_number)? > segment_limit as u32;
+            && !descends_before_segment_start
+            && request_end_exclusive - current_start_number > segment_limit as u32;
         let can_append = current_start.is_some()
             && same_device_type
             && current_mode == Some(request_mode)
-            && request_start >= current_start_number
+            && !descends_before_segment_start
             && request_start <= current_end_exclusive
             && !exceeds_segment_limit;
 
@@ -289,6 +292,40 @@ mod tests {
                 .map(|segment| (segment.start_number, segment.count))
                 .collect::<Vec<_>>(),
             vec![(10, 1), (9, 1), (11, 1)]
+        );
+    }
+
+    #[test]
+    fn descending_boundary_starts_a_new_segment_that_can_grow_forward() {
+        let addresses = ["DM100:U", "DM0:U", "DM1:U"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let plan = compile_read_named_plan(&addresses).unwrap();
+
+        assert_eq!(
+            plan.segments
+                .iter()
+                .map(|segment| (segment.start_number, segment.count))
+                .collect::<Vec<_>>(),
+            vec![(100, 1), (0, 2)]
+        );
+    }
+
+    #[test]
+    fn repeated_descending_boundaries_each_start_an_independent_segment() {
+        let addresses = ["DM100:U", "DM0:U", "DM1:U", "DM50:U", "DM2:U", "DM3:U"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let plan = compile_read_named_plan(&addresses).unwrap();
+
+        assert_eq!(
+            plan.segments
+                .iter()
+                .map(|segment| (segment.start_number, segment.count))
+                .collect::<Vec<_>>(),
+            vec![(100, 1), (0, 2), (50, 1), (2, 2)]
         );
     }
 
