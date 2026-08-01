@@ -538,3 +538,61 @@ Acceptance criteria:
 - [x] Live PLC verification is not required for this deterministic local framing and counter contract.
 - [x] Documentation, migration notes, and changelog agree with the implementation.
 - [x] Final acceptance criteria verified and the item marked complete.
+
+## GOAL-CROSS-OS-CI-001 — Required Windows representative contract smoke
+
+Implementation scope: the repository CI workflow and existing deterministic
+Tokio loopback tests. Runtime code, public API, packaging, release workflows,
+the Ubuntu MSRV job, and the Ubuntu full Rust gate are unchanged.
+
+Target contract: the primary Ubuntu gates remain authoritative. One additional
+non-optional Windows stable-Rust job runs only representative localhost
+contracts for fragmented receive accounting, one deadline across a trickled
+response, refused TCP connection classification, close retirement of
+active/queued work followed by reopen, and UDP late-response retirement before
+reconnect. The job has a ten-minute bound and does not run the complete test,
+feature, documentation, or package matrices.
+
+Compatibility impact: none; this adds CI evidence only.
+
+Machine-verifiable acceptance criteria:
+
+1. `.github/workflows/ci.yml` contains exactly one `windows-latest` contract-
+   smoke job in addition to the unchanged Ubuntu MSRV and full gates.
+2. The Windows job is required by workflow semantics: it has no conditional,
+   failure suppression, or `continue-on-error` path.
+3. Its five explicit test filters cover fragmented receive, connection failure,
+   bounded timeout, close/waiter retirement, reopen, and delayed-response rejection.
+4. The Windows job installs only the stable minimal toolchain, runs the bounded
+   integration-test subset, and does not package, publish, or contact a PLC.
+
+- [x] Implementation completed in this repository.
+- [x] Existing deterministic tests explicitly selected for every acceptance criterion.
+- [ ] The new Windows CI job passed on GitHub for the final source state.
+- [x] The equivalent local Windows contract and complete non-hardware gates passed with Rust 1.85.0 and stable 1.95.0.
+- [x] Codex self-review completed after the requested local verification run.
+- [x] Live PLC checks are not required; all selected behavior uses localhost loopback.
+- [x] Maintainer CI documentation agrees with the workflow; no user migration note or changelog entry is required.
+- [ ] Final acceptance criteria verified and the item marked complete.
+
+Verification evidence: the local Windows run passed
+`cargo +1.85.0 check --all-targets --all-features`, stable format, Clippy with
+warnings denied, rustdoc with warnings denied, and all-target/all-feature
+tests. The `high_level` integration target passed 70 tests. The generated
+crate contained 28 files and 7 examples and passed extracted-artifact and
+independent-consumer checks. The synthetic current-worktree source archive
+contained 47 files, 10 sample files, and 2 test files and passed its extracted
+full gate. This includes every test selected by the new Windows representative
+job. The GitHub-hosted Windows job and Ubuntu MSRV/full jobs remain unchecked
+because those hosted OS runs were not executed locally. No live PLC
+communication was performed.
+
+Self-review disposition:
+
+- Accepted and corrected: the initial subset had no connection-refusal case. A
+  bounded loopback refusal test was added and selected without changing the
+  Ubuntu MSRV or full gate.
+- Rejected: duplicating the four integration cases into a Windows-only test
+  target would add maintenance without a distinct contract. Exact filters keep
+  the existing tests authoritative.
+- Duplicate findings: none. Deferred findings: none.

@@ -13,6 +13,28 @@ use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::Notify;
 
 #[tokio::test]
+async fn refused_tcp_connection_is_transport_failure_and_not_adopted() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let error = match HostLinkClient::connect(options).await {
+        Ok(_) => panic!("connection to a released listener port unexpectedly succeeded"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(error, HostLinkError::Transport { .. }));
+}
+
+#[tokio::test]
 async fn read_named_batches_contiguous_word_reads() {
     let (port, received) = start_scripted_server(|command| match command.as_str() {
         "RDS DM100.U 8" => "1025 65535 2 1 57920 1 0 16712".to_owned(),
