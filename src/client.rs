@@ -1148,6 +1148,12 @@ impl HostLinkClient {
         helpers::write_typed(self, device, dtype, &value).await
     }
 
+    /// Read a named all-or-error aggregate with semantically unique keys.
+    ///
+    /// Spelling variants that normalize to the same device, numeric address,
+    /// dtype, bit index, and scalar count are rejected before FIFO admission.
+    /// Distinct dtype views, bit indices, and overlapping spans remain valid,
+    /// and result keys preserve their original input strings.
     pub async fn read_named<S: AsRef<str>>(
         &self,
         addresses: &[S],

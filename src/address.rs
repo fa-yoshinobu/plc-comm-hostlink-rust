@@ -44,6 +44,7 @@ impl KvDeviceAddress {
         let range = device_range(&self.device_type).ok_or_else(|| {
             HostLinkError::protocol(format!("Unsupported device type: {}", self.device_type))
         })?;
+        let suffix = normalize_suffix(&self.suffix)?;
         let number = if uses_bit_bank_address(&self.device_type) {
             format_bit_bank_number(self.number)
         } else if uses_xym_bit_address(&self.device_type) {
@@ -53,7 +54,7 @@ impl KvDeviceAddress {
         } else {
             self.number.to_string()
         };
-        Ok(format!("{}{}{}", self.device_type, number, self.suffix))
+        Ok(format!("{}{}{}", self.device_type, number, suffix))
     }
 }
 
@@ -79,6 +80,7 @@ impl KvLogicalAddress {
     }
 
     pub fn to_text(&self) -> Result<String, HostLinkError> {
+        validate_logical_address_semantics(self)?;
         let mut base = self.base_address.clone();
         base.suffix.clear();
         let base_text = base.to_text()?;
@@ -189,6 +191,20 @@ pub(crate) fn default_format_by_device_type(device_type: &str) -> &'static str {
     }
 }
 
+pub(crate) fn is_float32_eligible_device_type(device_type: &str) -> bool {
+    default_format_by_device_type(device_type) == ".U"
+}
+
+pub(crate) fn require_float32_eligible_device_type(device_type: &str) -> Result<(), HostLinkError> {
+    if is_float32_eligible_device_type(device_type) {
+        Ok(())
+    } else {
+        Err(HostLinkError::protocol(format!(
+            "Float32 requires an ordinary word-device family; '{device_type}' is not eligible."
+        )))
+    }
+}
+
 pub(crate) fn is_direct_bit_device_type(device_type: &str) -> bool {
     matches!(
         device_type,
@@ -232,7 +248,7 @@ fn format_xym_bit_number(number: u32) -> String {
 }
 
 pub(crate) fn is_optimizable_read_named_device_type(device_type: &str) -> bool {
-    default_format_by_device_type(device_type) == ".U"
+    is_float32_eligible_device_type(device_type)
 }
 
 pub(crate) fn parse_named_address_parts(
@@ -334,11 +350,13 @@ pub fn parse_logical_address(text: &str) -> Result<KvLogicalAddress, HostLinkErr
         let base = parse_device(&raw[..colon_index])?;
         let mut base = base;
         base.suffix.clear();
-        return Ok(KvLogicalAddress {
+        let logical = KvLogicalAddress {
             base_address: base,
             data_type: normalize_dtype(&raw[colon_index + 1..])?,
             bit_index: None,
-        });
+        };
+        validate_logical_address_semantics(&logical)?;
+        return Ok(logical);
     }
 
     if let Some(dot_index) = raw.rfind('.') {
@@ -374,6 +392,18 @@ pub fn parse_logical_address(text: &str) -> Result<KvLogicalAddress, HostLinkErr
         data_type,
         bit_index: None,
     })
+}
+
+fn validate_logical_address_semantics(address: &KvLogicalAddress) -> Result<(), HostLinkError> {
+    if address
+        .data_type
+        .trim()
+        .trim_start_matches('.')
+        .eq_ignore_ascii_case("F")
+    {
+        require_float32_eligible_device_type(&address.base_address.device_type)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn require_explicit_format(
@@ -619,8 +649,11 @@ fn device_range(device_type: &str) -> Option<DeviceRange> {
 #[cfg(test)]
 mod tests {
     use super::{
-        HostLinkAddress, parse_device, parse_logical_address, validate_device_span, wr_device_types,
+        DEVICE_TYPES_PARSE_ORDER, HostLinkAddress, KvLogicalAddress,
+        is_float32_eligible_device_type, parse_device, parse_logical_address, validate_device_span,
+        wr_device_types,
     };
+    use std::collections::BTreeSet;
 
     #[test]
     fn parse_device_normalizes_hex_suffix_and_number() {
@@ -677,6 +710,56 @@ mod tests {
         let logical = parse_logical_address("cr0:bit").unwrap();
         assert_eq!(logical.to_text().unwrap(), "CR000:BIT");
         assert_eq!(logical.data_type, "BIT");
+    }
+
+    #[test]
+    fn float32_eligible_families_match_canonical_metadata_exhaustively() {
+        let expected = BTreeSet::from([
+            "CM", "D", "DM", "E", "EM", "F", "FM", "TM", "VM", "W", "Z", "ZF",
+        ]);
+        let actual = DEVICE_TYPES_PARSE_ORDER
+            .iter()
+            .copied()
+            .filter(|device_type| is_float32_eligible_device_type(device_type))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(actual, expected);
+
+        for device_type in DEVICE_TYPES_PARSE_ORDER {
+            let text = format!("{device_type}0:F");
+            let parsed = parse_logical_address(&text);
+            assert_eq!(parsed.is_ok(), expected.contains(device_type), "{text}");
+        }
+    }
+
+    #[test]
+    fn hand_built_float32_logical_addresses_cannot_bypass_family_validation() {
+        let dm = KvLogicalAddress {
+            base_address: parse_device("DM0").unwrap(),
+            data_type: "F".to_owned(),
+            bit_index: None,
+        };
+        assert_eq!(dm.to_text().unwrap(), "DM0:F");
+
+        for device in ["R0", "T0", "C0", "AT0"] {
+            for data_type in ["F", "f", ".F"] {
+                let address = KvLogicalAddress {
+                    base_address: parse_device(device).unwrap(),
+                    data_type: data_type.to_owned(),
+                    bit_index: None,
+                };
+                assert!(
+                    address.to_text().is_err(),
+                    "device={device} data_type={data_type}"
+                );
+            }
+        }
+
+        let invalid_low_level_suffix = super::KvDeviceAddress {
+            device_type: "DM".to_owned(),
+            number: 0,
+            suffix: ".F".to_owned(),
+        };
+        assert!(HostLinkAddress::format(&invalid_low_level_suffix).is_err());
     }
 
     #[test]

@@ -52,9 +52,11 @@ High-level addresses use a colon for the value type:
 | `DM100.0` through `DM100.F` | bit 0 through bit 15 in one word |
 
 Therefore, `DM100.D` means bit 13, while `DM100:D` means an unsigned Dword.
-Float32 (`F`) writes are defined only for word devices. Supplying a direct-bit
-device is rejected before frame construction and is never reinterpreted as
-consecutive bit writes.
+Float32 (`F`) parsing, formatting, reads, and writes are defined only for the
+canonical ordinary `.U` families `DM`, `EM`, `FM`, `ZF`, `W`, `TM`, `Z`, `CM`,
+`VM`, `D`, `E`, and `F`. Direct-bit and special-response families such as `R`,
+`T`, `C`, and `AT` reject `:F` before FIFO admission and frame construction;
+they are never reinterpreted as consecutive word or bit operations.
 
 Low-level numeric APIs require a base device and a separate format:
 
@@ -95,6 +97,12 @@ All addresses are copied and validated before the first send. Compatible
 adjacent values may share a request; when a request limit is reached, a new
 request starts only at a declared value boundary, so a Dword or Float32 value
 is never split. Requests retain declared input order.
+
+Named keys must be semantically unique by device family, numeric address,
+dtype, bit index, and scalar count. Case and leading zeros do not make a second
+key distinct. Different dtype views of the same word, different bit indices,
+and overlapping multiword spans are valid. Result keys preserve the original
+input strings.
 
 The complete named read (or one `poll` cycle) owns one FIFO wire turn and
 returns all requested values or an error, never a partial result. Multiple
