@@ -65,6 +65,29 @@ let values = client.read_consecutive("DM100", 2, Some("D")).await?;
 client.write_consecutive("DM200", &[1_u32, 2_u32], Some("D")).await?;
 ```
 
+Custom low-level values implement the fallible formatter contract:
+
+```rust
+use plc_comm_kv_hostlink::{HostLinkError, HostLinkPayloadValue};
+
+struct Code(u16);
+
+impl HostLinkPayloadValue for Code {
+    fn format_for_suffix(&self, suffix: &str) -> Result<String, HostLinkError> {
+        match suffix {
+            ".U" => Ok(self.0.to_string()),
+            _ => Err(HostLinkError::protocol(format!(
+                "Code does not support suffix '{suffix}'"
+            ))),
+        }
+    }
+}
+```
+
+`append_to_payload` and all normal write helpers propagate this `Result` and
+send nothing on error. An empty successful token is also rejected without
+changing the output. Do not return an empty string or another fallback token.
+
 Passing `DM100.D` to a low-level numeric API is rejected even when a matching
 format argument is also present. Direct bit devices use `None` because the
 device family and command already determine bit semantics; numeric devices do

@@ -598,3 +598,103 @@ Self-review disposition:
   target would add maintenance without a distinct contract. Exact filters keep
   the existing tests authoritative.
 - Duplicate findings: none. Deferred findings: none.
+
+## GOAL-HOSTLINK-RUST-FALLIBLE-FORMATTER-001 — Make payload formatting explicitly fallible
+
+Stable identifier: `HOSTLINK-RUST-FALLIBLE-FORMATTER-001`.
+
+Decision status: implemented and verified on 2026-08-02.
+
+Implementation scope: the exported `HostLinkPayloadValue` trait, every built-in
+and blanket implementation, `HostLinkValue`, the default `append_to_payload`
+method, typed-write and payload-construction helpers, normal write APIs, tests,
+rustdoc, user documentation, migration notes, changelog, and generated API
+reference.
+
+Target contract: `HostLinkPayloadValue::format_for_suffix` returns
+`Result<String, HostLinkError>`. Formatting an out-of-range value, a value whose
+type is incompatible with the requested format, or an unsupported suffix returns
+`Err`; it must never return an empty string or another fallback token to hide the
+failure. The default `append_to_payload` calls the fallible formatter, propagates
+its error, and appends only a successfully formatted complete token. Every
+internal formatter call and helper propagates the error without parsing or
+transmitting a fallback value.
+
+Built-in boundaries retain their existing intended semantics: integer formats
+use the current direct-bit, unsigned/signed 16-bit, hexadecimal 16-bit, unsigned
+32-bit, and signed 32-bit ranges; `bool` is valid only for direct-bit formatting;
+floating-point and text values remain unavailable to low-level numeric payload
+append paths and are accepted by the explicitly typed helpers only where those
+helpers currently support them. Unknown suffixes fail for every built-in type.
+Valid built-in inputs retain their current wire tokens and normal write behavior.
+
+Compatibility impact: this is a source-breaking public-trait change. External
+implementations must change `format_for_suffix(&self, suffix) -> String` to
+`format_for_suffix(&self, suffix) -> Result<String, HostLinkError>`, return
+`Ok(token)` only after validating their supported suffix and value domain, and
+return `Err` for unsupported or invalid input. Direct callers must handle or
+propagate the `Result`. Custom implementations that rely on the default
+`append_to_payload` gain mandatory error propagation; implementations that
+override it must preserve the same no-fallback contract. No compatibility trait,
+infallible alias, empty-string fallback, or deprecated callable surface remains.
+
+Machine-verifiable acceptance criteria:
+
+1. The exported trait signature and rustdoc expose
+   `Result<String, HostLinkError>`, and a compile-time migration fixture proves
+   that an implementation using the former `String` signature no longer builds.
+2. Every built-in integer type accepts exact minimum/maximum values for each
+   supported suffix and rejects the immediately out-of-range values without
+   producing a token or transport request.
+3. `bool`, `f32`, `f64`, `String`, `&str`, references, and `HostLinkValue`
+   return `Err` for type-incompatible or unsupported suffixes and preserve their
+   documented valid typed-helper behavior.
+4. The default `append_to_payload`, every overriding implementation, reference
+   forwarding, joined-payload builders, and typed-write helpers propagate the
+   original `HostLinkError`; no ignored `Result`, empty token, partial token, or
+   post-error payload mutation remains.
+5. Representative direct, consecutive, set-value, expansion-buffer, and typed
+   writes retain byte-identical commands for valid built-in boundary values.
+6. Equivalent invalid calls through those normal write APIs fail before request
+   counters or transport activity and identify the value, type, or suffix error.
+7. A custom-trait implementation fixture demonstrates both a successful token
+   and an explicit unsupported-suffix error through direct formatting, default
+   append, and a normal write caller.
+8. Public API documentation, examples, migration notes, and generated API
+   reference show `Result` handling and contain no infallible formatter example.
+
+- [x] Implementation completed in this repository.
+- [x] Tests added or updated for every acceptance criterion.
+- [x] Relevant static checks, unit tests, integration tests, examples, and package/build checks passed.
+- [x] Codex self-review completed against the approved contract and cross-language consistency requirements.
+- [x] Required live-PLC checks passed, or each unavailable check has an explicit release disposition.
+- [x] Documentation, migration notes, changelog, and generated API reference agree with the implementation.
+- [x] Final acceptance criteria verified and the item marked complete.
+
+### Verification evidence and self-review disposition (2026-08-02)
+
+- `run_ci.bat`: PASS. Formatting, clippy for all targets and features with
+  `-D warnings`, rustdoc with `-D warnings`, all-target/all-feature Cargo tests,
+  generated-crate validation, all seven examples, and an isolated generated-
+  crate consumer completed successfully. The rustdoc compile-fail fixture
+  proves the former infallible trait signature no longer compiles.
+- Boundary tests cover every built-in integer type, exact supported limits and
+  immediately invalid values, incompatible built-in and `HostLinkValue` types,
+  reference forwarding, custom success/error formatters, joined payloads,
+  unchanged output on failure, and empty-success-token rejection. Normal direct,
+  consecutive, set-value, expansion-buffer, and typed write paths prove invalid
+  formatting fails with zero transport requests.
+- Codex self-review inspected the actual diff, exported trait and blanket
+  implementations, validation order, token construction and mutation boundary,
+  normal and typed helper propagation, tests, examples, rustdoc, user docs,
+  generated API, and package output. Accepted findings: the initial default
+  append path accepted custom `Ok("")`, so explicit empty-token rejection and
+  no-mutation/no-send tests were added; and typed F/H behavior required separate
+  internal float/text projections after low-level formatting became strictly
+  fallible, so `as_float`/`as_text` projections and regression coverage were
+  added. Rejected findings: none. Duplicate findings: none. Deferred findings:
+  none.
+- Live PLC verification is not required for this item: formatter return values,
+  payload mutation, and pre-send request counters are deterministic local
+  behavior, and no PLC/profile compatibility claim changed. No live PLC
+  communication was performed.

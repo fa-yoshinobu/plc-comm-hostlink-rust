@@ -15,7 +15,6 @@ use crate::protocol::{
     build_frame, comment_response_payload, decode_comment_payload, decode_response,
     ensure_comment_success, ensure_success, raw_response_body, split_data_tokens,
 };
-use std::fmt::Write as _;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{
     Arc, RwLock,
@@ -30,8 +29,25 @@ use tokio::time::{Instant, timeout_at};
 const MAX_TCP_LINE_SIZE: usize = 65_536;
 const UDP_RECEIVE_BUFFER_SIZE: usize = MAX_TCP_LINE_SIZE + 2;
 
+/// Value that can produce one validated Host Link write token.
+///
+/// Implementations using the former infallible signature do not compile:
+///
+/// ```compile_fail
+/// use plc_comm_kv_hostlink::{HostLinkError, HostLinkPayloadValue};
+/// struct Legacy;
+/// impl HostLinkPayloadValue for Legacy {
+///     fn format_for_suffix(&self, _suffix: &str) -> String {
+///         String::new()
+///     }
+/// }
+/// ```
 pub trait HostLinkPayloadValue {
-    fn format_for_suffix(&self, data_format: &str) -> String;
+    /// Format one complete low-level numeric payload token.
+    ///
+    /// Implementations must reject unsupported suffixes and invalid values;
+    /// returning a fallback or empty token is not permitted.
+    fn format_for_suffix(&self, data_format: &str) -> Result<String, HostLinkError>;
 
     fn as_bool(&self) -> Option<bool> {
         None
@@ -41,12 +57,28 @@ pub trait HostLinkPayloadValue {
         None
     }
 
+    #[doc(hidden)]
+    fn as_float(&self) -> Option<f64> {
+        None
+    }
+
+    #[doc(hidden)]
+    fn as_text(&self) -> Option<&str> {
+        None
+    }
+
     fn append_to_payload(
         &self,
         data_format: &str,
         output: &mut String,
     ) -> Result<(), HostLinkError> {
-        output.push_str(&self.format_for_suffix(data_format));
+        let token = self.format_for_suffix(data_format)?;
+        if token.is_empty() {
+            return Err(HostLinkError::protocol(format!(
+                "formatter returned an empty token for data format '{data_format}'"
+            )));
+        }
+        output.push_str(&token);
         Ok(())
     }
 }
@@ -124,20 +156,13 @@ macro_rules! impl_payload_for_ints {
                     Some(*self as i128)
                 }
 
-                fn format_for_suffix(&self, data_format: &str) -> String {
-                    let mut value = String::new();
-                    let _ = self.append_to_payload(data_format, &mut value);
-                    value
-                }
-
-                fn append_to_payload(&self, data_format: &str, output: &mut String) -> Result<(), HostLinkError> {
+                fn format_for_suffix(&self, data_format: &str) -> Result<String, HostLinkError> {
                     validate_integer_payload(*self as i128, data_format)?;
                     if data_format == ".H" {
-                        let _ = write!(output, "{:X}", *self as i128);
+                        Ok(format!("{:X}", *self as i128))
                     } else {
-                        let _ = write!(output, "{}", self);
+                        Ok(self.to_string())
                     }
-                    Ok(())
                 }
             }
         )*
@@ -147,34 +172,26 @@ macro_rules! impl_payload_for_ints {
 impl_payload_for_ints!(u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
 
 impl HostLinkPayloadValue for f32 {
-    fn format_for_suffix(&self, _data_format: &str) -> String {
-        self.to_string()
+    fn format_for_suffix(&self, data_format: &str) -> Result<String, HostLinkError> {
+        Err(HostLinkError::protocol(format!(
+            "f32 is not valid for low-level numeric data format '{data_format}'; use the typed F helper"
+        )))
     }
 
-    fn append_to_payload(
-        &self,
-        _data_format: &str,
-        _output: &mut String,
-    ) -> Result<(), HostLinkError> {
-        Err(HostLinkError::protocol(
-            "floating-point values require the high-level F helper",
-        ))
+    fn as_float(&self) -> Option<f64> {
+        Some(f64::from(*self))
     }
 }
 
 impl HostLinkPayloadValue for f64 {
-    fn format_for_suffix(&self, _data_format: &str) -> String {
-        self.to_string()
+    fn format_for_suffix(&self, data_format: &str) -> Result<String, HostLinkError> {
+        Err(HostLinkError::protocol(format!(
+            "f64 is not valid for low-level numeric data format '{data_format}'; use the typed F helper"
+        )))
     }
 
-    fn append_to_payload(
-        &self,
-        _data_format: &str,
-        _output: &mut String,
-    ) -> Result<(), HostLinkError> {
-        Err(HostLinkError::protocol(
-            "floating-point values require the high-level F helper",
-        ))
+    fn as_float(&self) -> Option<f64> {
+        Some(*self)
     }
 }
 
@@ -183,54 +200,38 @@ impl HostLinkPayloadValue for bool {
         Some(*self)
     }
 
-    fn format_for_suffix(&self, _data_format: &str) -> String {
-        if *self { "1" } else { "0" }.to_owned()
-    }
-
-    fn append_to_payload(
-        &self,
-        data_format: &str,
-        output: &mut String,
-    ) -> Result<(), HostLinkError> {
-        if !data_format.is_empty() {
-            return Err(HostLinkError::protocol(
-                "bool is valid only for direct-bit access",
-            ));
+    fn format_for_suffix(&self, data_format: &str) -> Result<String, HostLinkError> {
+        if data_format.is_empty() {
+            Ok(if *self { "1" } else { "0" }.to_owned())
+        } else {
+            Err(HostLinkError::protocol(format!(
+                "bool is valid only for direct-bit formatting, not '{data_format}'"
+            )))
         }
-        output.push(if *self { '1' } else { '0' });
-        Ok(())
     }
 }
 
 impl HostLinkPayloadValue for String {
-    fn format_for_suffix(&self, _data_format: &str) -> String {
-        self.trim().to_owned()
+    fn format_for_suffix(&self, data_format: &str) -> Result<String, HostLinkError> {
+        Err(HostLinkError::protocol(format!(
+            "String is not valid for low-level numeric data format '{data_format}'"
+        )))
     }
 
-    fn append_to_payload(
-        &self,
-        _data_format: &str,
-        _output: &mut String,
-    ) -> Result<(), HostLinkError> {
-        Err(HostLinkError::protocol(
-            "text values are not accepted by low-level numeric writes",
-        ))
+    fn as_text(&self) -> Option<&str> {
+        Some(self.as_str())
     }
 }
 
 impl HostLinkPayloadValue for &str {
-    fn format_for_suffix(&self, _data_format: &str) -> String {
-        self.trim().to_owned()
+    fn format_for_suffix(&self, data_format: &str) -> Result<String, HostLinkError> {
+        Err(HostLinkError::protocol(format!(
+            "str is not valid for low-level numeric data format '{data_format}'"
+        )))
     }
 
-    fn append_to_payload(
-        &self,
-        _data_format: &str,
-        _output: &mut String,
-    ) -> Result<(), HostLinkError> {
-        Err(HostLinkError::protocol(
-            "text values are not accepted by low-level numeric writes",
-        ))
+    fn as_text(&self) -> Option<&str> {
+        Some(self)
     }
 }
 
@@ -243,8 +244,16 @@ impl<T: HostLinkPayloadValue + ?Sized> HostLinkPayloadValue for &T {
         (*self).as_integer()
     }
 
-    fn format_for_suffix(&self, data_format: &str) -> String {
+    fn format_for_suffix(&self, data_format: &str) -> Result<String, HostLinkError> {
         (*self).format_for_suffix(data_format)
+    }
+
+    fn as_float(&self) -> Option<f64> {
+        (*self).as_float()
+    }
+
+    fn as_text(&self) -> Option<&str> {
+        (*self).as_text()
     }
 
     fn append_to_payload(
@@ -1741,5 +1750,129 @@ mod endpoint_tests {
             select_ipv4_endpoints("mixed.example", mixed).unwrap(),
             vec!["127.0.0.1:8501".parse::<SocketAddr>().unwrap()]
         );
+    }
+}
+
+#[cfg(test)]
+mod payload_value_tests {
+    use super::{HostLinkPayloadValue, build_joined_payload};
+    use crate::error::HostLinkError;
+    use crate::helpers::HostLinkValue;
+
+    macro_rules! assert_integer_type_is_fallible {
+        ($ty:ty) => {{
+            let value: $ty = 0;
+            assert_eq!(value.format_for_suffix("").unwrap(), "0");
+            for suffix in [".U", ".S", ".H", ".D", ".L"] {
+                assert!(value.format_for_suffix(suffix).is_ok());
+            }
+            assert!(value.format_for_suffix(".UNKNOWN").is_err());
+        }};
+    }
+
+    #[test]
+    fn every_builtin_integer_type_uses_validated_fallible_formatting() {
+        assert_integer_type_is_fallible!(u8);
+        assert_integer_type_is_fallible!(u16);
+        assert_integer_type_is_fallible!(u32);
+        assert_integer_type_is_fallible!(u64);
+        assert_integer_type_is_fallible!(usize);
+        assert_integer_type_is_fallible!(i8);
+        assert_integer_type_is_fallible!(i16);
+        assert_integer_type_is_fallible!(i32);
+        assert_integer_type_is_fallible!(i64);
+        assert_integer_type_is_fallible!(isize);
+
+        assert_eq!(0_i32.format_for_suffix("").unwrap(), "0");
+        assert_eq!(1_i32.format_for_suffix("").unwrap(), "1");
+        assert!((-1_i32).format_for_suffix("").is_err());
+        assert!(2_i32.format_for_suffix("").is_err());
+
+        assert_eq!(0_u16.format_for_suffix(".U").unwrap(), "0");
+        assert_eq!(u16::MAX.format_for_suffix(".U").unwrap(), "65535");
+        assert!((-1_i32).format_for_suffix(".U").is_err());
+        assert!(65_536_u32.format_for_suffix(".U").is_err());
+
+        assert_eq!(i16::MIN.format_for_suffix(".S").unwrap(), "-32768");
+        assert_eq!(i16::MAX.format_for_suffix(".S").unwrap(), "32767");
+        assert!((-32_769_i32).format_for_suffix(".S").is_err());
+        assert!(32_768_i32.format_for_suffix(".S").is_err());
+
+        assert_eq!(0_u16.format_for_suffix(".H").unwrap(), "0");
+        assert_eq!(u16::MAX.format_for_suffix(".H").unwrap(), "FFFF");
+        assert!((-1_i32).format_for_suffix(".H").is_err());
+        assert!(65_536_u32.format_for_suffix(".H").is_err());
+
+        assert_eq!(0_u32.format_for_suffix(".D").unwrap(), "0");
+        assert_eq!(u32::MAX.format_for_suffix(".D").unwrap(), "4294967295");
+        assert!((-1_i64).format_for_suffix(".D").is_err());
+        assert!(4_294_967_296_u64.format_for_suffix(".D").is_err());
+
+        assert_eq!(i32::MIN.format_for_suffix(".L").unwrap(), "-2147483648");
+        assert_eq!(i32::MAX.format_for_suffix(".L").unwrap(), "2147483647");
+        assert!((-2_147_483_649_i64).format_for_suffix(".L").is_err());
+        assert!(2_147_483_648_i64.format_for_suffix(".L").is_err());
+    }
+
+    #[test]
+    fn incompatible_builtin_types_and_hostlink_values_never_return_fallback_tokens() {
+        assert_eq!(true.format_for_suffix("").unwrap(), "1");
+        assert!(true.format_for_suffix(".U").is_err());
+        assert!(1.25_f32.format_for_suffix(".U").is_err());
+        assert!(1.25_f64.format_for_suffix(".U").is_err());
+        assert!(String::from("12").format_for_suffix(".U").is_err());
+        assert!("12".format_for_suffix(".U").is_err());
+        let referenced = &65_536_u32;
+        assert!(referenced.format_for_suffix(".U").is_err());
+        assert!(HostLinkValue::F32(1.25).format_for_suffix(".U").is_err());
+        assert!(
+            HostLinkValue::Text("12".to_owned())
+                .format_for_suffix(".U")
+                .is_err()
+        );
+        assert!(HostLinkValue::U32(65_536).format_for_suffix(".U").is_err());
+    }
+
+    struct CustomValue(bool);
+
+    impl HostLinkPayloadValue for CustomValue {
+        fn format_for_suffix(&self, suffix: &str) -> Result<String, HostLinkError> {
+            if self.0 && suffix == ".U" {
+                Ok("77".to_owned())
+            } else {
+                Err(HostLinkError::protocol("custom suffix rejected"))
+            }
+        }
+    }
+
+    struct EmptyValue;
+
+    impl HostLinkPayloadValue for EmptyValue {
+        fn format_for_suffix(&self, _suffix: &str) -> Result<String, HostLinkError> {
+            Ok(String::new())
+        }
+    }
+
+    #[test]
+    fn default_append_and_joined_payload_propagate_original_error_without_partial_token() {
+        let mut output = String::from("prefix");
+        CustomValue(false)
+            .append_to_payload(".U", &mut output)
+            .unwrap_err();
+        assert_eq!(output, "prefix");
+        assert_eq!(CustomValue(true).format_for_suffix(".U").unwrap(), "77");
+        assert_eq!(
+            build_joined_payload(&[CustomValue(true), CustomValue(true)], ".U").unwrap(),
+            "77 77"
+        );
+        let error =
+            build_joined_payload(&[CustomValue(true), CustomValue(false)], ".U").unwrap_err();
+        assert!(error.to_string().contains("custom suffix rejected"));
+
+        let mut output = String::from("still unchanged");
+        let error = EmptyValue.append_to_payload(".U", &mut output).unwrap_err();
+        assert!(error.to_string().contains("empty token"));
+        assert_eq!(output, "still unchanged");
+        assert!(build_joined_payload(&[EmptyValue], ".U").is_err());
     }
 }
