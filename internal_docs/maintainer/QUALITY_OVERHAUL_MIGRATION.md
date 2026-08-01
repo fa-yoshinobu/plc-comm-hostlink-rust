@@ -568,12 +568,12 @@ Machine-verifiable acceptance criteria:
 
 - [x] Implementation completed in this repository.
 - [x] Existing deterministic tests explicitly selected for every acceptance criterion.
-- [ ] The new Windows CI job passed on GitHub for the final source state.
+- [x] The new Windows CI job passed on GitHub for the final source state.
 - [x] The equivalent local Windows contract and complete non-hardware gates passed with Rust 1.85.0 and stable 1.95.0.
 - [x] Codex self-review completed after the requested local verification run.
 - [x] Live PLC checks are not required; all selected behavior uses localhost loopback.
 - [x] Maintainer CI documentation agrees with the workflow; no user migration note or changelog entry is required.
-- [ ] Final acceptance criteria verified and the item marked complete.
+- [x] Final acceptance criteria verified and the item marked complete.
 
 Verification evidence: the local Windows run passed
 `cargo +1.85.0 check --all-targets --all-features`, stable format, Clippy with
@@ -583,8 +583,10 @@ crate contained 28 files and 7 examples and passed extracted-artifact and
 independent-consumer checks. The synthetic current-worktree source archive
 contained 47 files, 10 sample files, and 2 test files and passed its extracted
 full gate. This includes every test selected by the new Windows representative
-job. The GitHub-hosted Windows job and Ubuntu MSRV/full jobs remain unchecked
-because those hosted OS runs were not executed locally. No live PLC
+job. The required GitHub-hosted Windows job and Ubuntu MSRV/full jobs passed on
+final merged source commit `c0e3b63f4140acc8a1bd944877ecc41cbec6683d`
+in [CI run 30705296574](https://github.com/fa-yoshinobu/plc-comm-hostlink-rust/actions/runs/30705296574).
+This follow-up changes only the maintainer evidence record. No live PLC
 communication was performed.
 
 Self-review disposition:
