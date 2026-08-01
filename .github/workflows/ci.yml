@@ -62,3 +62,32 @@ jobs:
       - name: Validate generated crate and isolated consumer
         shell: pwsh
         run: ./scripts/check_package_contents.ps1
+
+  windows-contract-smoke:
+    name: Windows representative contract smoke
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Check fragmented receive accounting
+        run: cargo +stable test --test high_level tcp_traffic_stats_are_independent_of_crlf_segmentation
+
+      - name: Check refused TCP connection classification
+        run: cargo +stable test --test high_level refused_tcp_connection_is_transport_failure_and_not_adopted
+
+      - name: Check bounded request timeout
+        run: cargo +stable test --test high_level tcp_timeout_is_one_deadline_for_a_trickled_response
+
+      - name: Check close retirement and reconnect
+        run: cargo +stable test --test high_level close_rejects_active_and_waiting_generation_then_reopen_accepts_only_new_work
+
+      - name: Check delayed UDP response retirement
+        run: cargo +stable test --test high_level udp_timeout_discards_delayed_response_before_next_request
