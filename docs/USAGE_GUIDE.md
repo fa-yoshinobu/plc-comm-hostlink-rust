@@ -105,6 +105,13 @@ and polls require at least one address, and poll intervals must be greater than
 zero; invalid input fails before FIFO admission or communication. `poll` reuses
 the validated plan for each cycle.
 
+The ordinary `read_named` and `poll` APIs reject `:COMMENT` entries during
+complete-plan validation and send no request. When an aggregate intentionally
+contains comments, use `read_named_with_comment_encoding` or
+`poll_with_comment_encoding` and pass one explicit `HostLinkCommentEncoding`.
+Those explicit variants require at least one `:COMMENT` entry; a non-comment-only
+list rejects the unused encoding before FIFO admission or communication.
+
 ## Bit-in-word access
 
 Bit-in-word notation (`DM120.0` through `DM120.F`) is read-only. The former
@@ -133,12 +140,38 @@ are rejected rather than converted.
 ## Comments
 
 ```rust
-let comment = client.read_comments("DM20").await?;
+use plc_comm_kv_hostlink::HostLinkCommentEncoding;
+
+let utf8_comment = client
+    .read_comments("DM20", HostLinkCommentEncoding::Utf8)
+    .await?;
+let cp932_comment = client
+    .read_comments("DM21", HostLinkCommentEncoding::Cp932)
+    .await?;
+let exact_payload = client.read_comment_bytes("DM22").await?;
 ```
 
-Comment decoding removes only trailing ASCII space bytes (`0x20`). Tabs,
-full-width spaces, other Unicode whitespace, and spaces inside the comment are
-preserved. UTF-8 is attempted first, then Shift_JIS.
+There is no automatic, default, or profile-selected comment encoding.
+`HostLinkCommentEncoding::Cp932` means CP932/Windows-31J and is the selection
+for KEYENCE documentation that describes the compatible encoding as
+`Shift_JIS`; Rust does not expose a second strict-Shift-JIS variant.
+For cross-runtime consistency, this selection preserves ASCII control bytes,
+rejects standalone `80`, `A0`, `FD`, `FE`, and `FF`, and accepts defined NEC,
+IBM, and duplicate CP932 extension pairs.
+Under `Utf8`, an initial `EF BB BF` is preserved as `U+FEFF` comment data rather
+than removed as a signature; the same byte sequence is invalid under `Cp932`.
+
+Text decoding is strict. It removes only trailing ASCII space padding bytes
+(`0x20`) and fails with `HostLinkError::Protocol` when the selected codec cannot
+decode the remaining payload. It never retries the other codec or inserts
+replacement characters, and a malformed payload retires the connection.
+An exact, correctly framed PLC `E0` through `E9` response returns
+`HostLinkError::Plc` without retiring the connection, so a later command may
+reuse it.
+Tabs, full-width spaces, other Unicode whitespace, and spaces inside the
+comment are preserved. `read_comment_bytes` excludes only the transport CR/LF
+terminator and returns the exact payload, including trailing ASCII spaces; use
+it whenever the application cannot assert the stored encoding.
 
 ## PLC clock
 

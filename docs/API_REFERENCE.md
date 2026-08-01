@@ -41,7 +41,9 @@ caller-controlled receive capacity; public results own their dynamic storage.
 | Monitor registration | `register_monitor_bits`, `register_monitor_words`, `HostLinkMonitorWord` |
 | Monitor read | `read_monitor_bits`, `read_monitor_words` |
 | Expansion-unit buffer | `read_expansion_unit_buffer`, `write_expansion_unit_buffer` |
-| Comments | `read_comments` |
+| Comment encoding | `HostLinkCommentEncoding::{Utf8, Cp932}` |
+| Comment text | `read_comments(device, encoding)` |
+| Comment bytes | `read_comment_bytes` |
 
 Numeric low-level methods require a base device plus an explicit format.
 Direct bit methods use an unsuffixed device. Suffix-bearing low-level device
@@ -65,8 +67,8 @@ generation and enforce the exact registered token count.
 | Purpose | API |
 | --- | --- |
 | Typed value | `HostLinkValue`, `read_typed`, `write_typed` |
-| Named read result | `NamedReadResult`, `read_named` |
-| Polling | `poll` |
+| Named read result | `NamedReadResult`, `read_named`, `read_named_with_comment_encoding` |
+| Polling | `poll`, `poll_with_comment_encoding` |
 | Timer/counter composite | `TimerCounterValue`, `read_timer_counter`, `read_timer`, `read_counter` |
 | Word reads | `read_words`, `read_words_single_request` |
 | Dword reads | `read_dwords`, `read_dwords_single_request` |
@@ -85,6 +87,28 @@ status `0` or `1`, and valid current and preset fields for the requested type.
 Malformed semantic responses close the connection. Float32 writes are
 word-device-only. Named reads and polls require a non-empty address set, and
 poll intervals must be greater than zero.
+
+Every comment text read requires `HostLinkCommentEncoding::Utf8` or
+`HostLinkCommentEncoding::Cp932`. `Cp932` is CP932/Windows-31J and is the
+selection for KEYENCE documentation that calls the compatible encoding
+`Shift_JIS`; there is no separate strict-Shift-JIS, automatic, default, or
+profile-selected mode. Decoding is strict and never retries another codec or
+inserts replacement characters. The shared CP932 subset preserves ASCII
+controls, rejects standalone `80`/`A0`/`FD`/`FE`/`FF`, and accepts defined NEC,
+IBM, and duplicate extension mappings. `read_comment_bytes` returns the exact
+terminator-free `RDC` payload, including trailing ASCII-space padding.
+UTF-8 decoding preserves an initial `EF BB BF` as `U+FEFF`; it is comment data,
+not a removable transport signature. The same bytes are invalid under `Cp932`.
+Syntactically valid PLC `E0` through `E9` replies return `HostLinkError::Plc`
+without retiring the connection; malformed framing or payload decoding retires
+it.
+
+The ordinary `read_named` and `poll` APIs reject `:COMMENT` entries before
+transport. Use `read_named_with_comment_encoding` or
+`poll_with_comment_encoding` when an aggregate intentionally includes comments;
+both require one explicit comment encoding and at least one `:COMMENT` entry.
+Providing an unused comment encoding for a non-comment-only list is a
+pre-transport protocol error.
 Converting `HostLinkValue` to `u16` is fallible through `TryFrom`; variants
 other than `HostLinkValue::U16` return an error instead of producing zero.
 

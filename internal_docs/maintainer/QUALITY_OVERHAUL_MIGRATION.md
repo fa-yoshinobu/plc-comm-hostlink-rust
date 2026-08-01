@@ -1,4 +1,4 @@
-# HostLink Rust quality-overhaul decision and acceptance record
+﻿# HostLink Rust quality-overhaul decision and acceptance record
 
 This record maps the approved workspace decisions to the Rust implementation.
 Breaking compatibility is intentional where it conflicts with an explicit,
@@ -127,6 +127,10 @@ did not invoke Claude.
 - Compatibility: caller-selected padding preservation is removed.
 - Acceptance: spaces, tabs, full-width space, Shift_JIS, and all-padding fixtures.
 
+The padding portion remains current. Its implicit decoder selection was
+superseded by the user-approved `HL-EVAL-TODO-006` explicit UTF-8/CP932 contract;
+the historical UTF-8-or-Shift_JIS target is not a callable compatibility mode.
+
 ## D-062 — Expansion-buffer format is required
 
 - Scope: URD/UWR direct methods and verification tool.
@@ -147,6 +151,47 @@ did not invoke Claude.
 - Target: low-level numeric calls use a base device plus explicit format; suffix input is rejected. High-level `.0`-`.F` remains bit-in-word and colon remains dtype.
 - Compatibility: suffix-only and conflicting dual-format calls are rejected.
 - Acceptance: suffix, missing/empty format, direct bit, `DM100.D`, `DM100:D`, numeric range, and response-token tests.
+
+## HL-EVAL-TODO-006 — Explicit RDC encoding and raw bytes
+
+- Scope: direct/helper `RDC` reads, named reads, polling, verification CLI,
+  public exports, tests, package consumer, and user/maintainer documentation.
+- Target: successful `RDC` payloads are bytes first. Text APIs require exactly
+  `HostLinkCommentEncoding::Utf8` or `Cp932`; `Cp932` is CP932/Windows-31J for
+  KEYENCE `Shift_JIS` compatibility. No automatic, profile-selected, fallback,
+  replacement, default, alias, or separate strict-Shift-JIS mode exists.
+- Compatibility: the former UTF-8-first/Shift_JIS-fallback call shape is
+  removed. Ordinary `read_named`/`poll` reject comments before transport;
+  explicit encoding variants require at least one comment and reject an unused
+  encoding before transport. Applications that cannot assert an encoding use
+  `read_comment_bytes`.
+
+Acceptance criteria:
+
+1. Every public text path requires one explicit enum value, and public rustdoc
+   and package-consumer compilation prove the new surface is exported.
+2. Raw reads preserve successful terminator-free bytes and padding, but still
+   classify exact Host Link PLC error replies before returning a payload.
+3. Ambiguous bytes follow only the selected codec; malformed bytes produce a
+   protocol error without fallback or replacement and retire the connection.
+   UTF-8 `EF BB BF 41` remains `U+FEFF` plus `A`, while CP932 rejects it.
+4. Ordinary aggregate APIs reject all comment plans with zero sends, while
+   their explicitly named encoding variants require at least one comment, read
+   comments in declared order, and reject an unused encoding with zero sends.
+5. CLI, API reference, usage guidance, gotchas, migration notes, changelog, and
+   executable tests describe one consistent contract.
+
+Evidence: 44 library tests and 69 integration tests passed with formatting,
+Clippy, warning-denied rustdoc, Rust 1.85 compilation, the 28-file generated
+crate/isolated consumer gate, and the 47-file current-worktree source-archive
+gate. No additional live PLC test is required for this deterministic decoding,
+raw-payload, and preflight-validation contract. Codex self-review disposition:
+accepted and corrected `5` (`HL-RDC-RS-F-001` PLC-error regression coverage,
+`HL-RDC-RS-F-002` isolated consumer enum coverage, and `HL-RDC-RS-F-003`
+connection retention after a correctly framed PLC NG response, and
+`HL-RDC-RS-F-004` strict cross-runtime CP932 boundary validation); rejected
+`0`; duplicate `0`; deferred `0`. `HL-RDC-RS-F-005` additionally rejects an
+unused aggregate comment encoding before transport.
 
 ## RS-HL-CLAUDE-20260712 — Independent-review corrections
 

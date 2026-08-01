@@ -1,5 +1,6 @@
 use crate::error::HostLinkError;
-use encoding_rs::SHIFT_JIS;
+use crate::model::HostLinkCommentEncoding;
+use encoding_rs::{SHIFT_JIS, UTF_8};
 
 pub(crate) const MAX_FRAME_BODY_BYTES: usize = 65_536;
 
@@ -65,24 +66,67 @@ pub fn decode_response(raw: &[u8]) -> Result<String, HostLinkError> {
     Ok(text.to_owned())
 }
 
-pub fn decode_comment_response(raw: &[u8]) -> Result<String, HostLinkError> {
-    let payload = trim_response(raw)?;
+pub(crate) fn comment_response_payload(raw: &[u8]) -> Result<&[u8], HostLinkError> {
+    trim_response(raw)
+}
+
+pub(crate) fn ensure_comment_success(payload: &[u8]) -> Result<(), HostLinkError> {
+    if payload.len() == 2 && payload[0] == b'E' && payload[1].is_ascii_digit() {
+        let response =
+            String::from_utf8(payload.to_vec()).expect("an E plus one ASCII digit is valid UTF-8");
+        return Err(HostLinkError::plc(response.clone(), response));
+    }
+    Ok(())
+}
+
+pub(crate) fn decode_comment_payload(
+    payload: &[u8],
+    encoding: HostLinkCommentEncoding,
+) -> Result<String, HostLinkError> {
     let mut end = payload.len();
     while end > 0 && payload[end - 1] == b' ' {
         end -= 1;
     }
     let payload = &payload[..end];
-    if let Ok(text) = std::str::from_utf8(payload) {
-        return Ok(text.to_owned());
+    let (codec, name) = match encoding {
+        HostLinkCommentEncoding::Utf8 => (UTF_8, "UTF-8"),
+        HostLinkCommentEncoding::Cp932 => (SHIFT_JIS, "CP932/Windows-31J"),
+    };
+    if matches!(encoding, HostLinkCommentEncoding::Cp932)
+        && !cp932_bytes_are_structurally_valid(payload)
+    {
+        return Err(invalid_comment_encoding(name));
     }
+    codec
+        .decode_without_bom_handling_and_without_replacement(payload)
+        .map(|text| text.into_owned())
+        .ok_or_else(|| invalid_comment_encoding(name))
+}
 
-    let (text, _, had_errors) = SHIFT_JIS.decode(payload);
-    if had_errors {
-        return Err(HostLinkError::protocol(
-            "Response could not be decoded as UTF-8 or Shift_JIS",
-        ));
+fn cp932_bytes_are_structurally_valid(payload: &[u8]) -> bool {
+    let mut index = 0;
+    while index < payload.len() {
+        match payload[index] {
+            0x00..=0x7F | 0xA1..=0xDF => index += 1,
+            0x81..=0x9F | 0xE0..=0xFC => {
+                let Some(&trail) = payload.get(index + 1) else {
+                    return false;
+                };
+                if !matches!(trail, 0x40..=0x7E | 0x80..=0xFC) {
+                    return false;
+                }
+                index += 2;
+            }
+            _ => return false,
+        }
     }
-    Ok(text.into_owned())
+    true
+}
+
+fn invalid_comment_encoding(name: &str) -> HostLinkError {
+    HostLinkError::protocol(format!(
+        "RDC comment payload is not valid {name}; no fallback or replacement was applied"
+    ))
 }
 
 pub fn ensure_success(response_text: String) -> Result<String, HostLinkError> {
@@ -107,7 +151,8 @@ pub fn split_data_tokens(response_text: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_FRAME_BODY_BYTES, build_frame};
+    use super::{MAX_FRAME_BODY_BYTES, build_frame, decode_comment_payload};
+    use crate::model::HostLinkCommentEncoding;
 
     #[test]
     fn frame_builder_preserves_body_and_appends_one_cr() {
@@ -129,5 +174,87 @@ mod tests {
 
         let oversized = "A".repeat(MAX_FRAME_BODY_BYTES + 1);
         assert!(build_frame(&oversized).is_err());
+    }
+
+    #[test]
+    fn comment_decoder_uses_only_the_selected_codec() {
+        let ambiguous = b"\xC2\xA2";
+        assert_eq!(
+            decode_comment_payload(ambiguous, HostLinkCommentEncoding::Utf8).unwrap(),
+            "¢"
+        );
+        assert_eq!(
+            decode_comment_payload(ambiguous, HostLinkCommentEncoding::Cp932).unwrap(),
+            "ﾂ｢"
+        );
+
+        let cp932_only = b"\x82\xA0";
+        assert!(decode_comment_payload(cp932_only, HostLinkCommentEncoding::Utf8).is_err());
+        assert_eq!(
+            decode_comment_payload(cp932_only, HostLinkCommentEncoding::Cp932).unwrap(),
+            "あ"
+        );
+
+        let utf8_bom = b"\xEF\xBB\xBFA";
+        assert_eq!(
+            decode_comment_payload(utf8_bom, HostLinkCommentEncoding::Utf8).unwrap(),
+            "\u{FEFF}A"
+        );
+        assert!(decode_comment_payload(utf8_bom, HostLinkCommentEncoding::Cp932).is_err());
+    }
+
+    #[test]
+    fn comment_decoder_is_strict_and_trims_only_ascii_space_padding() {
+        assert!(decode_comment_payload(b"\x81\x30", HostLinkCommentEncoding::Cp932).is_err());
+        assert!(decode_comment_payload(b"\xFF", HostLinkCommentEncoding::Utf8).is_err());
+        assert_eq!(
+            decode_comment_payload(b"A B  ", HostLinkCommentEncoding::Utf8).unwrap(),
+            "A B"
+        );
+        assert_eq!(
+            decode_comment_payload("TEXT \t".as_bytes(), HostLinkCommentEncoding::Utf8).unwrap(),
+            "TEXT \t"
+        );
+    }
+
+    #[test]
+    fn cp932_decoder_matches_cross_runtime_boundary_contract() {
+        assert_eq!(
+            decode_comment_payload(b"\x1A\x1C\x7F", HostLinkCommentEncoding::Cp932).unwrap(),
+            "\u{001A}\u{001C}\u{007F}"
+        );
+
+        for invalid in [b"\x80".as_slice(), b"\xA0", b"\xFD", b"\xFE", b"\xFF"] {
+            assert!(decode_comment_payload(invalid, HostLinkCommentEncoding::Cp932).is_err());
+        }
+        for invalid in [
+            b"\x81".as_slice(),
+            b"\x81\x30",
+            b"\x81\x7F",
+            b"\x81\xAD",
+            b"\x87\x9D",
+            b"\xEE\xFD",
+            b"\xEF\xFC",
+            b"\xFC\x4C",
+        ] {
+            assert!(decode_comment_payload(invalid, HostLinkCommentEncoding::Cp932).is_err());
+        }
+
+        assert_eq!(
+            decode_comment_payload(b"\x81\x80", HostLinkCommentEncoding::Cp932).unwrap(),
+            "\u{00F7}"
+        );
+        assert_eq!(
+            decode_comment_payload(b"\x87\x90", HostLinkCommentEncoding::Cp932).unwrap(),
+            "\u{2252}"
+        );
+        assert_eq!(
+            decode_comment_payload(b"\xED\x40", HostLinkCommentEncoding::Cp932).unwrap(),
+            "\u{7E8A}"
+        );
+        assert_eq!(
+            decode_comment_payload(b"\xFA\x4A", HostLinkCommentEncoding::Cp932).unwrap(),
+            "\u{2160}"
+        );
     }
 }

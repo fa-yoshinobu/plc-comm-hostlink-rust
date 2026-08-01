@@ -1,9 +1,10 @@
 use encoding_rs::SHIFT_JIS;
 use futures_util::{StreamExt, pin_mut};
 use plc_comm_kv_hostlink::{
-    HostLinkClient, HostLinkConnectionOptions, HostLinkError, HostLinkMonitorWord,
-    HostLinkOutcomeUnknownReason, HostLinkTransportMode, HostLinkValue, open_and_connect,
-    read_comments, read_dwords, read_typed, read_words, write_dwords_single_request,
+    HostLinkClient, HostLinkCommentEncoding, HostLinkConnectionOptions, HostLinkError,
+    HostLinkMonitorWord, HostLinkOutcomeUnknownReason, HostLinkTransportMode, HostLinkValue,
+    open_and_connect, read_comment_bytes, read_comments, read_dwords, read_typed, read_words,
+    write_dwords_single_request,
 };
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -683,7 +684,7 @@ async fn suffixes_are_rejected_by_non_format_commands_before_transport() {
     );
     assert!(
         client
-            .read_comments("DM0.U")
+            .read_comments("DM0.U", HostLinkCommentEncoding::Utf8)
             .await
             .unwrap_err()
             .to_string()
@@ -1700,6 +1701,7 @@ async fn read_comments_helper_and_named_read_support_comment_values() {
         "RDC DM150" => "MAIN COMMENT                    ".to_owned(),
         "RD DM100.U" => "321".to_owned(),
         "RDC DM101" => "ALARM COMMENT                   ".to_owned(),
+        "RDC DM102" => "POLL COMMENT                    ".to_owned(),
         _ => "E1".to_owned(),
     })
     .await;
@@ -1714,11 +1716,27 @@ async fn read_comments_helper_and_named_read_support_comment_values() {
     options.port = port;
     let client = HostLinkClient::connect(options).await.unwrap();
 
-    let comment = read_comments(&client, "DM150").await.unwrap();
+    let comment = read_comments(&client, "DM150", HostLinkCommentEncoding::Utf8)
+        .await
+        .unwrap();
     assert_eq!(comment, "MAIN COMMENT");
 
-    let result = client
+    let error = client
         .read_named(&["DM100:U", "DM101:COMMENT"])
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("explicit HostLinkCommentEncoding")
+    );
+    assert_eq!(client.traffic_stats().await.request_count, 1);
+
+    let result = client
+        .read_named_with_comment_encoding(
+            &["DM100:U", "DM101:COMMENT"],
+            HostLinkCommentEncoding::Utf8,
+        )
         .await
         .unwrap();
     assert_eq!(result["DM100:U"], HostLinkValue::U16(321));
@@ -1726,14 +1744,35 @@ async fn read_comments_helper_and_named_read_support_comment_values() {
         result["DM101:COMMENT"],
         HostLinkValue::Text("ALARM COMMENT".to_owned())
     );
+
+    let implicit_poll = client.poll(&["DM102:COMMENT"], Duration::from_millis(1));
+    pin_mut!(implicit_poll);
+    let error = implicit_poll.next().await.unwrap().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("explicit HostLinkCommentEncoding")
+    );
+
+    let explicit_poll = client.poll_with_comment_encoding(
+        &["DM102:COMMENT"],
+        Duration::from_millis(1),
+        HostLinkCommentEncoding::Utf8,
+    );
+    pin_mut!(explicit_poll);
+    let polled = explicit_poll.next().await.unwrap().unwrap();
+    assert_eq!(
+        polled["DM102:COMMENT"],
+        HostLinkValue::Text("POLL COMMENT".to_owned())
+    );
     assert_eq!(
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
-        vec!["RDC DM150", "RD DM100.U", "RDC DM101"]
+        vec!["RDC DM150", "RD DM100.U", "RDC DM101", "RDC DM102"]
     );
 }
 
 #[tokio::test]
-async fn read_comments_decodes_shift_jis_payloads() {
+async fn read_comments_decodes_cp932_payloads_only_when_selected() {
     let (port, received) = start_scripted_server_bytes(|command| match command.as_str() {
         "RDC DM20" => {
             let expected = "\u{904b}\u{8ee2}\u{8a31}\u{53ef}";
@@ -1756,7 +1795,9 @@ async fn read_comments_decodes_shift_jis_payloads() {
     options.port = port;
     let client = HostLinkClient::connect(options).await.unwrap();
 
-    let comment = read_comments(&client, "DM20").await.unwrap();
+    let comment = read_comments(&client, "DM20", HostLinkCommentEncoding::Cp932)
+        .await
+        .unwrap();
 
     assert_eq!(comment, "\u{904b}\u{8ee2}\u{8a31}\u{53ef}");
     assert_eq!(
@@ -1785,16 +1826,160 @@ async fn read_comments_remove_only_trailing_ascii_space_padding() {
     options.port = port;
     let client = HostLinkClient::connect(options).await.unwrap();
 
-    assert_eq!(client.read_comments("DM20").await.unwrap(), "A B");
-    assert_eq!(client.read_comments("DM21").await.unwrap(), "TEXT \t");
     assert_eq!(
-        client.read_comments("DM22").await.unwrap(),
+        client
+            .read_comments("DM20", HostLinkCommentEncoding::Utf8)
+            .await
+            .unwrap(),
+        "A B"
+    );
+    assert_eq!(
+        client
+            .read_comments("DM21", HostLinkCommentEncoding::Utf8)
+            .await
+            .unwrap(),
+        "TEXT \t"
+    );
+    assert_eq!(
+        client
+            .read_comments("DM22", HostLinkCommentEncoding::Utf8)
+            .await
+            .unwrap(),
         "FULLWIDTH\u{3000}"
     );
-    assert_eq!(client.read_comments("DM23").await.unwrap(), "");
+    assert_eq!(
+        client
+            .read_comments("DM23", HostLinkCommentEncoding::Utf8)
+            .await
+            .unwrap(),
+        ""
+    );
     assert_eq!(
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
         vec!["RDC DM20", "RDC DM21", "RDC DM22", "RDC DM23"]
+    );
+}
+
+#[tokio::test]
+async fn read_comment_bytes_preserves_padding_and_text_decode_is_strict() {
+    let (raw_port, raw_received) = start_scripted_server_bytes(|command| match command.as_str() {
+        "RDC DM20" => b"\x82\xA0   ".to_vec(),
+        _ => b"E1".to_vec(),
+    })
+    .await;
+    let mut raw_options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    raw_options.port = raw_port;
+    let raw_client = HostLinkClient::connect(raw_options).await.unwrap();
+    assert_eq!(
+        read_comment_bytes(&raw_client, "DM20").await.unwrap(),
+        b"\x82\xA0   "
+    );
+    assert_eq!(
+        raw_received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RDC DM20"]
+    );
+
+    let (invalid_port, invalid_received) =
+        start_scripted_server_bytes(|_| b"\x81\x30".to_vec()).await;
+    let mut invalid_options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    invalid_options.port = invalid_port;
+    let invalid_client = HostLinkClient::connect(invalid_options).await.unwrap();
+    let error = invalid_client
+        .read_comments("DM21", HostLinkCommentEncoding::Cp932)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, HostLinkError::Protocol(_)));
+    assert!(error.to_string().contains("no fallback or replacement"));
+    assert!(!invalid_client.is_open().await);
+    assert_eq!(
+        invalid_received
+            .lock()
+            .unwrap()
+            .drain(..)
+            .collect::<Vec<_>>(),
+        vec!["RDC DM21"]
+    );
+}
+
+#[tokio::test]
+async fn plc_comment_errors_keep_connection_for_raw_and_text_reads() {
+    let (raw_port, raw_received) = start_scripted_server_bytes(|command| match command.as_str() {
+        "RDC DM22" => b"E1".to_vec(),
+        "RDC DM23" => b"RAW OK  ".to_vec(),
+        _ => b"E2".to_vec(),
+    })
+    .await;
+    let mut raw_options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    raw_options.port = raw_port;
+    let raw_client = HostLinkClient::connect(raw_options).await.unwrap();
+    let error = raw_client.read_comment_bytes("DM22").await.unwrap_err();
+    assert!(matches!(
+        error,
+        HostLinkError::Plc { ref code, .. } if code == "E1"
+    ));
+    assert!(raw_client.is_open().await);
+    assert_eq!(
+        raw_client.read_comment_bytes("DM23").await.unwrap(),
+        b"RAW OK  "
+    );
+    assert_eq!(
+        raw_received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RDC DM22", "RDC DM23"]
+    );
+
+    let (text_port, text_received) =
+        start_scripted_server_bytes(|command| match command.as_str() {
+            "RDC DM24" => b"E1".to_vec(),
+            "RDC DM25" => b"TEXT OK  ".to_vec(),
+            _ => b"E2".to_vec(),
+        })
+        .await;
+    let mut text_options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    text_options.port = text_port;
+    let text_client = HostLinkClient::connect(text_options).await.unwrap();
+    let error = text_client
+        .read_comments("DM24", HostLinkCommentEncoding::Utf8)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        HostLinkError::Plc { ref code, .. } if code == "E1"
+    ));
+    assert!(text_client.is_open().await);
+    assert_eq!(
+        text_client
+            .read_comments("DM25", HostLinkCommentEncoding::Utf8)
+            .await
+            .unwrap(),
+        "TEXT OK"
+    );
+    assert_eq!(
+        text_received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec!["RDC DM24", "RDC DM25"]
     );
 }
 
@@ -1863,7 +2048,10 @@ async fn ordinary_client_supports_read_comments() {
     .unwrap();
     options.port = port;
     let client = open_and_connect(options).await.unwrap();
-    let comment = client.read_comments("DM10").await.unwrap();
+    let comment = client
+        .read_comments("DM10", HostLinkCommentEncoding::Utf8)
+        .await
+        .unwrap();
 
     assert_eq!(comment, "ALARM TEXT");
     assert_eq!(
@@ -1890,8 +2078,14 @@ async fn read_comments_accepts_xym_alias_device_types() {
     .unwrap();
     options.port = port;
     let client = HostLinkClient::connect(options).await.unwrap();
-    let data_memory_comment = client.read_comments("D10").await.unwrap();
-    let auxiliary_relay_comment = client.read_comments("M20").await.unwrap();
+    let data_memory_comment = client
+        .read_comments("D10", HostLinkCommentEncoding::Utf8)
+        .await
+        .unwrap();
+    let auxiliary_relay_comment = client
+        .read_comments("M20", HostLinkCommentEncoding::Utf8)
+        .await
+        .unwrap();
 
     assert_eq!(data_memory_comment, "DM COMMENT");
     assert_eq!(auxiliary_relay_comment, "MR COMMENT");
@@ -2052,6 +2246,30 @@ async fn empty_named_reads_and_invalid_polling_are_rejected_without_transport() 
     let stream = client.poll(&["DM0:U"], Duration::ZERO);
     pin_mut!(stream);
     assert!(stream.next().await.unwrap().is_err());
+
+    let (port, received) = start_scripted_server(|_| "1".to_owned()).await;
+    let mut connected_options = options;
+    connected_options.port = port;
+    let connected = HostLinkClient::connect(connected_options).await.unwrap();
+
+    let error = connected
+        .read_named_with_comment_encoding(&["DM0:U"], HostLinkCommentEncoding::Utf8)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, HostLinkError::Protocol(_)));
+    assert!(error.to_string().contains("contains no COMMENT entry"));
+
+    let stream = connected.poll_with_comment_encoding(
+        &["DM0:U"],
+        Duration::from_millis(1),
+        HostLinkCommentEncoding::Utf8,
+    );
+    pin_mut!(stream);
+    let error = stream.next().await.unwrap().unwrap_err();
+    assert!(matches!(error, HostLinkError::Protocol(_)));
+    assert!(error.to_string().contains("contains no COMMENT entry"));
+    assert_eq!(connected.traffic_stats().await.request_count, 0);
+    assert!(received.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

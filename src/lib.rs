@@ -25,14 +25,15 @@ pub use device_ranges::{
 };
 pub use error::{HostLinkError, HostLinkOutcomeUnknownReason};
 pub use helpers::{
-    HostLinkValue, NamedReadResult, TimerCounterValue, poll, read_comments, read_counter,
-    read_dwords, read_dwords_single_request, read_named, read_timer, read_timer_counter,
-    read_typed, read_words, read_words_single_request, write_dwords_single_request, write_typed,
+    HostLinkValue, NamedReadResult, TimerCounterValue, poll, poll_with_comment_encoding,
+    read_comment_bytes, read_comments, read_counter, read_dwords, read_dwords_single_request,
+    read_named, read_named_with_comment_encoding, read_timer, read_timer_counter, read_typed,
+    read_words, read_words_single_request, write_dwords_single_request, write_typed,
     write_words_single_request,
 };
 pub use model::{
-    HostLinkClock, HostLinkConnectionOptions, HostLinkMonitorWord, HostLinkTrafficStats,
-    HostLinkTransportMode, KvModelInfo, KvPlcMode,
+    HostLinkClock, HostLinkCommentEncoding, HostLinkConnectionOptions, HostLinkMonitorWord,
+    HostLinkTrafficStats, HostLinkTransportMode, KvModelInfo, KvPlcMode,
 };
 pub use plc_profiles::{
     KvHostLinkPlcProfile, KvHostLinkPlcProfileDescriptor, available_plc_profiles, display_name,

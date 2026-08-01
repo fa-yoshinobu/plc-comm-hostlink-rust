@@ -11,4 +11,4 @@ error-code symptoms.
 
 | Area | Symptom | Guidance |
 | --- | --- | --- |
-| None | No library-specific caveats are currently listed. | Use the shared KV Host Link setup and error-code pages for common issues. |
+| RDC comments | A comment read returns a protocol decode error. | Select `Utf8` or `Cp932` explicitly from application knowledge, or use `read_comment_bytes`; the library never guesses or falls back. |

@@ -1,9 +1,11 @@
 use futures_util::{StreamExt, pin_mut};
 use plc_comm_kv_hostlink::{
-    HostLinkClient, HostLinkConnectionOptions, HostLinkMonitorWord, HostLinkTransportMode,
-    HostLinkValue, KvDeviceRangeCatalog, KvDeviceRangeEntry, KvDeviceRangeSegment, KvPlcMode,
-    TimerCounterValue, device_range_catalog_for_plc_profile, poll, read_comments, read_counter,
-    read_dwords, read_named, read_timer, read_timer_counter, read_words,
+    HostLinkClient, HostLinkCommentEncoding, HostLinkConnectionOptions, HostLinkError,
+    HostLinkMonitorWord, HostLinkTransportMode, HostLinkValue, KvDeviceRangeCatalog,
+    KvDeviceRangeEntry, KvDeviceRangeSegment, KvPlcMode, TimerCounterValue,
+    device_range_catalog_for_plc_profile, poll, poll_with_comment_encoding, read_comment_bytes,
+    read_comments, read_counter, read_dwords, read_named, read_named_with_comment_encoding,
+    read_timer, read_timer_counter, read_words,
 };
 use serde_json::{Value, json};
 
@@ -38,6 +40,7 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
     let mut interval_ms = 10u64;
     let mut transport = String::new();
     let mut plc_profile = String::new();
+    let mut comment_encoding = String::new();
     let mut extra = Vec::new();
     let mut index = 5usize;
     while index < args.len() {
@@ -60,6 +63,10 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             }
             "--plc-profile" if index + 1 < args.len() => {
                 plc_profile = args[index + 1].clone();
+                index += 2;
+            }
+            "--comment-encoding" if index + 1 < args.len() => {
+                comment_encoding = args[index + 1].clone();
                 index += 2;
             }
             _ => {
@@ -306,8 +313,25 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             json!({"status": "success", "value": normalize_timer_counter(&value)})
         }
         "read-comments" => {
-            let value = read_comments(&client, &address).await?;
-            json!({"status": "success", "value": value})
+            if comment_encoding.is_empty() {
+                json!({"status": "error", "message": "read-comments requires --comment-encoding utf-8 or cp932"})
+            } else {
+                let value = read_comments(
+                    &client,
+                    &address,
+                    parse_comment_encoding(&comment_encoding)?,
+                )
+                .await?;
+                json!({"status": "success", "value": value})
+            }
+        }
+        "read-comment-bytes" => {
+            let value = read_comment_bytes(&client, &address).await?;
+            let hex = value
+                .iter()
+                .map(|byte| format!("{byte:02X}"))
+                .collect::<String>();
+            json!({"status": "success", "bytes": value, "hex": hex})
         }
         "read-named" => {
             let addresses = ([address.clone()]
@@ -317,8 +341,16 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             .collect::<Vec<_>>();
             if addresses.is_empty() {
                 json!({"status": "error", "message": "read-named requires at least one address"})
-            } else {
+            } else if comment_encoding.is_empty() {
                 let values = read_named(&client, &addresses).await?;
+                json!({"status": "success", "values": normalize_named(&values)})
+            } else {
+                let values = read_named_with_comment_encoding(
+                    &client,
+                    &addresses,
+                    parse_comment_encoding(&comment_encoding)?,
+                )
+                .await?;
                 json!({"status": "success", "values": normalize_named(&values)})
             }
         }
@@ -330,11 +362,27 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             .collect::<Vec<_>>();
             if addresses.is_empty() {
                 json!({"status": "error", "message": "poll requires at least one address"})
-            } else {
+            } else if comment_encoding.is_empty() {
                 let stream = poll(
                     &client,
                     &addresses,
                     std::time::Duration::from_millis(interval_ms),
+                );
+                pin_mut!(stream);
+                let mut results = Vec::new();
+                while let Some(result) = stream.next().await {
+                    results.push(normalize_named(&result?));
+                    if results.len() >= count {
+                        break;
+                    }
+                }
+                json!({"status": "success", "results": results})
+            } else {
+                let stream = poll_with_comment_encoding(
+                    &client,
+                    &addresses,
+                    std::time::Duration::from_millis(interval_ms),
+                    parse_comment_encoding(&comment_encoding)?,
                 );
                 pin_mut!(stream);
                 let mut results = Vec::new();
@@ -402,6 +450,16 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
 
     let _ = client.close().await;
     Ok(result)
+}
+
+fn parse_comment_encoding(value: &str) -> Result<HostLinkCommentEncoding, HostLinkError> {
+    match value {
+        "utf-8" => Ok(HostLinkCommentEncoding::Utf8),
+        "cp932" => Ok(HostLinkCommentEncoding::Cp932),
+        _ => Err(HostLinkError::protocol(
+            "comment encoding must be exactly utf-8 or cp932",
+        )),
+    }
 }
 
 fn normalize_catalog(catalog: &KvDeviceRangeCatalog) -> Value {

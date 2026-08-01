@@ -5,23 +5,26 @@ Current active TODOs only.
 ## Current Status
 
 The approved implementation items and the six cross-library overhaul items are
-complete in the working tree. The evidence-dependent comment-encoding decision
-remains open, and no comment-decoder implementation change is authorized until
-`HL-EVAL-TODO-006` is approved.
+complete in the working tree. The Rust portion of `HL-EVAL-TODO-006` is also
+implemented and verified with explicit UTF-8 or CP932 selection and an exact
+raw-byte path.
 
 ### Verification evidence — 2026-08-01
 
-- Current-worktree formatting, Clippy, and test gates passed: 41 library tests
-  and 67 integration tests, with all executable examples compiled.
-- A synthetic current-worktree Git tree produced a self-contained source
-  archive; clean extracted format/check/Clippy/rustdoc/test gates passed.
+- Current-worktree formatting, Clippy, warning-denied rustdoc, and test gates
+  passed: 44 library tests and 69 integration tests, with all executable
+  examples compiled. Rust 1.85 all-target/all-feature compilation also passed.
 - The crates.io package-content guard and `cargo package --allow-dirty` passed;
-  the package kept tests and repository-only tooling out of the registry crate.
+  the 28-file package kept tests and repository-only tooling out of the registry
+  crate, retained all 7 declared examples, generated warning-free rustdoc, and
+  compiled through an isolated consumer that imports both encoding variants.
 - Codex self-review removed the queued wrapper and bit-in-word write helper,
   checked the FIFO/generation/error/deadline/read-plan contracts, fixed the
   package-only Tokio feature finding, and reran every affected gate.
-- These deterministic validation and packaging corrections do not require
-  live PLC communication. `HL-EVAL-TODO-006` is intentionally still open.
+- The current-worktree source archive contained 47 files, 10 sample files, and
+  2 test files; its isolated format/check/Clippy/rustdoc/test gate passed.
+- The deterministic `HL-EVAL-TODO-006` decoder, raw-byte, validation-order, and
+  packaging checks do not require additional live PLC communication.
 
 ## HL-EVAL-001 — Reject Float32 writes to direct bit devices before transport
 
@@ -92,51 +95,94 @@ Incorrect numeric bounds and point counts change to their logical values. Displa
 
 ### User disposition
 
-Deferred by the user on 2026-08-01 for evidence investigation followed by implementation in the next Host Link implementation cycle. The current UTF-8-first/Shift_JIS-fallback behavior is not approved as the final contract. Do not change the decoder in the current implementation batch; investigate the exact profile-specific byte contract first, present the resulting target contract one item at a time, and implement only after explicit approval.
+The target contract was approved by the user on 2026-08-01. An `RDC` comment encoding must not be fixed by the library or PLC profile and must not be guessed by UTF-8-first/Shift_JIS-fallback decoding. Text decoding requires an explicit caller-selected encoding, and exact raw comment payload bytes remain available. The approved cross-language public selections are UTF-8 and CP932/Windows-31J; KEYENCE documentation that calls the compatible encoding `Shift_JIS` maps to the CP932 selection.
 
 ### Implementation scope
 
 - Rust `RDC` device-comment decoding and its public helper/client APIs
-- Cross-language comparison with the Python, Node-RED, and .NET Host Link implementations
+- Cross-language API consistency with the Python, Node-RED, and .NET Host Link implementations
 - Shared Host Link user documentation where the resulting behavior is common
 
 ### Target state
 
-The encoding of `RDC` device-comment response bytes is defined from direct KEYENCE Host Link evidence for every affected PLC profile. The Rust implementation does not infer a target contract merely from successful decoding, a general KV string-encoding statement, or existing UTF-8-first/Shift_JIS-fallback behavior.
+An `RDC` response is first treated as an exact byte payload. A caller that requests text explicitly selects the supported encoding used for that decode. The Rust implementation performs no heuristic UTF-8-first fallback, PLC-profile selection, write-source inference, or silent replacement of malformed bytes. A public raw-byte path exposes the undecoded comment payload.
 
-Until the evidence is complete and the resulting target contract is explicitly approved, the comment-encoding behavior remains undecided and no implementation change is authorized.
+The Rust public enum is `HostLinkCommentEncoding` with exactly `Utf8` and `Cp932`. `Cp932` uses the `encoding_rs` WHATWG `Shift_JIS` decoder, whose canonical name is `windows-31j`. It is the CP932/Windows-31J selection used for KEYENCE documentation that says `Shift_JIS`; there is no separate strict-Shift_JIS selection, alias, automatic value, or default.
+
+The existing `read_named` and `poll` APIs remain available for non-comment values and reject every `:COMMENT` plan before transport. Explicitly named `read_named_with_comment_encoding` and `poll_with_comment_encoding` APIs accept comments only with a required `HostLinkCommentEncoding` value and reject an unused encoding when the list contains no `:COMMENT` entry.
 
 ### Compatibility impact
 
-Undecided. The investigation must identify whether the approved result preserves the current UTF-8-first/Shift_JIS-fallback behavior, fixes one encoding, selects encoding by PLC profile, or introduces an explicit API setting. Any public API, default, decoding, error, or migration impact must be recorded before implementation.
+This is an intentional breaking change. Existing string APIs that silently try UTF-8 and then Shift_JIS must require an explicit encoding selection, while callers that cannot assert an encoding use the raw-byte API. Migration notes must identify the required selection and the removal of heuristic decoding.
 
 ### Acceptance criteria
 
-1. Official KEYENCE communication documentation is checked for the `RDC` response encoding for KV-NANO, KV-3000/KV-5000, KV-7000/KV-8000, and KV-X500 families; evidence is recorded per profile rather than inferred across families.
-2. The exact codec contract is identified, including whether “Shift_JIS” means strict Shift_JIS, Windows-31J/CP932-compatible decoding, or another defined mapping.
-3. Ambiguous byte sequences that are valid under both UTF-8 and Shift_JIS are included in deterministic decoder vectors, and the expected result follows the approved evidence rather than decoder ordering.
-4. If official documentation does not settle a profile, that profile remains `unverified` until an exact live-PLC evidence plan is written with the PLC/profile, endpoint, address, read intent, registered comment value, purpose, expected raw-byte evidence, and restoration requirement, then separately approved by the user with `OK` before communication.
-5. A maintainer decision record defines the encoding selection mechanism, malformed-byte behavior, connection invalidation behavior, public API impact, compatibility impact, and cross-language mapping before source implementation begins.
-6. User documentation, tests, generated API reference, and migration notes agree with the approved contract in every affected implementation.
+1. Every public `RDC` text-decoding path requires an explicit supported encoding and has no automatic or profile-selected codec.
+2. A public raw-byte path returns the undecoded `RDC` comment payload.
+3. The exact codec mapping is UTF-8 plus one CP932/Windows-31J selection documented as KEYENCE `Shift_JIS` compatibility; a separate strict-Shift_JIS selection is not exposed.
+4. Ambiguous byte sequences valid under multiple codecs decode only according to the caller's selection; malformed sequences fail without fallback or replacement.
+5. Decoder failure and connection-state behavior are explicit and consistent with the library's protocol-error contract.
+6. Rust user documentation, tests, generated API reference, changelog, and migration notes agree with the approved contract; other implementations retain independent acceptance evidence.
 
 ### Evidence and completion checklist
 
-- [ ] Official `RDC` encoding evidence recorded for every affected PLC family/profile.
-- [ ] Shift_JIS versus Windows-31J/CP932 mapping resolved for all four language runtimes.
-- [ ] Ambiguous and malformed byte vectors defined with evidence-backed expected results.
-- [ ] Need for live PLC verification decided; any required exact live batch is separately documented and approved.
-- [ ] Target contract and compatibility impact explicitly approved by the user.
-- [ ] Implementation completed in every affected repository.
-- [ ] Tests added or updated for every acceptance criterion.
-- [ ] Relevant static checks, unit tests, integration tests, examples, and package/build checks passed.
-- [ ] Codex self-review completed against the approved contract and cross-language consistency requirements.
-- [ ] Required live-PLC checks passed, or each unavailable check has an explicit release disposition.
-- [ ] Documentation, migration notes, changelog, and generated API reference agree with the implementation.
-- [ ] Final acceptance criteria verified and the item marked complete.
+- [x] Evidence sufficient to reject a universal or profile-fixed `RDC` codec is recorded.
+- [x] Shift_JIS versus Windows-31J/CP932 public mapping resolved for all four language runtimes.
+- [x] Ambiguous and malformed byte vectors defined with evidence-backed expected results.
+- [x] Further profile-by-profile live verification is not required to select the explicit-codec/raw-byte contract.
+- [x] Target contract and compatibility impact explicitly approved by the user.
+- [x] Implementation completed in this repository; other language repositories are tracked independently.
+- [x] Tests added or updated for every acceptance criterion.
+- [x] Relevant static checks, unit tests, integration tests, examples, and package/build checks passed.
+- [x] Codex self-review completed against the approved contract and cross-language consistency requirements.
+- [x] Additional live-PLC verification is recorded as not required for this deterministic decoder and raw-payload contract.
+- [x] Documentation, migration notes, changelog, and generated API reference agree with the implementation.
+- [x] Final Rust acceptance criteria verified and the item marked complete in this repository.
+- [x] Independent Python, .NET, Node-RED, and Rust evidence confirms final family completion.
+
+### Rust implementation and review evidence
+
+- `HostLinkCommentEncoding` exposes exactly `Utf8` and `Cp932`; no default,
+  automatic, profile-derived, compatibility alias, or separate strict
+  Shift-JIS selection exists.
+- Direct and helper text reads require the enum. `read_comment_bytes` preserves
+  successful terminator-free payload bytes including trailing ASCII spaces,
+  while exact `E0` through `E9` responses remain PLC errors and leave the
+  correctly framed connection reusable.
+- Ordinary `read_named` and `poll` reject `:COMMENT` during complete-plan
+  validation with no request; explicit encoding variants retain intentional
+  comment aggregates and reject non-comment-only lists with no request.
+- Ambiguous UTF-8/CP932, codec-specific, malformed, padding, raw-payload,
+  UTF-8-BOM selection, aggregate, PLC-error, connection-retirement, CP932
+  control-byte, forbidden singleton, unassigned-pair, and valid-extension cases
+  are executable tests.
+- Codex self-review inspected the actual diff, public exports, validation order,
+  error classification, connection retirement, deadline coverage, aggregate
+  state, CLI, tests, rustdoc, package consumer, changelog, and user/maintainer
+  documentation. Accepted and corrected findings: `5`; rejected: `0`;
+  duplicate: `0`; deferred: `0`.
+  - `HL-RDC-RS-F-001`: added explicit regression evidence that the raw comment
+    API classifies a two-byte PLC error before returning payload bytes.
+  - `HL-RDC-RS-F-002`: added the new public encoding enum and both variants to
+    the isolated generated-crate consumer contract.
+  - `HL-RDC-RS-F-003`: corrected the comment-response error branch so a
+    syntactically valid PLC `E0` through `E9` reply does not retire the
+    connection; raw and text tests prove that the next command succeeds on the
+    same TCP connection.
+  - `HL-RDC-RS-F-004`: `encoding_rs` WHATWG `SHIFT_JIS` accepts standalone
+    `0x80` as `U+0080`, unlike the shared strict CP932 subset. Added structural
+    validation that rejects standalone `80`/`A0`/`FD`/`FE`/`FF` without
+    rejecting a valid two-byte trail `0x80`, plus exact control, malformed,
+    unassigned, and extension vectors.
+  - `HL-RDC-RS-F-005`: explicit aggregate APIs previously accepted an encoding
+    that no entry used. They now require at least one `:COMMENT` entry and
+    reject non-comment-only lists as `Protocol` before FIFO admission or send.
 
 ### Current evidence boundary
 
-The current implementations try UTF-8 first and fall back to Shift_JIS. KEYENCE material stating that KV-series strings use Shift_JIS is relevant but does not by itself establish the byte contract of every Host Link `RDC` response. It is supporting evidence only, not approval of a Shift_JIS-only implementation.
+The pre-overhaul implementations tried UTF-8 first and fell back to Shift_JIS. The located KEYENCE material says that KV-8000 strings use Shift_JIS in a specific EtherNet/IP connection-guide context, but it does not define the Host Link `RDC` response encoding: <https://www.keyence.co.jp/support/user/controls/plc/connection_guide/kv_iv4/>.
+
+On 2026-08-01, after the user's explicit `OK`, a read-only live check used KEYENCE KV-X500 / `keyence:kv-x500` at `192.168.250.100:8501`. `RDC R000` returned `E38182E38184E38186E38188E3818A` (UTF-8 `あいうえお`) and `RDC R001` returned `E3818BE3818DE3818FE38191E38193` (UTF-8 `かきくけこ`). Both payloads fail strict Shift_JIS and CP932 decoding. This proves that a universal Shift_JIS assumption is unsafe; it does not prove that all `RDC` comments are UTF-8 or identify how the comment-writing path determines stored bytes. The approved explicit-selection/raw-byte contract therefore does not depend on resolving that mechanism.
 
 ## HL-EVAL-012 — Separate Rust bit-write input parsing from PLC bit-response parsing
 

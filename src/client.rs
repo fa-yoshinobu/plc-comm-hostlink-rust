@@ -8,12 +8,12 @@ use crate::address::{
 use crate::error::{HostLinkError, HostLinkOutcomeUnknownReason};
 use crate::helpers;
 use crate::model::{
-    HostLinkClock, HostLinkConnectionOptions, HostLinkMonitorWord, HostLinkTransportMode,
-    KvModelInfo, KvPlcMode,
+    HostLinkClock, HostLinkCommentEncoding, HostLinkConnectionOptions, HostLinkMonitorWord,
+    HostLinkTransportMode, KvModelInfo, KvPlcMode,
 };
 use crate::protocol::{
-    build_frame, decode_comment_response, decode_response, ensure_success, raw_response_body,
-    split_data_tokens,
+    build_frame, comment_response_payload, decode_comment_payload, decode_response,
+    ensure_comment_success, ensure_success, raw_response_body, split_data_tokens,
 };
 use std::fmt::Write as _;
 use std::net::{IpAddr, SocketAddr};
@@ -542,6 +542,39 @@ impl HostLinkClient {
         classify_operation_result(result, state_changing, may_have_been_sent)
     }
 
+    async fn send_comment_with_direct<T, F>(
+        &self,
+        body: &str,
+        decoder: F,
+    ) -> Result<T, HostLinkError>
+    where
+        F: FnOnce(&[u8]) -> Result<T, HostLinkError>,
+    {
+        let generation = self.generation();
+        if self.control.generation.load(Ordering::Acquire) != generation {
+            return Err(HostLinkError::Closed);
+        }
+        let mut close_rx = self.control.close_tx.subscribe();
+        if *close_rx.borrow() != generation {
+            return Err(HostLinkError::Closed);
+        }
+        let mut inner = self.inner.lock().await;
+        inner.last_request_may_have_been_sent = false;
+        let timeout = self.admitted_timeout.unwrap_or(inner.options.timeout);
+        let result = tokio::select! {
+            result = inner.send_comment_with(body, decoder, timeout) => result,
+            changed = close_rx.changed() => {
+                let _ = changed;
+                Err(HostLinkError::Closed)
+            }
+        };
+        let may_have_been_sent = inner.last_request_may_have_been_sent;
+        if matches!(&result, Err(error) if !matches!(error, HostLinkError::Plc { .. })) {
+            inner.close();
+        }
+        classify_operation_result(result, false, may_have_been_sent)
+    }
+
     pub(crate) async fn retire_transport(&self) {
         self.inner.lock().await.close();
     }
@@ -1037,16 +1070,44 @@ impl HostLinkClient {
         .await
     }
 
-    pub async fn read_comments(&self, device: &str) -> Result<String, HostLinkError> {
+    /// Return the exact `RDC` response payload bytes without text decoding.
+    ///
+    /// Transport CR/LF terminators are excluded. Comment padding bytes,
+    /// including trailing ASCII spaces, are preserved. A syntactically valid
+    /// PLC error response remains [`HostLinkError::Plc`] and does not retire
+    /// the connection.
+    pub async fn read_comment_bytes(&self, device: &str) -> Result<Vec<u8>, HostLinkError> {
         let address = parse_device(device)?;
         validate_device_type("RDC", &address.device_type, rdc_device_types())?;
         require_no_suffix(&address, "RDC")?;
         let command = format!("RDC {}", address.to_text()?);
         let (_turn, direct) = self.begin_turn().await?;
-        let response = direct
-            .send_decoded_with_direct(&command, false, decode_comment_response)
-            .await?;
-        Ok(response)
+        direct
+            .send_comment_with_direct(&command, |payload| Ok(payload.to_vec()))
+            .await
+    }
+
+    /// Read and strictly decode one `RDC` device comment with the selected encoding.
+    ///
+    /// The library never retries another codec and never replaces malformed
+    /// input. Use [`Self::read_comment_bytes`] when the stored encoding is not
+    /// known by the application. A syntactically valid PLC error response is
+    /// returned as [`HostLinkError::Plc`] without retiring the connection.
+    pub async fn read_comments(
+        &self,
+        device: &str,
+        encoding: HostLinkCommentEncoding,
+    ) -> Result<String, HostLinkError> {
+        let address = parse_device(device)?;
+        validate_device_type("RDC", &address.device_type, rdc_device_types())?;
+        require_no_suffix(&address, "RDC")?;
+        let command = format!("RDC {}", address.to_text()?);
+        let (_turn, direct) = self.begin_turn().await?;
+        direct
+            .send_comment_with_direct(&command, |payload| {
+                decode_comment_payload(payload, encoding)
+            })
+            .await
     }
 
     pub async fn read_typed(
@@ -1094,6 +1155,18 @@ impl HostLinkClient {
         helpers::read_named(self, addresses).await
     }
 
+    /// Read a named aggregate that intentionally contains comments.
+    ///
+    /// At least one address must use `:COMMENT`; otherwise the unused encoding
+    /// is rejected before FIFO admission or transport.
+    pub async fn read_named_with_comment_encoding<S: AsRef<str>>(
+        &self,
+        addresses: &[S],
+        comment_encoding: HostLinkCommentEncoding,
+    ) -> Result<helpers::NamedReadResult, HostLinkError> {
+        helpers::read_named_with_comment_encoding(self, addresses, comment_encoding).await
+    }
+
     pub fn poll<'a, S: AsRef<str> + 'a>(
         &'a self,
         addresses: &'a [S],
@@ -1111,10 +1184,24 @@ impl HostLinkClient {
             helpers::validate_named_addresses(&addr_list)?;
             let compiled = crate::read_plan::compile_read_named_plan(&addr_list);
             loop {
-                yield helpers::read_named_compiled(self, &addr_list, compiled.as_ref()).await?;
+                yield helpers::read_named_compiled(self, &addr_list, compiled.as_ref(), None).await?;
                 tokio::time::sleep(interval).await;
             }
         }
+    }
+
+    /// Poll a named aggregate that intentionally contains comments.
+    ///
+    /// At least one address must use `:COMMENT`; otherwise the unused encoding
+    /// is rejected before FIFO admission or transport when the stream starts.
+    pub fn poll_with_comment_encoding<'a, S: AsRef<str> + 'a>(
+        &'a self,
+        addresses: &'a [S],
+        interval: Duration,
+        comment_encoding: HostLinkCommentEncoding,
+    ) -> impl futures_core::Stream<Item = Result<helpers::NamedReadResult, HostLinkError>> + 'a
+    {
+        helpers::poll_with_comment_encoding(self, addresses, interval, comment_encoding)
     }
 
     pub async fn read_words(&self, device: &str, count: usize) -> Result<Vec<u16>, HostLinkError> {
@@ -1233,6 +1320,31 @@ impl ClientInner {
         let result = ensure_success(decoded);
         self.finish_decode_deadline()?;
         result
+    }
+
+    async fn send_comment_with<T, F>(
+        &mut self,
+        body: &str,
+        decoder: F,
+        timeout: Duration,
+    ) -> Result<T, HostLinkError>
+    where
+        F: FnOnce(&[u8]) -> Result<T, HostLinkError>,
+    {
+        let raw = self.exchange_raw(body, timeout).await?;
+        let decoded_result = comment_response_payload(&raw).and_then(|payload| {
+            ensure_comment_success(payload)?;
+            decoder(payload)
+        });
+        self.finish_decode_deadline()?;
+        match decoded_result {
+            Ok(decoded) => Ok(decoded),
+            Err(error @ HostLinkError::Protocol(_)) => {
+                self.close();
+                Err(error)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     async fn exchange_raw(

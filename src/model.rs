@@ -20,6 +20,20 @@ pub enum HostLinkTransportMode {
     Udp,
 }
 
+/// Explicit character encoding for an `RDC` device-comment payload.
+///
+/// The library never selects an encoding from the PLC profile and never tries
+/// another encoding after a decode failure. [`Self::Cp932`] is the
+/// CP932/Windows-31J mapping used for KEYENCE documentation that describes the
+/// compatible encoding as `Shift_JIS`; there is no separate Shift_JIS mode.
+/// Its strict cross-runtime subset rejects standalone bytes `80`, `A0`, `FD`,
+/// `FE`, and `FF` while retaining defined CP932 extension pairs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostLinkCommentEncoding {
+    Utf8,
+    Cp932,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostLinkMonitorWord {
     Numeric { device: String, data_format: String },

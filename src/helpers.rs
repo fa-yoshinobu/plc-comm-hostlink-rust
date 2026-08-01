@@ -5,6 +5,7 @@ use crate::address::{
 };
 use crate::client::{HostLinkClient, HostLinkPayloadValue};
 use crate::error::HostLinkError;
+use crate::model::HostLinkCommentEncoding;
 use crate::read_plan::{
     CompiledReadNamedPlan, ReadPlanSegmentMode, compile_read_named_plan, read_plan_number,
     resolve_direct_bit_value, resolve_planned_value,
@@ -92,8 +93,19 @@ impl HostLinkPayloadValue for HostLinkValue {
     }
 }
 
-pub async fn read_comments(client: &HostLinkClient, device: &str) -> Result<String, HostLinkError> {
-    client.read_comments(device).await
+pub async fn read_comment_bytes(
+    client: &HostLinkClient,
+    device: &str,
+) -> Result<Vec<u8>, HostLinkError> {
+    client.read_comment_bytes(device).await
+}
+
+pub async fn read_comments(
+    client: &HostLinkClient,
+    device: &str,
+    encoding: HostLinkCommentEncoding,
+) -> Result<String, HostLinkError> {
+    client.read_comments(device, encoding).await
 }
 
 fn validate_read_typed_request(device: &str, dtype: &str) -> Result<(), HostLinkError> {
@@ -129,6 +141,23 @@ fn validate_read_typed_request(device: &str, dtype: &str) -> Result<(), HostLink
 }
 
 pub(crate) fn validate_named_addresses(addresses: &[String]) -> Result<(), HostLinkError> {
+    validate_named_addresses_with_comment_policy(addresses, false).map(|_| ())
+}
+
+fn validate_named_addresses_with_comments(addresses: &[String]) -> Result<(), HostLinkError> {
+    if !validate_named_addresses_with_comment_policy(addresses, true)? {
+        return Err(HostLinkError::protocol(
+            "comment encoding was provided but the aggregate contains no COMMENT entry.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_named_addresses_with_comment_policy(
+    addresses: &[String],
+    allow_comments: bool,
+) -> Result<bool, HostLinkError> {
+    let mut has_comment = false;
     for address in addresses {
         let (base_address, dtype, bit_index) = parse_named_address_parts(address)?;
         match dtype.as_str() {
@@ -137,6 +166,12 @@ pub(crate) fn validate_named_addresses(addresses: &[String]) -> Result<(), HostL
                 prepare_read_address(&base_address, Some("U"), 1)?;
             }
             "COMMENT" => {
+                if !allow_comments {
+                    return Err(HostLinkError::protocol(
+                        "COMMENT entries require read_named_with_comment_encoding or poll_with_comment_encoding and an explicit HostLinkCommentEncoding value.",
+                    ));
+                }
+                has_comment = true;
                 let parsed = parse_device(&base_address)?;
                 validate_device_type("RDC", &parsed.device_type, rdc_device_types())?;
                 require_no_suffix(&parsed, "RDC")?;
@@ -144,7 +179,7 @@ pub(crate) fn validate_named_addresses(addresses: &[String]) -> Result<(), HostL
             _ => validate_read_typed_request(&base_address, &dtype)?,
         }
     }
-    Ok(())
+    Ok(has_comment)
 }
 
 pub async fn read_typed(
@@ -684,25 +719,55 @@ pub async fn read_named<S: AsRef<str>>(
     }
     validate_named_addresses(&addr_list)?;
     let compiled = compile_read_named_plan(&addr_list);
-    read_named_compiled(client, &addr_list, compiled.as_ref()).await
+    read_named_compiled(client, &addr_list, compiled.as_ref(), None).await
+}
+
+/// Read a named aggregate with an explicit encoding for at least one comment entry.
+///
+/// A list without `:COMMENT` rejects the unused encoding before transport.
+pub async fn read_named_with_comment_encoding<S: AsRef<str>>(
+    client: &HostLinkClient,
+    addresses: &[S],
+    comment_encoding: HostLinkCommentEncoding,
+) -> Result<NamedReadResult, HostLinkError> {
+    let addr_list = addresses
+        .iter()
+        .map(|item| item.as_ref().to_owned())
+        .collect::<Vec<_>>();
+    if addr_list.is_empty() {
+        return Err(HostLinkError::protocol(
+            "read_named_with_comment_encoding addresses must not be empty.",
+        ));
+    }
+    validate_named_addresses_with_comments(&addr_list)?;
+    let compiled = compile_read_named_plan(&addr_list);
+    read_named_compiled(
+        client,
+        &addr_list,
+        compiled.as_ref(),
+        Some(comment_encoding),
+    )
+    .await
 }
 
 pub(crate) async fn read_named_compiled(
     client: &HostLinkClient,
     addresses: &[String],
     compiled: Option<&CompiledReadNamedPlan>,
+    comment_encoding: Option<HostLinkCommentEncoding>,
 ) -> Result<NamedReadResult, HostLinkError> {
     let (_turn, direct) = client.begin_turn().await?;
     if let Some(plan) = compiled {
         execute_read_named_plan(&direct, plan).await
     } else {
-        read_named_sequential(&direct, addresses).await
+        read_named_sequential(&direct, addresses, comment_encoding).await
     }
 }
 
 pub(crate) async fn read_named_sequential(
     client: &HostLinkClient,
     addresses: &[String],
+    comment_encoding: Option<HostLinkCommentEncoding>,
 ) -> Result<NamedReadResult, HostLinkError> {
     let mut result = NamedReadResult::new();
     for address in addresses {
@@ -727,9 +792,14 @@ pub(crate) async fn read_named_sequential(
                 HostLinkValue::Bool(((word >> bit_index) & 1) != 0),
             );
         } else if dtype == "COMMENT" {
+            let encoding = comment_encoding.ok_or_else(|| {
+                HostLinkError::protocol(
+                    "COMMENT entries require an explicit HostLinkCommentEncoding value.",
+                )
+            })?;
             result.insert(
                 address.clone(),
-                HostLinkValue::Text(read_comments(client, &base_address).await?),
+                HostLinkValue::Text(read_comments(client, &base_address, encoding).await?),
             );
         } else {
             result.insert(
@@ -800,7 +870,40 @@ pub fn poll<'a, S: AsRef<str> + 'a>(
         let compiled = compile_read_named_plan(&addr_list);
         validate_named_addresses(&addr_list)?;
         loop {
-            let result = read_named_compiled(client, &addr_list, compiled.as_ref()).await?;
+            let result = read_named_compiled(client, &addr_list, compiled.as_ref(), None).await?;
+            yield result;
+            tokio::time::sleep(interval).await;
+        }
+    }
+}
+
+/// Poll a named aggregate with an explicit encoding for at least one comment entry.
+///
+/// A list without `:COMMENT` rejects the unused encoding before transport.
+pub fn poll_with_comment_encoding<'a, S: AsRef<str> + 'a>(
+    client: &'a HostLinkClient,
+    addresses: &'a [S],
+    interval: Duration,
+    comment_encoding: HostLinkCommentEncoding,
+) -> impl Stream<Item = Result<NamedReadResult, HostLinkError>> + 'a {
+    async_stream::try_stream! {
+        let addr_list = addresses.iter().map(|item| item.as_ref().to_owned()).collect::<Vec<_>>();
+        if addr_list.is_empty() {
+            Err(HostLinkError::protocol("poll_with_comment_encoding addresses must not be empty."))?;
+        }
+        if interval.is_zero() {
+            Err(HostLinkError::protocol("poll interval must be greater than zero."))?;
+        }
+        validate_named_addresses_with_comments(&addr_list)?;
+        let compiled = compile_read_named_plan(&addr_list);
+        loop {
+            let result = read_named_compiled(
+                client,
+                &addr_list,
+                compiled.as_ref(),
+                Some(comment_encoding),
+            )
+            .await?;
             yield result;
             tokio::time::sleep(interval).await;
         }
