@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Library: Transport receive buffers are now allocated only for the selected transport after open admission, reused for the logical session, and released on explicit close; TCP delimiter scanning advances incrementally through a growable accumulator.
+- Tests: Added deterministic transport-buffer allocation/reuse/release checks and maximum-size one-byte-fragment TCP scan/copy bounds.
 - Breaking: Reject empty raw commands, URI-style bracketed IPv4 literals, and raw command bodies larger than 65,506 ASCII bytes before DNS, socket creation, connection, state mutation, or send; the terminating CR makes the common TCP/UDP request-frame maximum 65,507 bytes.
 - Tests: Cover empty raw preflight rejection, bracketed/unbracketed IPv4 option boundaries, and exact 65,506-byte request-body capacity.
 - Docs: Made controlled register and expansion-buffer writes parse saved read values into valid typed restore payloads and attempt restoration before propagating readback failures, and documented the non-restorable operational effect of setting the PLC clock.

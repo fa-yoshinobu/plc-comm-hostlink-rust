@@ -316,8 +316,12 @@ struct ClientInner {
     rx_buf: Vec<u8>,
     rx_start: usize,
     rx_count: usize,
+    rx_scan: usize,
     tcp_read_buf: Vec<u8>,
     udp_read_buf: Vec<u8>,
+    tcp_scan_bytes: u64,
+    tcp_copy_bytes: u64,
+    transport_buffer_allocation_count: u64,
     monitor_bit_count: Option<usize>,
     monitor_word_formats: Option<Vec<String>>,
     // Set before the first transport await and cleared only after a complete
@@ -337,11 +341,15 @@ impl HostLinkClient {
             inner: Arc::new(Mutex::new(ClientInner {
                 options,
                 transport: None,
-                rx_buf: vec![0u8; 4096],
+                rx_buf: Vec::new(),
                 rx_start: 0,
                 rx_count: 0,
-                tcp_read_buf: vec![0u8; 8192],
-                udp_read_buf: vec![0u8; UDP_RECEIVE_BUFFER_SIZE],
+                rx_scan: 0,
+                tcp_read_buf: Vec::new(),
+                udp_read_buf: Vec::new(),
+                tcp_scan_bytes: 0,
+                tcp_copy_bytes: 0,
+                transport_buffer_allocation_count: 0,
                 monitor_bit_count: None,
                 monitor_word_formats: None,
                 exchange_incomplete: false,
@@ -1300,6 +1308,18 @@ impl ClientInner {
         if self.options.host.trim().is_empty() || self.options.port == 0 {
             return Err(HostLinkError::protocol("invalid Host Link endpoint"));
         }
+        let (rx_buf, tcp_read_buf, udp_read_buf) = match self.options.transport {
+            HostLinkTransportMode::Tcp => (
+                allocate_zeroed_buffer(4096, "TCP receive accumulator")?,
+                allocate_zeroed_buffer(8192, "TCP socket read buffer")?,
+                Vec::new(),
+            ),
+            HostLinkTransportMode::Udp => (
+                Vec::new(),
+                Vec::new(),
+                allocate_zeroed_buffer(UDP_RECEIVE_BUFFER_SIZE, "UDP datagram receive buffer")?,
+            ),
+        };
         let connect_deadline = checked_deadline(timeout)?;
         let endpoints = resolve_ipv4_endpoints(
             self.options.host.as_str(),
@@ -1324,9 +1344,14 @@ impl ClientInner {
             }
         };
 
+        self.rx_buf = rx_buf;
+        self.tcp_read_buf = tcp_read_buf;
+        self.udp_read_buf = udp_read_buf;
+        self.transport_buffer_allocation_count += 1;
         self.transport = Some(transport);
         self.rx_start = 0;
         self.rx_count = 0;
+        self.rx_scan = 0;
         self.last_request_may_have_been_sent = false;
         self.active_deadline = None;
         Ok(())
@@ -1334,8 +1359,12 @@ impl ClientInner {
 
     fn close(&mut self) {
         self.transport = None;
+        self.rx_buf = Vec::new();
         self.rx_start = 0;
         self.rx_count = 0;
+        self.rx_scan = 0;
+        self.tcp_read_buf = Vec::new();
+        self.udp_read_buf = Vec::new();
         self.exchange_incomplete = false;
         self.active_deadline = None;
         self.monitor_bit_count = None;
@@ -1348,6 +1377,7 @@ impl ClientInner {
                 transport.socket = None;
                 self.rx_start = 0;
                 self.rx_count = 0;
+                self.rx_scan = 0;
                 self.exchange_incomplete = false;
                 self.active_deadline = None;
                 self.monitor_bit_count = None;
@@ -1445,9 +1475,14 @@ impl ClientInner {
                             self.traffic_stats.tx_bytes += frame.len() as u64;
                             recv_tcp_line(
                                 stream,
-                                &mut self.rx_buf,
-                                &mut self.rx_start,
-                                &mut self.rx_count,
+                                TcpReceiveState {
+                                    rx_buf: &mut self.rx_buf,
+                                    rx_start: &mut self.rx_start,
+                                    rx_count: &mut self.rx_count,
+                                    rx_scan: &mut self.rx_scan,
+                                    scan_bytes: &mut self.tcp_scan_bytes,
+                                    copy_bytes: &mut self.tcp_copy_bytes,
+                                },
                                 &mut self.tcp_read_buf,
                                 deadline,
                             )
@@ -1568,6 +1603,17 @@ fn checked_deadline(duration: Duration) -> Result<Instant, HostLinkError> {
     Instant::now()
         .checked_add(duration)
         .ok_or_else(|| HostLinkError::protocol("timeout is too large to form an absolute deadline"))
+}
+
+fn allocate_zeroed_buffer(size: usize, purpose: &str) -> Result<Vec<u8>, HostLinkError> {
+    let mut buffer = Vec::new();
+    buffer.try_reserve_exact(size).map_err(|error| {
+        HostLinkError::connection(format!(
+            "Failed to allocate {purpose} before transport use: {error}"
+        ))
+    })?;
+    buffer.resize(size, 0);
+    Ok(buffer)
 }
 
 async fn resolve_ipv4_endpoints(
@@ -1760,31 +1806,58 @@ fn append_strict_payload<T: HostLinkPayloadValue + ?Sized>(
     }
 }
 
+struct TcpReceiveState<'a> {
+    rx_buf: &'a mut Vec<u8>,
+    rx_start: &'a mut usize,
+    rx_count: &'a mut usize,
+    rx_scan: &'a mut usize,
+    scan_bytes: &'a mut u64,
+    copy_bytes: &'a mut u64,
+}
+
 async fn recv_tcp_line(
     stream: &mut TcpStream,
-    rx_buf: &mut Vec<u8>,
-    rx_start: &mut usize,
-    rx_count: &mut usize,
+    state: TcpReceiveState<'_>,
     tcp_read_buf: &mut [u8],
     deadline: Instant,
 ) -> Result<(Vec<u8>, usize), HostLinkError> {
+    let TcpReceiveState {
+        rx_buf,
+        rx_start,
+        rx_count,
+        rx_scan,
+        scan_bytes,
+        copy_bytes,
+    } = state;
     loop {
         while *rx_count > 0 && matches!(rx_buf[*rx_start], b'\r' | b'\n') {
             *rx_start += 1;
             *rx_count -= 1;
+            *rx_scan = (*rx_scan).max(*rx_start);
+            *scan_bytes += 1;
         }
         if *rx_start > rx_buf.len() / 2 {
             if *rx_count > 0 {
                 rx_buf.copy_within(*rx_start..*rx_start + *rx_count, 0);
+                *copy_bytes += *rx_count as u64;
             }
+            *rx_scan = (*rx_scan).saturating_sub(*rx_start);
             *rx_start = 0;
         }
         let mut found_idx = None;
-        for index in 0..*rx_count {
-            let byte = rx_buf[*rx_start + index];
+        let end = *rx_start + *rx_count;
+        while *rx_scan < end {
+            let byte = rx_buf[*rx_scan];
+            *scan_bytes += 1;
             if matches!(byte, b'\r' | b'\n') {
-                found_idx = Some(index);
+                found_idx = Some(*rx_scan - *rx_start);
                 break;
+            }
+            *rx_scan += 1;
+            if *rx_scan - *rx_start > MAX_TCP_LINE_SIZE {
+                return Err(HostLinkError::protocol(format!(
+                    "Response line exceeds {MAX_TCP_LINE_SIZE} bytes"
+                )));
             }
         }
 
@@ -1794,8 +1867,9 @@ async fn recv_tcp_line(
                     "Response line exceeds {MAX_TCP_LINE_SIZE} bytes"
                 )));
             }
-            let mut skip = found_idx;
+            let mut skip = found_idx + 1;
             while skip < *rx_count && matches!(rx_buf[*rx_start + skip], b'\r' | b'\n') {
+                *scan_bytes += 1;
                 skip += 1;
             }
             if skip < *rx_count {
@@ -1805,12 +1879,16 @@ async fn recv_tcp_line(
             }
             reject_unowned_tcp_response(stream, tcp_read_buf, false)?;
             let line = rx_buf[*rx_start..*rx_start + skip].to_vec();
+            *copy_bytes += skip as u64;
             let counted_len = found_idx + 1;
             *rx_start += skip;
             *rx_count -= skip;
+            *rx_scan = *rx_start;
             if *rx_start > rx_buf.len() / 2 {
                 rx_buf.copy_within(*rx_start..*rx_start + *rx_count, 0);
+                *copy_bytes += *rx_count as u64;
                 *rx_start = 0;
+                *rx_scan = 0;
             }
             return Ok((line, counted_len));
         }
@@ -1828,9 +1906,11 @@ async fn recv_tcp_line(
         }
 
         if *rx_start + *rx_count + read > rx_buf.len() {
-            if *rx_count > 0 {
+            if *rx_start > 0 && *rx_count > 0 {
                 rx_buf.copy_within(*rx_start..*rx_start + *rx_count, 0);
+                *copy_bytes += *rx_count as u64;
             }
+            *rx_scan = (*rx_scan).saturating_sub(*rx_start);
             *rx_start = 0;
             if *rx_count + read > MAX_TCP_LINE_SIZE + tcp_read_buf.len() {
                 return Err(HostLinkError::protocol(format!(
@@ -1838,22 +1918,18 @@ async fn recv_tcp_line(
                 )));
             }
             if *rx_count + read > rx_buf.len() {
-                rx_buf.resize((rx_buf.len() * 2).max(*rx_count + read), 0);
+                let new_len = (rx_buf.len().max(1) * 2).max(*rx_count + read);
+                let mut grown = allocate_zeroed_buffer(new_len, "TCP receive accumulator growth")?;
+                grown[..*rx_count].copy_from_slice(&rx_buf[..*rx_count]);
+                *copy_bytes += *rx_count as u64;
+                *rx_buf = grown;
             }
         }
 
         let target = *rx_start + *rx_count;
         rx_buf[target..target + read].copy_from_slice(&tcp_read_buf[..read]);
+        *copy_bytes += read as u64;
         *rx_count += read;
-        if *rx_count > MAX_TCP_LINE_SIZE {
-            let has_terminator =
-                (0..*rx_count).any(|index| matches!(rx_buf[*rx_start + index], b'\r' | b'\n'));
-            if !has_terminator {
-                return Err(HostLinkError::protocol(format!(
-                    "Response line exceeds {MAX_TCP_LINE_SIZE} bytes"
-                )));
-            }
-        }
     }
 }
 
@@ -1880,6 +1956,152 @@ mod endpoint_tests {
             select_ipv4_endpoints("mixed.example", mixed).unwrap(),
             vec!["127.0.0.1:8501".parse::<SocketAddr>().unwrap()]
         );
+    }
+}
+
+#[cfg(test)]
+mod performance_tests {
+    use super::{HostLinkClient, MAX_TCP_LINE_SIZE, TcpReceiveState, recv_tcp_line};
+    use crate::{HostLinkConnectionOptions, HostLinkTransportMode};
+    use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::{TcpListener, TcpStream, UdpSocket};
+    use tokio::time::Instant;
+
+    fn options(port: u16, transport: HostLinkTransportMode) -> HostLinkConnectionOptions {
+        HostLinkConnectionOptions::new("127.0.0.1", port, transport, "keyence:kv-8000").unwrap()
+    }
+
+    #[tokio::test]
+    async fn transport_buffers_are_lazy_separated_reused_and_released() {
+        let tcp_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let tcp_port = tcp_listener.local_addr().unwrap().port();
+        let tcp_client = HostLinkClient::new(options(tcp_port, HostLinkTransportMode::Tcp));
+        {
+            let inner = tcp_client.inner.lock().await;
+            assert_eq!(inner.rx_buf.capacity(), 0);
+            assert_eq!(inner.tcp_read_buf.capacity(), 0);
+            assert_eq!(inner.udp_read_buf.capacity(), 0);
+            assert_eq!(inner.transport_buffer_allocation_count, 0);
+        }
+
+        tcp_client.open().await.unwrap();
+        let (first_tcp, _) = tcp_listener.accept().await.unwrap();
+        {
+            let inner = tcp_client.inner.lock().await;
+            assert_eq!(inner.rx_buf.len(), 4096);
+            assert_eq!(inner.tcp_read_buf.len(), 8192);
+            assert_eq!(inner.udp_read_buf.capacity(), 0);
+            assert_eq!(inner.transport_buffer_allocation_count, 1);
+        }
+        tcp_client.open().await.unwrap();
+        assert_eq!(
+            tcp_client
+                .inner
+                .lock()
+                .await
+                .transport_buffer_allocation_count,
+            1
+        );
+        drop(first_tcp);
+        tcp_client.close().await.unwrap();
+        {
+            let inner = tcp_client.inner.lock().await;
+            assert_eq!(inner.rx_buf.capacity(), 0);
+            assert_eq!(inner.tcp_read_buf.capacity(), 0);
+            assert_eq!(inner.udp_read_buf.capacity(), 0);
+        }
+
+        let udp_peer = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let udp_client = HostLinkClient::new(options(
+            udp_peer.local_addr().unwrap().port(),
+            HostLinkTransportMode::Udp,
+        ));
+        udp_client.open().await.unwrap();
+        {
+            let inner = udp_client.inner.lock().await;
+            assert_eq!(inner.rx_buf.capacity(), 0);
+            assert_eq!(inner.tcp_read_buf.capacity(), 0);
+            assert_eq!(inner.udp_read_buf.len(), MAX_TCP_LINE_SIZE + 2);
+            assert_eq!(inner.transport_buffer_allocation_count, 1);
+        }
+        udp_client.close().await.unwrap();
+        let inner = udp_client.inner.lock().await;
+        assert_eq!(inner.udp_read_buf.capacity(), 0);
+    }
+
+    #[tokio::test]
+    async fn one_byte_tcp_reads_scan_and_copy_maximum_body_linearly() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let sender = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut response = vec![b'A'; MAX_TCP_LINE_SIZE];
+            response.push(b'\r');
+            stream.write_all(&response).await.unwrap();
+        });
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        let mut rx_buf = vec![0; 4096];
+        let mut rx_start = 0;
+        let mut rx_count = 0;
+        let mut rx_scan = 0;
+        let mut read_buf = [0; 1];
+        let mut scan_bytes = 0;
+        let mut copy_bytes = 0;
+
+        let (line, counted) = recv_tcp_line(
+            &mut stream,
+            TcpReceiveState {
+                rx_buf: &mut rx_buf,
+                rx_start: &mut rx_start,
+                rx_count: &mut rx_count,
+                rx_scan: &mut rx_scan,
+                scan_bytes: &mut scan_bytes,
+                copy_bytes: &mut copy_bytes,
+            },
+            &mut read_buf,
+            Instant::now() + Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        sender.await.unwrap();
+
+        assert_eq!(line.len(), MAX_TCP_LINE_SIZE + 1);
+        assert_eq!(counted, MAX_TCP_LINE_SIZE + 1);
+        assert_eq!(scan_bytes, (MAX_TCP_LINE_SIZE + 1) as u64);
+        assert!(
+            copy_bytes <= ((MAX_TCP_LINE_SIZE + 1) * 4) as u64,
+            "copy_bytes={copy_bytes}"
+        );
+    }
+
+    #[tokio::test]
+    async fn udp_socket_replacement_reuses_the_session_receive_buffer() {
+        let peer = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = peer.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let mut request = [0u8; 32];
+            let (_, first_client) = peer.recv_from(&mut request).await.unwrap();
+            peer.send_to(b"UNTERMINATED", first_client).await.unwrap();
+            let (_, replacement_client) = peer.recv_from(&mut request).await.unwrap();
+            peer.send_to(b"OK\r", replacement_client).await.unwrap();
+        });
+        let client = HostLinkClient::new(options(port, HostLinkTransportMode::Udp));
+        client.open().await.unwrap();
+
+        assert!(client.send_raw("FIRST").await.is_err());
+        {
+            let inner = client.inner.lock().await;
+            assert!(inner.udp_read_buf.capacity() >= MAX_TCP_LINE_SIZE + 2);
+            assert_eq!(inner.transport_buffer_allocation_count, 1);
+        }
+        assert_eq!(client.send_raw("SECOND").await.unwrap(), b"OK");
+        {
+            let inner = client.inner.lock().await;
+            assert!(inner.udp_read_buf.capacity() >= MAX_TCP_LINE_SIZE + 2);
+            assert_eq!(inner.transport_buffer_allocation_count, 1);
+        }
+        server.await.unwrap();
     }
 }
 
