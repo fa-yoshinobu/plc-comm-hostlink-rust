@@ -35,7 +35,15 @@ before client state or traffic counters change.
 One non-pipelined TCP request owns exactly one non-empty response. Additional
 CR/LF separators are ignored, but a second non-empty response received before
 another request owns it is a protocol error and retires the connection. For
-UDP, `open` creates one connected IPv4 UDP socket for the logical session.
+TCP as well as UDP, Host Link has no request identifier. Serialization and the
+pre-send unowned-data check therefore cannot distinguish a nonconforming late
+response that arrives between the final check and the next send. The client
+keeps a healthy TCP connection persistent because opening one connection per
+request would add a TCP handshake to every normal command without adding a
+protocol request identifier. Use a conforming endpoint; every anomaly that can
+be observed retires the connection and requires an explicit reopen.
+
+For UDP, `open` creates one connected IPv4 UDP socket for the logical session.
 Complete valid exchanges reuse that socket and its local endpoint. A timeout,
 cancellation, transport/protocol failure, malformed response, extra response,
 or datagram already waiting before a send discards the socket; the next command
@@ -75,10 +83,19 @@ canonical ordinary `.U` families `DM`, `EM`, `FM`, `ZF`, `W`, `TM`, `CM`,
 `R`, `T`, `C`, and `AT` reject `:F` before FIFO admission and frame construction;
 they are never reinterpreted as consecutive word or bit operations.
 
-Every semantic `.H` result is the canonical four-character uppercase form
-`0000` through `FFFF`. Short or lowercase PLC tokens are accepted only after
-16-bit hexadecimal validation and are then padded, for example `a` becomes
-`000A`. Raw response APIs and hexadecimal write-frame spelling are unchanged.
+Every numeric semantic `.H` value is the canonical four-character uppercase
+form `0000` through `FFFF`. Short or lowercase PLC tokens are accepted only
+after 16-bit hexadecimal validation and are then padded, for example `a`
+becomes `000A`. Raw response APIs and hexadecimal write-frame spelling are
+unchanged.
+
+A low-level `T`/`C` single read returns three fields: structural status,
+current value, and preset value. Status is validated from the PLC token as
+exact `0` or `1`; the selected `.U`, `.S`, `.H`, `.D`, or `.L` format applies
+only to current and preset. For example, a valid `.H` response is returned as
+`["0", "270F", "270F"]`, not `["0000", "270F", "270F"]`. Code that
+previously compared the first low-level token with `0000` or `0001` must
+compare it with `0` or `1`. High-level timer/counter result types are unchanged.
 
 Low-level numeric APIs require a base device and a separate format:
 
@@ -191,6 +208,38 @@ client-side read-modify-write helper was removed because it could overwrite a
 concurrent PLC or external-client update. Use a PLC-native atomic bit operation
 when available, or make the application explicitly own any non-atomic whole-
 word read/write sequence.
+
+## Word monitor registration
+
+`MWS` entries beginning at a direct-bit device are packed word views, not
+individual Boolean entries. Use the explicit packed constructor so the API
+matches the PLC response contract:
+
+```rust
+use plc_comm_kv_hostlink::HostLinkMonitorWord;
+
+client
+    .register_monitor_words(&[
+        HostLinkMonitorWord::numeric("DM120", "U"),
+        HostLinkMonitorWord::packed_direct_bits_u16("R5000"),
+    ])
+    .await?;
+let values = client.read_monitor_words().await?;
+```
+
+The packed constructor contributes the bare `R5000` token to `MWS`; registered
+by itself it sends `MWS R5000`. Its `MWR` field must be exactly 1-5 ASCII decimal
+digits with a numeric value from `0` through `65535`. Leading zeros are optional,
+so `0`, `2`, `13`, `00000`, `00002`, `00013`, and `65535` are valid and retain
+their original `String` spelling. Empty fields, signs, whitespace, nondecimal
+text, six or more digits, and overflow are rejected. It is not valid to treat
+this field as a Boolean. Use `register_monitor_bits` and `read_monitor_bits`
+when each registered entry must remain an exact `0`/`1`/`ON`/`OFF` bit.
+
+The former `HostLinkMonitorWord::DirectBit`/`direct_bit` API was removed without
+an alias. Replace it with `packed_direct_bits_u16` when the intended operation is
+bare-wire packed `MWS`, or move the operation to the bit monitor APIs when the
+intended result is an individual bit.
 
 ## Expansion-unit buffer access
 

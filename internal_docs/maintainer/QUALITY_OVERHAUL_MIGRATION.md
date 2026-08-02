@@ -225,13 +225,16 @@ Acceptance criteria:
    reads require exactly three tokens, and non-`U16` conversion fails.
 5. Tests prove the 3-second timeout default, zero rejection, TCP timeout state,
    and absence of library-local cross-vector files/runners.
-6. RD uses the command-derived token count, including 16/32-point direct-bit
-   numeric formats; direct BIT accepts only `0`/`1`/`ON`/`OFF`, and malformed semantic
-   responses close the transport generation.
+6. RD uses the command-derived token count. Direct-bit numeric formats accept
+   exactly one packed scalar token whose `.U`/`.S`/`.H` view spans 16 bits and
+   whose `.D`/`.L` view spans 32 bits; direct BIT accepts only
+   `0`/`1`/`ON`/`OFF`, and malformed semantic responses close the transport
+   generation. This supersedes the former 16/32-token assumption using the
+   KV-X500 live response vectors recorded by `LIVE-HL-001`.
 
 - [x] Implementation completed in this repository.
 - [x] Tests added or updated for every acceptance criterion.
-- [x] Full format, Clippy `-D warnings`, 82-test, rustdoc `-D warnings`, example, and package checks passed.
+- [x] Full format, Clippy `-D warnings`, 153 tests, rustdoc `-D warnings`, example, and package checks passed.
 - [x] Codex self-review completed against public API, validation order, response shape, transport state, timeout/cancellation, docs, and package contents.
 - [x] Claude source review completed; the user ran the authorized batch and its result is preserved in the workspace.
 - [x] Codex dispositioned all Rust findings and reran affected checks.
@@ -364,6 +367,29 @@ Acceptance criteria:
 - [x] Live PLC checks are not required: timing/state behavior is deterministic with loopback TCP/UDP.
 - [x] Documentation, migration notes, changelog, and generated API reference agree with the implementation.
 - [x] Final acceptance criteria verified and the item marked complete.
+
+### HL-KVX500-02B — Controlled UDP timeout and socket replacement evidence
+
+The approved read-only Rust anomaly batch passed against `keyence:kv-x500` at
+`192.168.250.100:8501`. The controlled setup used one cable unplug and replug;
+it performed no PLC writes. Phase A read `DM120.U` as `00000` on the retained
+healthy UDP socket. Phase B made exactly one request while communication was
+interrupted and returned `HostLinkError::Timeout` after 2001 ms: the request
+count increased by one, received bytes increased by zero, no retry occurred,
+and the affected socket was retired. Phase C used exactly one replacement
+socket from the retained numeric endpoint, performed no DNS lookup, read
+`DM120.U` as `00000`, and closed cleanly with no active UDP endpoint remaining.
+The complete batch used 3 requests, 33 transmitted bytes, and 14 received
+bytes.
+
+Evidence:
+`D:\APP\live-kvx500-20260802\hl-kvx500-02b-runs\f610eebe-7842-4f61-9894-835912f5575c\Rust\result.json`,
+SHA-256
+`df11dd1f79a64f4f419272258182346b89397a2f94ed620d6f4f517b3fe824ef`.
+
+- [x] Rust `HL-KVX500-02B` live row passed: healthy reuse, one timeout with no
+  retry, failed-socket retirement, one DNS-free replacement, successful read,
+  and close cleanup all matched the approved UDP recovery contract.
 
 ## RS-XOVER-004 — Read-only aggregate planning and no bit RMW helper
 
@@ -718,6 +744,267 @@ Machine-verifiable acceptance criteria:
   behavior, and no PLC/profile compatibility claim changed. No live PLC
   communication was performed.
 
+## RS-REAUDIT-001 — Persistent TCP response ownership
+
+Implementation scope: serialized TCP exchange ownership, anomaly retirement,
+connection-scoped monitor registration, direct regression tests, and user
+transport guidance.
+
+Target contract: one healthy persistent TCP connection carries serialized
+requests with at most one unfinished request. Observable unowned, surplus,
+timed-out, cancelled, malformed, or transport-failed exchanges retire that
+connection. Host Link has no request identifier, so input arriving between the
+final pre-send check and the send cannot be associated perfectly. A connection
+per request is not adopted because it adds a TCP handshake to every normal
+command without creating a protocol request identifier.
+
+Machine-verifiable acceptance criteria:
+
+1. Healthy requests reuse one TCP connection and execute serially.
+2. Surplus and delayed pre-send unowned responses prevent a later send and
+   retire the connection.
+3. State-changing failures after a possible send remain outcome-unknown and
+   are never retried automatically.
+4. Monitor registration and read share one connection; close/reopen clears the
+   registration and a later monitor read sends nothing until re-registration.
+5. User documentation states the remaining request-ID limitation and the
+   normal-latency decision.
+
+- [x] Implementation completed in this repository.
+- [x] Direct response-ownership and connection-scoped monitor tests completed.
+- [x] The post-correction repository gate passed formatting, Clippy and rustdoc
+  with warnings denied, 153 tests, all examples, crate packaging, and the
+  isolated generated-crate consumer.
+- [x] Codex self-review identified and corrected the missing reconnect monitor
+  regression and user-facing residual-risk explanation.
+- [x] Live PLC verification is not required because ownership, serialization,
+  pre-send rejection, and registration reset are deterministic local transport
+  and state-machine behavior.
+- [x] User guidance and changelog agree with the implementation.
+- [x] Final acceptance criteria reverified after the accepted corrections.
+
+## LIVE-HL-003 — Timer/counter structural status formatting
+
+Implementation scope: low-level formatted `RD` responses for the `T` and `C`
+families, their high-level timer/counter projections, malformed-response
+retirement, deterministic regressions, user documentation, and migration
+records in this repository.
+
+Target contract: a timer/counter response has exactly three semantic fields.
+The first field is structural status and is validated as the exact raw PLC token
+`0` or `1`; it is never parsed or normalized with `.U`, `.S`, `.H`, `.D`, or
+`.L`. The selected numeric format applies only to current and preset. Preserve
+the existing low-level `Vec<String>` container and all high-level public return
+types.
+
+Compatibility impact: public signatures and high-level results do not change.
+The erroneous low-level `.H` first value changes from synthesized `0000` or
+`0001` to the PLC-semantic `0` or `1`. Callers comparing the first token must
+use `0`/`1`; reliance on the synthesized hexadecimal status is not retained.
+
+Machine-verifiable acceptance criteria:
+
+1. Low-level `T`/`C` status accepts only exact `0` or `1` before numeric-format
+   validation.
+2. Current and preset alone use the requested `.U`, `.S`, `.H`, `.D`, or `.L`
+   parser and range.
+3. The real `RD T0.H` vector `0,270F,270F` returns
+   `["0", "270F", "270F"]`; high-level typed projection remains unchanged.
+4. Formatted or otherwise malformed status, missing or extra fields, invalid
+   current/preset values, and overflow are protocol errors that retire the
+   supplying transport.
+5. User guidance, API reference, changelog, and this migration record state the
+   low-level compatibility change and required comparison migration.
+
+Evidence:
+
+- The configuration-corrected KV-X500 live evidence returned
+  `RD T0.H -> 0,270F,270F`; this is the authoritative PLC response vector that
+  exposed the former status normalization defect.
+- The separately approved read-only Rust `HL-KVX500-01` runner passed against
+  `keyence:kv-x500` at `192.168.250.100:8501` with `writes: false`. It started
+  at `2026-08-02T11:12:01.4085217Z` and finished at
+  `2026-08-02T11:12:01.4556450Z`. The evidence repository state was HEAD
+  `ed008ff9c18c7ba275f852274f861f8ad08635e9` with pre-evidence-record
+  `git diff --binary` SHA-256
+  `a8a545c60d24e8d102aff1519215355f4d260516ac427c48a6db10c4e7c47015`.
+  The guarded runner source SHA-256 was
+  `84a19b9feee800207fd2f11eaae849f7d06a39c66b7b87d463d4ce4554c13197`,
+  and the executed release binary SHA-256 was
+  `8363077b5b5d3371cfe8c28192a361fa61bf31951e369b697b7ffe4093c39b79`.
+  The result file SHA-256 is
+  `a8d9939d0fc4269685c89d2f72c02f1dab33de9e3358a44703c7cee4a44f015f`.
+  Its 12 requests used 163 transmitted and 139 received bytes;
+  `R000.H` was `0000`, and `T0.H` was exactly
+  `["0", "270F", "270F"]`. The direct-read and `MWR` arrays were identical:
+  `00000,+00000,0000,0000000000,+0000000000,00013`.
+- Deterministic targeted tests cover the real `.H` vector, exact status
+  rejection, all five numeric formats and boundaries, missing/extra fields,
+  invalid current/preset values, overflow, and transport retirement.
+- The post-correction local gate passed formatting, Clippy and rustdoc with
+  warnings denied, all 153 tests, all examples, crate packaging, and the
+  isolated generated-crate consumer. No live PLC communication was performed
+  during this Rust verification.
+- Codex self-review inspected the response split, command-derived count,
+  structural-status validation before current/preset normalization, low- and
+  high-level result shapes, error retirement, tests, docs, and package output.
+  No accepted runtime finding remained; repeated empty separators retain the
+  existing shared tokenization behavior and are outside this approved change.
+
+- [x] Implementation completed in this repository.
+- [x] Tests cover every local acceptance criterion.
+- [x] Static, unit, integration, example, documentation, and package gates passed.
+- [x] Codex self-review completed against the approved contract.
+- [x] The Rust portion of the corrected representative live batch passed after
+  separate explicit approval (`HL-KVX500-01`).
+- [x] The Node.js, .NET, and Python portions of the corrected representative
+  cross-language live batch have passed after separate explicit approval.
+- [x] Documentation, migration notes, changelog, and API reference agree.
+- [x] Family-level final acceptance is verified and `LIVE-HL-003` marked complete.
+
+## LIVE-HL-004 / LIVE-HL-004-RUST-API / LIVE-HL-004-WIRE-GRAMMAR — Packed direct-bit word monitoring
+
+Implementation scope: the public `HostLinkMonitorWord` type, `MWS` command
+construction, connection-scoped `MWR` response metadata and validation, the
+verification binary, compile-checked examples, deterministic transport tests,
+user documentation, and migration guidance in this repository.
+
+Target contract: a bare direct-bit-family `MWS` entry registers one packed
+unsigned 16-bit word. `HostLinkMonitorWord::packed_direct_bits_u16(device)`
+accepts only an unsuffixed direct-bit device and emits the exact bare device
+token on the wire. Distinct internal packed metadata validates the corresponding
+`MWR` field as exactly 1-5 ASCII decimal digits whose numeric value is from `0`
+through `65535`. Leading zeros are optional and retained in the existing public
+`String`; empty fields, signs, whitespace, nondecimal text, six or more digits,
+and overflow fail. It is not validated as an individual bit. Bare scalar `RD`
+and `MBS`/`MBR` retain their exact `0`/`1`/`ON`/`OFF` contract.
+
+Compatibility impact: the public `HostLinkMonitorWord::DirectBit` variant and
+`direct_bit` constructor are removed completely. No alias, deprecated member,
+or Boolean compatibility interpretation remains. Callers that intended bare
+packed `MWS` migrate to `PackedDirectBitsU16` or
+`packed_direct_bits_u16`; callers that intended an individual bit migrate to
+`register_monitor_bits`/`read_monitor_bits`. The verification binary replaces
+the word-monitor `BIT` selector with `PACKED_U16` and rejects `BIT` rather than
+silently changing its meaning.
+
+Wire grammar impact: packed fields that the general `.U` parser could formerly
+accept despite noncanonical spelling, including a leading sign or more than
+five zero-padded digits, now fail as protocol errors and retire the supplying
+transport. Numeric `HostLinkMonitorWord::numeric(..., "U")` parsing is unchanged.
+
+Machine-verifiable acceptance criteria:
+
+1. Mixed numeric and packed registrations preserve order and emit explicit
+   suffixes only for numeric entries; a packed `R0` entry emits exact bare
+   `MWS R000`.
+2. Packed `MWR` values `0`, `2`, `13`, `00000`, `00002`, `00013`, and `65535`
+   succeed and preserve their existing public `String` spelling.
+3. Empty, signed, whitespace-bearing, non-ASCII/nondecimal, longer-than-five-
+   digit, overflow, wrong-token-count, and other invalid packed response shapes
+   fail as protocol errors and retire the supplying transport.
+4. Retirement, explicit reopen, and ordinary close clear packed monitor
+   registration metadata; `MWR` cannot be sent on the new connection before a
+   new successful registration.
+5. Packed construction rejects suffix-bearing or non-direct-bit devices before
+   transport. Scalar direct-bit `RD` and `MBS`/`MBR` validation is unchanged.
+6. The old public names have no source, test, example, or binary use; public
+   docs, changelog, compile-checked examples, and this migration record identify
+   the breaking migration.
+
+Evidence:
+
+- Existing approved KV-X500 raw evidence returned `MWS R5000 -> OK` followed by
+  `MWR -> 00002` while adjacent `R5001` was ON. Explicit `.U` returned the same
+  packed value, proving that bare `MWS` is an implicit packed unsigned 16-bit
+  word rather than a Boolean projection.
+- Local deterministic tests cover exact wire spelling, mixed registration,
+  approved accepted spellings, every rejected grammar class, transport
+  retirement, reconnect metadata, preflight rejection, and unchanged
+  scalar/bit-monitor strictness.
+- After the exact guarded Rust program was completed, compiled, reviewed, and
+  separately approved, the public API read `R5000`–`R5015`, calculated `13`,
+  sent bare `MWS R5000`, and returned preserved monitor string `00013`.
+  Evidence: `D:\APP\live-kvx500-20260802\rust_mwr_semantic_acceptance_result.json`.
+- The read-only Rust `HL-KVX500-01` evidence recorded under `LIVE-HL-003`
+  independently reconfirmed the mixed six-target `MWS`/`MWR` contract: direct
+  reads and monitor values were identical and the packed `R5000` field retained
+  the exact PLC spelling `00013`. Evidence:
+  `D:\APP\live-kvx500-20260802\rust_hl_kvx500_01_result.json`.
+- The final read-only Rust `HL-KVX500-02` UDP batch passed two cycles of the
+  fixed 11-request plan against `keyence:kv-x500` at
+  `192.168.250.100:8501`, with all 22 request/response frames accepted and
+  `writes: false`. Traffic totals were 22 requests, 316 transmitted bytes, and
+  246 received bytes. One socket was created, bound/connected, reused for both
+  cycles, and closed once; no active UDP endpoint remained after close. The
+  post-close read was rejected without a send or counter change. Both cycles
+  preserved packed `R5000` as `00013`, returned direct bits `1,0,1`, and had
+  identical direct/monitor word and bit arrays. The runner `src/main.rs`
+  SHA-256 was
+  `355a862694ff69275bc7c3cf35cacd0023d954090487c0f7e0d2d890385db65a`.
+  Evidence:
+  `D:\APP\live-kvx500-20260802\rust_hl_kvx500_02_udp_result.json`, SHA-256
+  `1a6f3de70ac89bcc802419bbbe2abf6c1c8965ac331fd7aa9fd9a2a5509f6ec1`.
+
+- [x] Implementation completed in this repository.
+- [x] Tests added or updated for every acceptance criterion.
+- [x] Formatting, Clippy and rustdoc with warnings denied, 163 tests, all seven examples, crate packaging, and the isolated generated-crate consumer passed.
+- [x] Codex self-review completed against the approved contract and cross-language evidence. Accepted findings corrected and reverified: the original packed metadata incorrectly reused general `.U` parsing, packed responses needed empty-field-preserving tokenization, and the ordinary-close packed-metadata regression was initially missing. Rejected, duplicate, and deferred findings: none.
+- [x] Required wire semantics, corrected Rust public-API mapping, two-cycle UDP
+  connection reuse, close cleanup, and post-close no-send behavior passed
+  KV-X500 live acceptance in `HL-KVX500-02`.
+- [x] Documentation, migration notes, changelog, binary, and compile-checked example agree with the implementation and identify the no-alias migration.
+- [x] Final acceptance criteria verified and the Rust item marked complete.
+
+## HL-RUST-001 / HL-RUST-002 — KV-X500 error continuity and read-plan segmentation
+
+Implementation scope: live evidence for the existing typed PLC-error continuity
+contract and the descending-boundary named-read/poll planner. This item changes
+no runtime source, public API, profile catalog, or supported-device claim.
+
+Target contract: a complete `E0` through `E9` PLC response is returned as
+`HostLinkError::Plc` without retiring the healthy TCP connection. The next read
+uses the same TCP tuple. For caller order `DM100:U`, `DM0:U`, `DM1:U`, both a
+named read and one polling cycle use exactly two planned requests, return values
+in caller order, and agree with direct reads of the same devices.
+
+Runner-finding disposition: the first fixed runner selected `VM0.U` as the
+error-producing request, but the KV-X500 returned the normal value `00000`.
+That run is preserved as NG in
+`D:\APP\live-kvx500-20260802\rust_hl_kvx500_03_result.json`, SHA-256
+`6f3a75adc50d260e381adb8775da167a4f34883ce67295443488f290bcb883c5`.
+This is an accepted runner probe-selection finding, not a PLC or library
+failure. Maintainer support for `VM` remains limited to KV-7000 and KV-8000;
+the observation does not add KV-X500 support and does not authorize a catalog
+change. The corrected fixed runner used the public comment-read API for
+`RDC DM120`, for which the same PLC/project had prior evidence that comment data
+was not registered, and received exact typed PLC error `E6`.
+
+Final live evidence: the corrected read-only `HL-KVX500-03` batch passed against
+`keyence:kv-x500` at `192.168.250.100:8501` with `writes: false`. The PID-owned
+TCP tuple remained
+`192.168.250.110:54990 -> 192.168.250.100:8501` throughout the batch and was
+removed on close. The post-error `DM0.U` continuity read returned `5878`.
+Named, corresponding direct, and one-cycle polling results all agreed:
+`DM100:U = 24243`, `DM0:U = 5878`, and `DM1:U = 0`; named read and polling each
+used exactly two planned requests. The complete batch used exactly 9 requests,
+100 transmitted bytes, and 63 received bytes. Evidence:
+`D:\APP\live-kvx500-20260802\rust_hl_kvx500_03_corrected_result.json`,
+SHA-256
+`f9cb13cf2be887f3a17f2b0b0a781c32c59cabb3bdae352369c5c0fedf441cd8`.
+The frozen corrected runner source SHA-256 was
+`0c5cdcb0b0ded761285d836029cf6ae67521d398c2c5cd7fc2208f56ed0faced`,
+and the executed release binary SHA-256 was
+`fa8617e875662860d53d6abf38f1de9c402b455f4a4831df19dd75c0a19a319e`.
+
+- [x] `HL-RUST-001` live evidence passed: a complete `E6` remained a typed PLC
+  error and the following successful read used the same TCP tuple.
+- [x] `HL-RUST-002` live evidence passed: named read and one polling cycle each
+  used exactly two requests, preserved caller order, and matched direct values.
+- [x] The original NG and corrected passing result are both preserved, and the
+  runner finding has an explicit no-KV-X500-VM-support/catalog-change
+  disposition.
+
 ## RS-REAUDIT-004 — Reject bracketed IPv4 literals
 
 Implementation scope: public connection-option validation and endpoint
@@ -815,3 +1102,24 @@ Machine-verifiable acceptance criteria:
   These changes reject input before DNS/socket/protocol traffic or define a
   deterministic local frame boundary; no PLC/profile support result changed.
   No live PLC communication was performed.
+
+## Final non-live disposition recheck — `HL-001` and `HL-003`
+
+Final source-state targeted checks passed on 2026-08-02 without PLC
+communication.
+
+- `HL-001`: `cargo test --test reaudit_contract
+  tcp_rejects_a_second_nonempty_response_and_never_reuses_it -- --exact` and
+  the same command for
+  `state_changing_tcp_surplus_response_is_never_false_success` each passed
+  1/1. The deterministic peer proves that the surplus line cannot become a
+  later response, the transport retires, and a state-changing request cannot
+  report false success.
+- `HL-003`: exact tests
+  `special_family_float32_rejects_before_fifo_and_transport` and
+  `float32_parser_normalizer_and_hand_built_formatter_share_family_validation`
+  in `tests/high_level.rs` each passed 1/1. Direct, named, polling, parser,
+  normalizer, and hand-built forms reject `Z:F` before FIFO/transport.
+
+- [x] `HL-001` deterministic non-live disposition reverified on the final source state.
+- [x] `HL-003` deterministic non-live disposition reverified on the final source state.

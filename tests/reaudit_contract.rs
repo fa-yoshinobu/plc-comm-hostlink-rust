@@ -123,6 +123,35 @@ async fn tcp_ignores_only_empty_separators_and_rejects_delayed_unowned_data_befo
 }
 
 #[tokio::test]
+async fn monitor_registration_is_connection_scoped_and_reopen_requires_registration() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (mut first, _) = listener.accept().await.unwrap();
+        assert_eq!(read_command(&mut first).await, "MBS R000 R001");
+        first.write_all(b"OK\r\n").await.unwrap();
+        assert!(read_command(&mut first).await.is_empty());
+
+        let (mut reopened, _) = listener.accept().await.unwrap();
+        !received_more_data(&mut reopened, Duration::from_millis(150)).await
+    });
+    let client = HostLinkClient::connect(options(port, HostLinkTransportMode::Tcp))
+        .await
+        .unwrap();
+
+    client.register_monitor_bits(&["R0", "R1"]).await.unwrap();
+    client.close().await.unwrap();
+    client.open().await.unwrap();
+
+    let error = client.read_monitor_bits().await.unwrap_err();
+    assert!(matches!(error, HostLinkError::Protocol(_)));
+    assert!(error.to_string().contains("registered"));
+    assert!(client.is_open().await);
+    client.close().await.unwrap();
+    assert!(server.await.unwrap());
+}
+
+#[tokio::test]
 async fn state_changing_tcp_surplus_response_is_never_false_success() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -146,10 +175,10 @@ async fn state_changing_tcp_surplus_response_is_never_false_success() {
 }
 
 #[tokio::test]
-async fn monitor_words_validate_each_registered_format_and_normalize_hex() {
-    let (port, _) = scripted_tcp(|command| match command {
-        command if command.starts_with("MWS ") => b"OK".to_vec(),
-        "MWR" => b"65535 -32768 a 4294967295 -2147483648 ON".to_vec(),
+async fn monitor_words_validate_mixed_formats_and_packed_direct_bits_u16() {
+    let (port, commands) = scripted_tcp(|command| match command {
+        "MWS DM0.U DM1.S DM2.H DM3.D DM5.L MR000" => b"OK".to_vec(),
+        "MWR" => b"65535 -32768 a 4294967295 -2147483648 65535".to_vec(),
         _ => b"E1".to_vec(),
     })
     .await;
@@ -163,14 +192,25 @@ async fn monitor_words_validate_each_registered_format_and_normalize_hex() {
             HostLinkMonitorWord::numeric("DM2", "H"),
             HostLinkMonitorWord::numeric("DM3", "D"),
             HostLinkMonitorWord::numeric("DM5", "L"),
-            HostLinkMonitorWord::direct_bit("MR0"),
+            HostLinkMonitorWord::packed_direct_bits_u16("MR0"),
         ])
         .await
         .unwrap();
 
     assert_eq!(
         client.read_monitor_words().await.unwrap(),
-        ["65535", "-32768", "000A", "4294967295", "-2147483648", "ON"]
+        [
+            "65535",
+            "-32768",
+            "000A",
+            "4294967295",
+            "-2147483648",
+            "65535"
+        ]
+    );
+    assert_eq!(
+        commands.lock().unwrap().as_slice(),
+        ["MWS DM0.U DM1.S DM2.H DM3.D DM5.L MR000", "MWR"]
     );
 }
 
@@ -182,7 +222,7 @@ async fn monitor_words_reject_malformed_tokens_for_every_registered_format() {
         (HostLinkMonitorWord::numeric("DM0", "H"), "10000"),
         (HostLinkMonitorWord::numeric("DM0", "D"), "-1"),
         (HostLinkMonitorWord::numeric("DM0", "L"), "2147483648"),
-        (HostLinkMonitorWord::direct_bit("MR0"), "2"),
+        (HostLinkMonitorWord::packed_direct_bits_u16("MR0"), "65536"),
     ] {
         let (port, _) = scripted_tcp(move |command| match command {
             command if command.starts_with("MWS ") => b"OK".to_vec(),
@@ -194,10 +234,11 @@ async fn monitor_words_reject_malformed_tokens_for_every_registered_format() {
             .await
             .unwrap();
         client.register_monitor_words(&[entry]).await.unwrap();
-        assert!(matches!(
-            client.read_monitor_words().await,
-            Err(HostLinkError::Protocol(_))
-        ));
+        let result = client.read_monitor_words().await;
+        assert!(
+            matches!(result, Err(HostLinkError::Protocol(_))),
+            "response={response:?}, result={result:?}"
+        );
         assert!(!client.is_open().await, "response={response}");
     }
 }
@@ -214,8 +255,8 @@ async fn all_semantic_hex_paths_return_four_uppercase_digits_while_raw_is_exact(
         "RDS DM8.U 1" => b"10".to_vec(),
         "RDE DM9.H 1" => b"f".to_vec(),
         "URD 01 10.H 1" => b"a".to_vec(),
-        "RD R000.H" => b"0 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0".to_vec(),
-        "RD T0.H" => b"0 1 a".to_vec(),
+        "RD R000.H" => b"a".to_vec(),
+        "RD T0.H" => b"0 270F 270F".to_vec(),
         "RAW" => b"a".to_vec(),
         _ => b"E1".to_vec(),
     })
@@ -271,11 +312,11 @@ async fn all_semantic_hex_paths_return_four_uppercase_digits_while_raw_is_exact(
     );
     assert_eq!(
         client.read("T0", Some("H")).await.unwrap(),
-        ["0000", "0001", "000A"]
+        ["0", "270F", "270F"]
     );
     assert_eq!(
         client.read_typed("T0", "H").await.unwrap(),
-        HostLinkValue::Text("000A".to_owned())
+        HostLinkValue::Text("270F".to_owned())
     );
     assert_eq!(client.send_raw("RAW").await.unwrap(), b"a");
 }
@@ -316,6 +357,175 @@ async fn descending_named_read_boundary_keeps_compilation_and_poll_reuses_the_pl
             "RDS DM100.U 1"
         ]
     );
+}
+
+#[tokio::test]
+async fn packed_direct_bits_u16_accepts_unsigned_boundaries_and_exact_wire() {
+    for response in ["0", "2", "13", "00000", "00002", "00013", "65535"] {
+        let (port, commands) = scripted_tcp(move |command| match command {
+            "MWS R000" => b"OK".to_vec(),
+            "MWR" => response.as_bytes().to_vec(),
+            _ => b"E1".to_vec(),
+        })
+        .await;
+        let client = HostLinkClient::connect(options(port, HostLinkTransportMode::Tcp))
+            .await
+            .unwrap();
+
+        client
+            .register_monitor_words(&[HostLinkMonitorWord::packed_direct_bits_u16("R0")])
+            .await
+            .unwrap();
+        assert_eq!(client.read_monitor_words().await.unwrap(), [response]);
+        assert_eq!(commands.lock().unwrap().as_slice(), ["MWS R000", "MWR"]);
+    }
+}
+
+#[tokio::test]
+async fn packed_direct_bits_u16_rejects_invalid_shape_and_retires_transport() {
+    for response in [
+        ",", "+2", "-1", " 2", "2 ", "\t2", "2\t", "2.0", "ON", "２", "000000", "65536", "1 0",
+    ] {
+        let (port, _) = scripted_tcp(move |command| match command {
+            "MWS R000" => b"OK".to_vec(),
+            "MWR" => response.as_bytes().to_vec(),
+            _ => b"E1".to_vec(),
+        })
+        .await;
+        let client = HostLinkClient::connect(options(port, HostLinkTransportMode::Tcp))
+            .await
+            .unwrap();
+
+        client
+            .register_monitor_words(&[HostLinkMonitorWord::packed_direct_bits_u16("R0")])
+            .await
+            .unwrap();
+        let result = client.read_monitor_words().await;
+        assert!(
+            matches!(result, Err(HostLinkError::Protocol(_))),
+            "response={response:?}, result={result:?}"
+        );
+        assert!(!client.is_open().await, "response={response}");
+    }
+}
+
+#[tokio::test]
+async fn invalid_packed_mwr_reconnect_clears_monitor_word_metadata() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (mut first, _) = listener.accept().await.unwrap();
+        assert_eq!(read_command(&mut first).await, "MWS R000");
+        first.write_all(b"OK\r\n").await.unwrap();
+        assert_eq!(read_command(&mut first).await, "MWR");
+        first.write_all(b"65536\r\n").await.unwrap();
+        assert!(read_command(&mut first).await.is_empty());
+
+        let (mut reopened, _) = listener.accept().await.unwrap();
+        !received_more_data(&mut reopened, Duration::from_millis(150)).await
+    });
+    let client = HostLinkClient::connect(options(port, HostLinkTransportMode::Tcp))
+        .await
+        .unwrap();
+    client
+        .register_monitor_words(&[HostLinkMonitorWord::packed_direct_bits_u16("R0")])
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        client.read_monitor_words().await,
+        Err(HostLinkError::Protocol(_))
+    ));
+    assert!(!client.is_open().await);
+
+    client.open().await.unwrap();
+    let error = client.read_monitor_words().await.unwrap_err();
+    assert!(matches!(error, HostLinkError::Protocol(_)));
+    assert!(error.to_string().contains("registered"));
+    assert!(client.is_open().await);
+    client.close().await.unwrap();
+    assert!(server.await.unwrap());
+}
+
+#[tokio::test]
+async fn ordinary_close_clears_packed_monitor_word_metadata() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (mut first, _) = listener.accept().await.unwrap();
+        assert_eq!(read_command(&mut first).await, "MWS R000");
+        first.write_all(b"OK\r\n").await.unwrap();
+        assert!(read_command(&mut first).await.is_empty());
+
+        let (mut reopened, _) = listener.accept().await.unwrap();
+        !received_more_data(&mut reopened, Duration::from_millis(150)).await
+    });
+    let client = HostLinkClient::connect(options(port, HostLinkTransportMode::Tcp))
+        .await
+        .unwrap();
+    client
+        .register_monitor_words(&[HostLinkMonitorWord::packed_direct_bits_u16("R0")])
+        .await
+        .unwrap();
+
+    client.close().await.unwrap();
+    client.open().await.unwrap();
+    let error = client.read_monitor_words().await.unwrap_err();
+    assert!(matches!(error, HostLinkError::Protocol(_)));
+    assert!(error.to_string().contains("registered"));
+    assert!(client.is_open().await);
+    client.close().await.unwrap();
+    assert!(server.await.unwrap());
+}
+
+#[tokio::test]
+async fn packed_monitor_does_not_weaken_scalar_rd_or_mbr_bit_tokens() {
+    for (register, read, response) in [
+        (None, "RD R000", "00000"),
+        (Some("MBS R000"), "MBR", "00000"),
+    ] {
+        let (port, _) = scripted_tcp(move |command| {
+            if Some(command) == register {
+                b"OK".to_vec()
+            } else if command == read {
+                response.as_bytes().to_vec()
+            } else {
+                b"E1".to_vec()
+            }
+        })
+        .await;
+        let client = HostLinkClient::connect(options(port, HostLinkTransportMode::Tcp))
+            .await
+            .unwrap();
+        let result = if register.is_some() {
+            client.register_monitor_bits(&["R0"]).await.unwrap();
+            client.read_monitor_bits().await
+        } else {
+            client.read("R0", None).await
+        };
+        assert!(matches!(result, Err(HostLinkError::Protocol(_))));
+        assert!(!client.is_open().await);
+    }
+}
+
+#[tokio::test]
+async fn packed_direct_bits_u16_rejects_nonbit_and_suffix_inputs_before_send() {
+    let (port, commands) = scripted_tcp(|_| b"OK".to_vec()).await;
+    let client = HostLinkClient::connect(options(port, HostLinkTransportMode::Tcp))
+        .await
+        .unwrap();
+
+    for entry in [
+        HostLinkMonitorWord::packed_direct_bits_u16("DM0"),
+        HostLinkMonitorWord::packed_direct_bits_u16("R0.U"),
+    ] {
+        assert!(matches!(
+            client.register_monitor_words(&[entry]).await,
+            Err(HostLinkError::Protocol(_))
+        ));
+    }
+    assert!(commands.lock().unwrap().is_empty());
+    assert!(client.is_open().await);
 }
 
 #[tokio::test]

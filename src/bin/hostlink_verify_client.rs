@@ -545,10 +545,12 @@ fn parse_monitor_words(
         .iter()
         .map(|entry| {
             let (device, data_format) = entry.split_once(':').ok_or(
-                "monitor word entries require DEVICE:FORMAT, for example DM0:U or MR0:BIT",
+                "monitor word entries require DEVICE:FORMAT, for example DM0:U or MR0:PACKED_U16",
             )?;
-            if data_format.eq_ignore_ascii_case("BIT") {
-                Ok(HostLinkMonitorWord::direct_bit(device))
+            if data_format.eq_ignore_ascii_case("PACKED_U16") {
+                Ok(HostLinkMonitorWord::packed_direct_bits_u16(device))
+            } else if data_format.eq_ignore_ascii_case("BIT") {
+                Err("BIT is not a word-monitor format; use PACKED_U16 for bare packed MWS or the monitor-bits operation for individual bits".into())
             } else {
                 Ok(HostLinkMonitorWord::numeric(device, data_format))
             }
@@ -586,4 +588,28 @@ fn normalize_named(values: &plc_comm_kv_hostlink::NamedReadResult) -> Value {
         map.insert(key.clone(), normalize_value(value));
     }
     Value::Object(map)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packed_monitor_cli_format_maps_to_the_public_packed_u16_api() {
+        let entries = vec!["MR0:PACKED_U16".to_owned()];
+
+        assert_eq!(
+            parse_monitor_words(&entries).unwrap(),
+            vec![HostLinkMonitorWord::packed_direct_bits_u16("MR0")]
+        );
+    }
+
+    #[test]
+    fn old_bit_word_monitor_cli_format_is_not_a_compatibility_alias() {
+        let entries = vec!["MR0:BIT".to_owned()];
+
+        let error = parse_monitor_words(&entries).unwrap_err().to_string();
+        assert!(error.contains("not a word-monitor format"));
+        assert!(error.contains("PACKED_U16"));
+    }
 }

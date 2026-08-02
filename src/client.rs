@@ -124,6 +124,19 @@ fn validate_response_tokens(tokens: &[String], data_format: &str) -> Result<(), 
     Ok(())
 }
 
+fn validate_packed_direct_bits_u16_token(token: &str) -> Result<(), HostLinkError> {
+    let valid = (1..=5).contains(&token.len())
+        && token.bytes().all(|byte| byte.is_ascii_digit())
+        && token.parse::<u16>().is_ok();
+    if valid {
+        Ok(())
+    } else {
+        Err(HostLinkError::protocol(format!(
+            "Invalid packed direct-bit MWR token '{token}'; expected 1-5 ASCII decimal digits in 0..=65535"
+        )))
+    }
+}
+
 fn validate_and_normalize_response_tokens(
     tokens: &mut [String],
     data_format: &str,
@@ -142,6 +155,19 @@ fn validate_and_normalize_response_tokens(
     Ok(())
 }
 
+fn validate_and_normalize_timer_counter_response_tokens(
+    tokens: &mut [String],
+    data_format: &str,
+) -> Result<(), HostLinkError> {
+    if !matches!(tokens.first().map(String::as_str), Some("0" | "1")) {
+        return Err(HostLinkError::protocol(format!(
+            "Invalid timer/counter status token: {}",
+            tokens.first().map(String::as_str).unwrap_or("<missing>")
+        )));
+    }
+    validate_and_normalize_response_tokens(&mut tokens[1..], data_format)
+}
+
 fn validate_response_token_count(tokens: &[String], expected: usize) -> Result<(), HostLinkError> {
     if tokens.len() != expected {
         return Err(HostLinkError::protocol(format!(
@@ -152,16 +178,9 @@ fn validate_response_token_count(tokens: &[String], expected: usize) -> Result<(
     Ok(())
 }
 
-fn read_response_token_count(device_type: &str, data_format: &str) -> usize {
+fn read_response_token_count(device_type: &str, _data_format: &str) -> usize {
     if matches!(device_type, "T" | "C") {
         return 3;
-    }
-    if is_direct_bit_device_type(device_type) {
-        return match data_format {
-            ".U" | ".S" | ".H" => 16,
-            ".D" | ".L" => 32,
-            _ => 1,
-        };
     }
     1
 }
@@ -310,6 +329,12 @@ struct UdpTransport {
     socket: Option<UdpSocket>,
 }
 
+#[derive(Clone)]
+enum MonitorWordResponseFormat {
+    Numeric(String),
+    PackedDirectBitsU16,
+}
+
 struct ClientInner {
     options: HostLinkConnectionOptions,
     transport: Option<Transport>,
@@ -323,7 +348,7 @@ struct ClientInner {
     tcp_copy_bytes: u64,
     transport_buffer_allocation_count: u64,
     monitor_bit_count: Option<usize>,
-    monitor_word_formats: Option<Vec<String>>,
+    monitor_word_formats: Option<Vec<MonitorWordResponseFormat>>,
     // Set before the first transport await and cleared only after a complete
     // response. If the future is dropped, the next operation replaces the
     // poisoned transport before sending another request.
@@ -700,12 +725,18 @@ impl HostLinkClient {
             direct.retire_transport().await;
             return Err(error);
         }
-        let response_format = if is_direct_bit_device_type(&address.device_type) {
-            ""
+        let response_format =
+            if is_direct_bit_device_type(&address.device_type) && suffix.is_empty() {
+                ""
+            } else {
+                suffix.as_str()
+            };
+        let validation = if matches!(address.device_type.as_str(), "T" | "C") {
+            validate_and_normalize_timer_counter_response_tokens(&mut tokens, response_format)
         } else {
-            suffix.as_str()
+            validate_and_normalize_response_tokens(&mut tokens, response_format)
         };
-        if let Err(error) = validate_and_normalize_response_tokens(&mut tokens, response_format) {
+        if let Err(error) = validation {
             direct.retire_transport().await;
             return Err(error);
         }
@@ -838,20 +869,39 @@ impl HostLinkClient {
 
         let mut command = String::from("MWS");
         let mut formats = Vec::with_capacity(devices.len());
-        for device in devices {
-            let (device, data_format) = match device {
+        for entry in devices {
+            let (device, data_format, packed_direct_bits_u16) = match entry {
                 HostLinkMonitorWord::Numeric {
                     device,
                     data_format,
-                } => (device.as_str(), Some(data_format.as_str())),
-                HostLinkMonitorWord::DirectBit { device } => (device.as_str(), None),
+                } => (device.as_str(), Some(data_format.as_str()), false),
+                HostLinkMonitorWord::PackedDirectBitsU16 { device } => {
+                    (device.as_str(), None, true)
+                }
             };
             let mut address = parse_device(device)?;
             validate_device_type("MWS", &address.device_type, mws_device_types())?;
-            let suffix = require_explicit_format(&address, data_format)?;
+            let suffix = if packed_direct_bits_u16 {
+                require_no_suffix(&address, "packed direct-bit MWS")?;
+                if !is_direct_bit_device_type(&address.device_type) {
+                    return Err(HostLinkError::protocol(format!(
+                        "Packed direct-bit MWS requires a direct-bit device, received '{}'",
+                        address.device_type
+                    )));
+                }
+                String::from(".U")
+            } else {
+                require_explicit_format(&address, data_format)?
+            };
             validate_device_span(&address.device_type, address.number, &suffix, 1)?;
-            address.suffix = suffix.clone();
-            formats.push(suffix);
+            formats.push(if packed_direct_bits_u16 {
+                MonitorWordResponseFormat::PackedDirectBitsU16
+            } else {
+                MonitorWordResponseFormat::Numeric(suffix.clone())
+            });
+            if !packed_direct_bits_u16 {
+                address.suffix = suffix;
+            }
             command.push(' ');
             command.push_str(&address.to_text()?);
         }
@@ -906,15 +956,28 @@ impl HostLinkClient {
                 HostLinkError::protocol("Monitor words must be registered before MWR")
             })?;
         let response = direct.send_decoded_direct("MWR", false).await?;
-        let mut tokens = split_data_tokens(&response);
+        let mut tokens = if formats
+            .iter()
+            .any(|format| matches!(format, MonitorWordResponseFormat::PackedDirectBitsU16))
+        {
+            response.split([' ', ',']).map(ToOwned::to_owned).collect()
+        } else {
+            split_data_tokens(&response)
+        };
         if let Err(error) = validate_response_token_count(&tokens, formats.len()) {
             direct.retire_transport().await;
             return Err(error);
         }
-        for (token, data_format) in tokens.iter_mut().zip(&formats) {
-            if let Err(error) =
-                validate_and_normalize_response_tokens(std::slice::from_mut(token), data_format)
-            {
+        for (token, response_format) in tokens.iter_mut().zip(&formats) {
+            let validation = match response_format {
+                MonitorWordResponseFormat::Numeric(data_format) => {
+                    validate_and_normalize_response_tokens(std::slice::from_mut(token), data_format)
+                }
+                MonitorWordResponseFormat::PackedDirectBitsU16 => {
+                    validate_packed_direct_bits_u16_token(token)
+                }
+            };
+            if let Err(error) = validation {
                 direct.retire_transport().await;
                 return Err(error);
             }
@@ -1930,6 +1993,29 @@ async fn recv_tcp_line(
         rx_buf[target..target + read].copy_from_slice(&tcp_read_buf[..read]);
         *copy_bytes += read as u64;
         *rx_count += read;
+    }
+}
+
+#[cfg(test)]
+mod monitor_word_response_tests {
+    use super::validate_packed_direct_bits_u16_token;
+
+    #[test]
+    fn packed_u16_wire_grammar_is_distinct_from_general_unsigned_parsing() {
+        for token in ["0", "2", "13", "00000", "00002", "00013", "65535"] {
+            assert!(
+                validate_packed_direct_bits_u16_token(token).is_ok(),
+                "token={token:?}"
+            );
+        }
+        for token in [
+            "", "+2", "-1", " 2", "2 ", "\t2", "2\t", "2.0", "ON", "２", "000000", "65536",
+        ] {
+            assert!(
+                validate_packed_direct_bits_u16_token(token).is_err(),
+                "token={token:?}"
+            );
+        }
     }
 }
 

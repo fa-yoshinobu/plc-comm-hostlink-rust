@@ -37,8 +37,19 @@ pub enum HostLinkCommentEncoding {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostLinkMonitorWord {
-    Numeric { device: String, data_format: String },
-    DirectBit { device: String },
+    Numeric {
+        device: String,
+        data_format: String,
+    },
+    /// One packed unsigned 16-bit view beginning at a direct-bit device.
+    ///
+    /// Registration uses the exact bare `MWS` device token required by the
+    /// PLC, while the corresponding `MWR` field is validated as 1-5 ASCII
+    /// decimal digits in `0..=65535`. This is not an individual-bit monitor entry; use
+    /// `register_monitor_bits`/`read_monitor_bits` for that contract.
+    PackedDirectBitsU16 {
+        device: String,
+    },
 }
 
 impl HostLinkMonitorWord {
@@ -49,8 +60,13 @@ impl HostLinkMonitorWord {
         }
     }
 
-    pub fn direct_bit(device: impl Into<String>) -> Self {
-        Self::DirectBit {
+    /// Constructs one bare-wire packed unsigned 16-bit direct-bit monitor entry.
+    ///
+    /// The device must be an unsuffixed direct-bit address. Registration emits
+    /// no format suffix; the corresponding `MWR` field accepts exactly 1-5
+    /// ASCII decimal digits whose numeric value is in `0..=65535`.
+    pub fn packed_direct_bits_u16(device: impl Into<String>) -> Self {
+        Self::PackedDirectBitsU16 {
             device: device.into(),
         }
     }

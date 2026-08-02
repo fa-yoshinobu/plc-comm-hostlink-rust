@@ -1,7 +1,7 @@
 const GETTING_STARTED: &str = include_str!("../docs/GETTING_STARTED.md");
 const USAGE_GUIDE: &str = include_str!("../docs/USAGE_GUIDE.md");
 
-use plc_comm_kv_hostlink::HostLinkClient;
+use plc_comm_kv_hostlink::{HostLinkClient, HostLinkMonitorWord};
 
 #[allow(dead_code)]
 async fn compile_cleanup_control_flow(
@@ -45,6 +45,20 @@ async fn compile_cleanup_control_flow(
         .await;
     restore_result?;
     let _ = readback_result?;
+    Ok(())
+}
+
+#[allow(dead_code)]
+async fn compile_packed_monitor_example(
+    client: &HostLinkClient,
+) -> Result<(), Box<dyn std::error::Error>> {
+    client
+        .register_monitor_words(&[
+            HostLinkMonitorWord::numeric("DM120", "U"),
+            HostLinkMonitorWord::packed_direct_bits_u16("R5000"),
+        ])
+        .await?;
+    let _values = client.read_monitor_words().await?;
     Ok(())
 }
 
@@ -116,4 +130,19 @@ fn clock_example_declares_non_restorable_state_change() {
     assert!(clock.contains("changes PLC state"));
     assert!(clock.contains("exact automatic restore impossible"));
     assert!(clock.contains("controlled PLC"));
+}
+
+#[test]
+fn packed_monitor_example_names_wire_and_response_semantics() {
+    let monitor = section(
+        USAGE_GUIDE,
+        "## Word monitor registration",
+        "## Expansion-unit buffer access",
+    );
+    assert!(monitor.contains("packed_direct_bits_u16"));
+    assert!(monitor.contains("MWS R5000"));
+    assert!(monitor.contains("1-5 ASCII decimal"));
+    assert!(monitor.contains("00013"));
+    assert!(monitor.contains("six or more digits"));
+    assert!(monitor.contains("register_monitor_bits"));
 }

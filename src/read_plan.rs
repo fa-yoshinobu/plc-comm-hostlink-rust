@@ -197,8 +197,9 @@ fn try_parse_optimizable_read_named_request(
         };
     if is_direct_bit_device_type(&base_address.device_type) && kind != ReadPlanValueKind::DirectBit
     {
-        // Direct-bit word views return 16/32 tokens per RD. They cannot share the
-        // normal word-device RDS plan without shifting the logical values.
+        // A direct-bit word view is one packed scalar spanning 16 or 32 bit
+        // addresses. It cannot share the normal word-device RDS plan without
+        // shifting the logical values.
         return None;
     }
     if is_native_32bit_device_type(&base_address.device_type)

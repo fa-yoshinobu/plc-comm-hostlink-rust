@@ -733,18 +733,10 @@ async fn timeout_contract_has_three_second_default_rejects_zero_and_closes_timed
 }
 
 #[tokio::test]
-async fn read_named_direct_bit_word_views_use_independent_sixteen_bit_reads() {
-    let first = (0..16)
-        .map(|bit| if matches!(bit, 0 | 3 | 15) { "1" } else { "0" })
-        .collect::<Vec<_>>()
-        .join(" ");
-    let second = (0..16)
-        .map(|bit| if matches!(bit, 1 | 15) { "1" } else { "0" })
-        .collect::<Vec<_>>()
-        .join(" ");
+async fn read_named_direct_bit_word_views_use_independent_scalar_reads() {
     let (port, received) = start_scripted_server(move |command| match command.as_str() {
-        "RD M0.U" => first.clone(),
-        "RD M1.U" => second.clone(),
+        "RD M0.U" => "32777".to_owned(),
+        "RD M1.U" => "32770".to_owned(),
         _ => "E1".to_owned(),
     })
     .await;
@@ -918,14 +910,14 @@ async fn hexadecimal_typed_read_requires_exactly_one_valid_token() {
 
 #[tokio::test]
 async fn single_read_token_count_follows_device_and_format() {
-    let (port, _) = start_scripted_server(|command| {
-        let count = match command.as_str() {
-            "RD R000.U" => 16,
-            "RD R000.D" => 32,
-            "RD DM0.U" => 1,
-            _ => return "E1".to_owned(),
-        };
-        (0..count).map(|_| "0").collect::<Vec<_>>().join(" ")
+    let (port, _) = start_scripted_server(|command| match command.as_str() {
+        "RD R000.U" => "00000".to_owned(),
+        "RD R000.S" => "+00000".to_owned(),
+        "RD R000.H" => "0000".to_owned(),
+        "RD R000.D" => "0000000000".to_owned(),
+        "RD R000.L" => "+0000000000".to_owned(),
+        "RD DM0.U" => "0".to_owned(),
+        _ => "E1".to_owned(),
     })
     .await;
     let mut options = HostLinkConnectionOptions::new(
@@ -938,9 +930,58 @@ async fn single_read_token_count_follows_device_and_format() {
     options.port = port;
     let client = HostLinkClient::connect(options).await.unwrap();
 
-    assert_eq!(client.read("R0", Some("U")).await.unwrap().len(), 16);
-    assert_eq!(client.read("R0", Some("D")).await.unwrap().len(), 32);
-    assert_eq!(client.read("DM0", Some("U")).await.unwrap().len(), 1);
+    assert_eq!(client.read("R0", Some("U")).await.unwrap(), ["00000"]);
+    assert_eq!(client.read("R0", Some("S")).await.unwrap(), ["+00000"]);
+    assert_eq!(client.read("R0", Some("H")).await.unwrap(), ["0000"]);
+    assert_eq!(client.read("R0", Some("D")).await.unwrap(), ["0000000000"]);
+    assert_eq!(client.read("R0", Some("L")).await.unwrap(), ["+0000000000"]);
+    assert_eq!(client.read("DM0", Some("U")).await.unwrap(), ["0"]);
+}
+
+#[tokio::test]
+async fn low_level_timer_hex_read_rejects_formatted_status_and_retires_transport() {
+    let (port, _) = start_scripted_server(|command| match command.as_str() {
+        "RD T0.H" => "0000,270F,270F".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let error = client.read("T0", Some("H")).await.unwrap_err();
+
+    assert!(error.to_string().contains("status"));
+    assert!(!client.is_open().await);
+}
+
+#[tokio::test]
+async fn direct_bit_formatted_read_rejects_multiple_scalar_tokens_and_retires_transport() {
+    let (port, _) = start_scripted_server(|command| match command.as_str() {
+        "RD R000.H" => "0000 0000".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let error = client.read("R0", Some("H")).await.unwrap_err();
+
+    assert!(error.to_string().contains("expected 1"));
+    assert!(!client.is_open().await);
 }
 
 #[tokio::test]
@@ -2415,20 +2456,20 @@ async fn command_device_sets_follow_manual_and_xym_aliases() {
             HostLinkMonitorWord::numeric("D100", "U"),
             HostLinkMonitorWord::numeric("E100", "U"),
             HostLinkMonitorWord::numeric("F100", "U"),
-            HostLinkMonitorWord::direct_bit("MR100"),
-            HostLinkMonitorWord::direct_bit("LR100"),
+            HostLinkMonitorWord::packed_direct_bits_u16("MR100"),
+            HostLinkMonitorWord::packed_direct_bits_u16("LR100"),
         ])
         .await
         .unwrap();
     assert!(
         client
-            .register_monitor_words(&[HostLinkMonitorWord::direct_bit("M100")])
+            .register_monitor_words(&[HostLinkMonitorWord::packed_direct_bits_u16("M100")])
             .await
             .is_err()
     );
     assert!(
         client
-            .register_monitor_words(&[HostLinkMonitorWord::direct_bit("L100")])
+            .register_monitor_words(&[HostLinkMonitorWord::packed_direct_bits_u16("L100")])
             .await
             .is_err()
     );

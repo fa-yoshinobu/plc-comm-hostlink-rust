@@ -62,11 +62,12 @@ propagate through direct, consecutive, set-value, expansion-buffer, and typed
 writes before transport. There is no infallible compatibility formatter.
 
 `HostLinkClock.year` is the explicit two-digit PLC year and must be `0..=99`.
-Semantic reads validate command-derived response counts. Direct-bit responses
-accept only the exact tokens `0`, `1`, `OFF`, or `ON` without trimming or case
-folding, while numeric reads of direct-bit devices require 16 or
-32 response points according to the explicit format. Malformed semantic
-responses close the connection generation.
+Semantic reads validate command-derived response counts. Bare direct-bit
+responses accept only the exact tokens `0`, `1`, `OFF`, or `ON` without
+trimming or case folding. Formatted direct-bit single reads return one packed
+numeric token: `.U`, `.S`, and `.H` represent 16 bits, while `.D` and `.L`
+represent 32 bits. Signed `.S` and `.L` tokens may include an explicit leading
+`+`. Malformed semantic responses close the connection generation.
 UDP responses require a CR/LF terminator. A valid completed exchange reuses the
 connected UDP socket and local endpoint. Timeout, cancellation, I/O/protocol or
 framing failure, an extra response, or a pre-send unowned datagram discards that
@@ -74,14 +75,30 @@ socket; the next operation creates a replacement from the resolved endpoint.
 Host Link has no request identifier, so a duplicate arriving between the
 pre-send check and current response remains inherently indistinguishable. TCP
 accepts one non-empty response per request and retires the connection when it
-receives an additional unowned non-empty response.
+receives an additional unowned non-empty response. The same request-identifier
+limitation leaves a TCP race between the final pre-send check and send. Healthy
+TCP connections remain persistent because a connection per request would add a
+handshake without adding a protocol identifier; every observable anomaly still
+retires the connection and requires explicit reopen.
 All non-format commands, including forced control, monitor-bit registration,
 comment reads, and timer/counter helpers, reject suffix-bearing devices.
 Monitor reads require a successful registration in the current connection
 generation and enforce the exact registered token count. Word-monitor
 registration also preserves each entry's ordered format, and `MWR` validates
-each token against its corresponding `.U`, `.S`, `.H`, `.D`, `.L`, or direct-bit
-format before returning any values.
+each token against its corresponding `.U`, `.S`, `.H`, `.D`, `.L`, or packed
+direct-bit unsigned 16-bit format before returning any values.
+
+`HostLinkMonitorWord::numeric(device, format)` emits the explicit numeric suffix
+in `MWS`. `HostLinkMonitorWord::packed_direct_bits_u16(device)` accepts only an
+unsuffixed direct-bit device, emits that exact bare device in `MWS`, and validates
+the corresponding `MWR` field as exactly 1-5 ASCII decimal digits whose numeric
+value is from `0` through `65535`. Leading zeros are optional and the returned
+`String` preserves them. Empty fields, signs, whitespace, nondecimal text, six
+or more digits, and overflow are rejected. It does not return one Boolean. For
+individual bit values, use `register_monitor_bits` followed by
+`read_monitor_bits`; those `MBR` fields remain strict `0`/`1`/`ON`/`OFF`. The
+former `DirectBit` enum variant and `direct_bit` constructor were removed
+without an alias.
 
 ## High-level helpers
 
@@ -109,10 +126,15 @@ dtype, bit index, and scalar count. Spelling-only variants are rejected before
 FIFO admission, while distinct dtype views, bit indices, and overlapping spans
 remain valid. Result keys preserve the original input strings.
 
-Semantic `.H` reads validate 1..4 hexadecimal digits and return exactly four
-uppercase digits (`0000` through `FFFF`); raw reads and write spelling are not
-normalized. Timer/counter composite reads require exactly three semantic tokens,
-status `0` or `1`, and valid current and preset fields for the requested type.
+Numeric semantic `.H` values validate 1..4 hexadecimal digits and return
+exactly four uppercase digits (`0000` through `FFFF`); raw reads and write
+spelling are not normalized. Timer/counter composite reads require exactly
+three semantic tokens. The first is a structural status field validated as the
+exact raw PLC token `0` or `1`; `.U`, `.S`, `.H`, `.D`, or `.L` applies only to
+the current and preset fields. Consequently, low-level `.H` reads expose status
+as `0`/`1`, not the former incorrect `0000`/`0001`, while current and preset are
+canonical four-digit uppercase hexadecimal values. Public signatures and
+high-level return types are unchanged.
 Malformed semantic responses close the connection. Float32 parsing,
 formatting, reads, and writes use canonical family metadata and accept only the
 ordinary `.U` families `DM`, `EM`, `FM`, `ZF`, `W`, `TM`, `CM`, `VM`,
