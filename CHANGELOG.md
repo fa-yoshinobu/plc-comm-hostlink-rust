@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Docs: Made controlled register and expansion-buffer writes parse saved read values into valid typed restore payloads and attempt restoration before propagating readback failures, and documented the non-restorable operational effect of setting the PLC clock.
+- Tests: Added compile-checked documentation contract tests for cleanup ordering, restore payload types, and PLC-clock safety guidance.
 - Breaking: Reject Float32 `:F`/`.F` access for the `Z` family at every parser, formatter, typed, named, polling, and hand-built-address entry point before FIFO admission or transport. Integer `Z` access and Float32 access for the other canonical word families are unchanged.
 - Breaking: Canonicalize every semantic `.H` read result to exactly four uppercase hexadecimal digits (`0000` through `FFFF`). Raw response bytes and hexadecimal write spelling are unchanged.
 - Library: Reject a second non-empty TCP response owned by one non-pipelined request, retire the connection, and prevent that response from satisfying any later operation; trailing CR/LF-only separators remain permitted.

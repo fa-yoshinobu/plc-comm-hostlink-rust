@@ -65,10 +65,18 @@ Use only an address reserved by your PLC program for testing.
 ```rust
 let original = client.read_typed("DM120", "U").await?;
 client.write_typed("DM120", "U", 1234_u16).await?;
-let readback = client.read_typed("DM120", "U").await?;
-client.write_typed("DM120", "U", original).await?;
+let readback_result = client.read_typed("DM120", "U").await;
+let restore_result = client.write_typed("DM120", "U", original).await;
+restore_result?;
+let readback = readback_result?;
 println!("{readback:?}");
 ```
+
+The readback result is not propagated until after restoration is attempted. If
+the test write itself has an unknown outcome, do not automatically restore or
+retry; reopen the client, inspect `DM120`, and reconcile it explicitly. If the
+restoration attempt fails, also inspect `DM120` and reconcile its value manually
+before continuing.
 
 ## Common failures
 

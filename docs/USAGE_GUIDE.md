@@ -74,9 +74,23 @@ Every semantic `.H` result is the canonical four-character uppercase form
 Low-level numeric APIs require a base device and a separate format:
 
 ```rust
-let values = client.read_consecutive("DM100", 2, Some("D")).await?;
+let original = client
+    .read_consecutive("DM200", 2, Some("D"))
+    .await?
+    .into_iter()
+    .map(|value| value.parse::<u32>())
+    .collect::<Result<Vec<_>, _>>()?;
 client.write_consecutive("DM200", &[1_u32, 2_u32], Some("D")).await?;
+let readback_result = client.read_consecutive("DM200", 2, Some("D")).await;
+let restore_result = client.write_consecutive("DM200", &original, Some("D")).await;
+restore_result?;
+let values = readback_result?;
 ```
+
+Use only a range reserved for controlled testing. Restoration is attempted
+after a confirmed write and before a readback error is propagated. If
+restoration fails, inspect and reconcile the range explicitly. If the write
+outcome is unknown, do not issue an automatic restore or retry.
 
 Custom low-level values implement the fallible formatter contract:
 
@@ -171,17 +185,32 @@ word read/write sequence.
 Both URD and UWR require one of `U`, `S`, `D`, `L`, or `H`:
 
 ```rust
-let values = client
-    .read_expansion_unit_buffer(1, 100, 2, "U")
-    .await?;
+let original = client
+    .read_expansion_unit_buffer(2, 200, 2, "S")
+    .await?
+    .into_iter()
+    .map(|value| value.parse::<i16>())
+    .collect::<Result<Vec<_>, _>>()?;
 client
     .write_expansion_unit_buffer(2, 200, &[7_i16, 8_i16], "S")
     .await?;
+let readback_result = client
+    .read_expansion_unit_buffer(2, 200, 2, "S")
+    .await;
+let restore_result = client
+    .write_expansion_unit_buffer(2, 200, &original, "S")
+    .await;
+restore_result?;
+let values = readback_result?;
 ```
 
 The format controls signedness, width, point limits, and buffer span. Missing
 or empty formats, invalid tokens, out-of-range values, and 32-bit end crossing
-are rejected rather than converted.
+are rejected rather than converted. Use only a configured unit and buffer range
+reserved for controlled testing. If the write outcome is unknown, inspect and
+reconcile the module state explicitly rather than restoring or retrying blindly.
+If restoration fails after a confirmed write, inspect the buffer range and
+reconcile its values manually before continuing.
 
 ## Comments
 
@@ -225,7 +254,10 @@ it whenever the application cannot assert the stored encoding.
 `set_time` requires a `HostLinkClock`. It never substitutes the host clock.
 The `year` field is the PLC's two-digit year and must be in `0..=99`.
 Calendar fields, real date existence, and weekday agreement are validated
-before transport.
+before transport. Setting the clock changes PLC state and elapsed time makes an
+exact automatic restore impossible. Run this only on a controlled PLC when
+replacing its clock with the host's local time is explicitly intended, then
+verify the PLC clock through the engineering environment.
 
 ```rust
 let clock = plc_comm_kv_hostlink::HostLinkClock::now_local()?;
