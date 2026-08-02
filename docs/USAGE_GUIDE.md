@@ -7,7 +7,8 @@ all endpoint and profile choices. Timeout defaults to 3 seconds and must be
 greater than zero when changed.
 
 TCP and UDP are IPv4-only. Hostnames are resolved, but only IPv4 results are
-used; IPv6 literals are rejected before a socket is created.
+used; IPv6 literals are rejected before a socket is created. IPv4 literals
+must be written without URI-style brackets (`127.0.0.1`, not `[127.0.0.1]`).
 
 ```rust
 use plc_comm_kv_hostlink::{
@@ -26,23 +27,31 @@ client.open().await?;
 
 Normal command frames always end in CR (`0x0D`). There is no public LF append
 option or receive-buffer-size option. TCP and UDP responses have an internal
-absolute body cap of 65,536 bytes. Request bodies use the same 65,536-byte cap;
-one byte over is rejected before client state or traffic counters change.
+absolute body cap of 65,536 bytes. Raw request bodies have a 65,506-byte cap,
+so the terminating CR makes the complete TCP/UDP request frame at most 65,507
+bytes. Empty raw command bodies and one byte over the request limit are rejected
+before client state or traffic counters change.
 
 One non-pipelined TCP request owns exactly one non-empty response. Additional
 CR/LF separators are ignored, but a second non-empty response received before
 another request owns it is a protocol error and retires the connection. For
-UDP, `open` represents a logical session: every admitted operation uses a new
-connected IPv4 UDP socket and source endpoint. The preceding successful socket
-stays bound only until its successor has bound a different endpoint, so a
-duplicate or delayed datagram cannot become the next operation's response.
+UDP, `open` creates one connected IPv4 UDP socket for the logical session.
+Complete valid exchanges reuse that socket and its local endpoint. A timeout,
+cancellation, transport/protocol failure, malformed response, extra response,
+or datagram already waiting before a send discards the socket; the next command
+creates a replacement from the already resolved remote endpoint without a new
+DNS lookup. An explicit `close` discards both the socket and logical session.
+Because Host Link has no request identifier, a duplicate datagram that arrives
+after the pre-send check but before the current response cannot be distinguished
+perfectly; use a conforming endpoint and separate clients when isolation is
+required.
 
-`open` is idempotent while the same transport remains healthy. Transport
-failure, timeout, EOF, or response overflow closes that transport. If the
-caller drops an in-flight command future, the future returns no library
-`Result`; the abandoned exchange poisons and retires the transport. A later
-command returns `HostLinkError::NotConnected`; only an explicit `open` creates
-the next transport, and the failed or abandoned command is not retried.
+`open` is idempotent while the same transport remains healthy. TCP transport
+failure, timeout, EOF, response overflow, or a dropped in-flight future retires
+the connection; call `open` before the next TCP command. UDP retires only the
+affected socket and creates a replacement on the next command. Dropping a
+future produces no library `Result`; a possibly transmitted write remains
+outcome-unknown, and no failed or abandoned command is retried.
 
 ## Typed values and address grammar
 
@@ -143,12 +152,13 @@ let values = client
 ```
 
 `read_named` is the one read-only aggregate allowed to plan multiple requests.
-All addresses are copied and validated before the first send. Compatible
-adjacent values may share a request; when a request limit is reached, a new
-request starts only at a declared value boundary, so a Dword or Float32 value
-is never split. A descending address ends the current segment and starts a new
-one; later ascending contiguous addresses may extend that new segment. Requests
-and returned values retain declared input order.
+All addresses are copied and validated before FIFO admission or the first send.
+Wire-compatible device types are grouped in their first-appearance order. Each
+group is sorted by address and contiguous ranges are merged up to the request
+limit, so alternating device types or descending input do not add avoidable PLC
+round trips. A new segment starts only at a declared value boundary, so a Dword
+or Float32 value is never split. Wire order is the optimized group/address
+order; returned keys and values retain declared input order.
 
 Named keys must be semantically unique by device family, numeric address,
 dtype, bit index, and scalar count. Case and leading zeros do not make a second
@@ -163,7 +173,9 @@ between segments. Applications that need one coherent PLC snapshot must use a
 single request or an explicit PLC-side snapshot/handshake design. Named reads
 and polls require at least one address, and poll intervals must be greater than
 zero; invalid input fails before FIFO admission or communication. `poll` reuses
-the validated plan for each cycle.
+the validated minimum-request plan for each cycle. The FIFO turn is released
+after the cycle's final response is decoded and staged; result-object assembly
+and the completion-to-next-cycle interval do not block another wire operation.
 
 The ordinary `read_named` and `poll` APIs reject `:COMMENT` entries during
 complete-plan validation and send no request. When an aggregate intentionally
@@ -285,16 +297,16 @@ admitted before `close` cannot send on that reopened transport.
 `Transport`, `Plc`, and `OutcomeUnknown`. A state-changing command that may
 already have been sent returns `OutcomeUnknown` when timeout, close, transport
 failure, or malformed acknowledgement prevents a definite result. Raw commands
-are conservatively treated as state-changing. The client closes the affected
-transport and never retries automatically.
+are conservatively treated as state-changing. The client retires the affected
+TCP connection or UDP socket and never retries automatically.
 
 Rust cancellation is future drop rather than a returned library error. Dropping
 a state-changing future after transmission may have started gives the caller no
-`HostLinkError`; the caller must treat the PLC outcome as unknown. The transport
-is poisoned and retired, so the next command returns `NotConnected` until
-`open` succeeds. This caller-observed cancellation is distinct from the
-library's `Timeout` result and is deliberately not a
-`HostLinkOutcomeUnknownReason` variant.
+`HostLinkError`; the caller must treat the PLC outcome as unknown. TCP returns
+`NotConnected` until `open` succeeds. UDP drops the in-flight socket and creates
+a replacement from the resolved endpoint for the next command. This
+caller-observed cancellation is distinct from the library's `Timeout` result
+and is deliberately not a `HostLinkOutcomeUnknownReason` variant.
 
 ## Traffic statistics
 

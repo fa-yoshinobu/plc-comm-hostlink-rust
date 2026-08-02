@@ -17,7 +17,8 @@ timeout may be omitted and is then 3 seconds.
 
 The endpoint contract is IPv4-only because the target PLC configuration is
 IPv4. IPv6 literals fail before socket creation; a hostname with no IPv4
-result fails without sending a Host Link command.
+result fails without sending a Host Link command. IPv4 literals must not use
+URI-style brackets: use `127.0.0.1`, not `[127.0.0.1]`.
 
 ## Add the crate
 
@@ -53,10 +54,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `HostLinkClient::new` creates a disconnected client. Call `open` before any
 command. An unconnected command returns `HostLinkError::NotConnected` without
-creating a socket. After timeout, EOF, transport failure, or an in-flight future
-being dropped, call `open` explicitly again; commands never reconnect or retry
-themselves. Dropping a future produces no library `Result`, and a caller that
-drops a possibly transmitted write must treat its PLC outcome as unknown.
+creating a socket. After a TCP timeout, EOF, transport failure, or dropped
+in-flight future, call `open` explicitly again. UDP keeps the resolved logical
+endpoint and replaces only the affected socket on the next command. Commands
+never retry the failed operation. Dropping a future produces no library
+`Result`, and a caller that drops a possibly transmitted write must treat its
+PLC outcome as unknown.
 
 ## First controlled write
 

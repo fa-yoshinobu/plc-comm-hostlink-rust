@@ -15,9 +15,12 @@ trace facilities are intentionally omitted from ordinary user documentation.
 | Transport selection | `HostLinkTransportMode::{Tcp, Udp}` |
 
 Endpoints are IPv4-only. IPv6 literals are caller errors; hostnames without an
-IPv4 result fail as connection errors before protocol communication.
-Request and response bodies have an internal 65,536-byte cap. There is no
-caller-controlled receive capacity; public results own their dynamic storage.
+IPv4 result fail as connection errors before protocol communication. IPv4
+literals use the unbracketed form; `[127.0.0.1]` is rejected during option
+validation. Raw command bodies must be non-empty ASCII without CR/LF and are
+limited to 65,506 bytes, making the CR-terminated TCP/UDP request frame at most
+65,507 bytes. Response bodies retain their internal 65,536-byte cap. There is
+no caller-controlled receive capacity; public results own their dynamic storage.
 
 ## PLC operations
 
@@ -64,11 +67,14 @@ accept only the exact tokens `0`, `1`, `OFF`, or `ON` without trimming or case
 folding, while numeric reads of direct-bit devices require 16 or
 32 response points according to the explicit format. Malformed semantic
 responses close the connection generation.
-UDP responses require a CR/LF terminator; missing framing closes the transport.
-Each admitted UDP operation owns a newly bound and connected socket generation;
-the logical client remains open after success, but a successful request socket
-is never reused. TCP accepts one non-empty response per request and retires the
-connection when it receives an additional unowned non-empty response.
+UDP responses require a CR/LF terminator. A valid completed exchange reuses the
+connected UDP socket and local endpoint. Timeout, cancellation, I/O/protocol or
+framing failure, an extra response, or a pre-send unowned datagram discards that
+socket; the next operation creates a replacement from the resolved endpoint.
+Host Link has no request identifier, so a duplicate arriving between the
+pre-send check and current response remains inherently indistinguishable. TCP
+accepts one non-empty response per request and retires the connection when it
+receives an additional unowned non-empty response.
 All non-format commands, including forced control, monitor-bit registration,
 comment reads, and timer/counter helpers, reject suffix-bearing devices.
 Monitor reads require a successful registration in the current connection
@@ -91,9 +97,12 @@ format before returning any values.
 | Dword writes | `write_dwords_single_request` |
 
 All word/Dword helpers are single-request operations. There are no chunked
-exports. `read_named` is the only automatic multi-request read aggregate: it
-preserves input wire order, keeps multiword values whole, owns one FIFO turn,
-and returns no partial result. A multi-frame named read is not PLC-atomic;
+exports. `read_named` is the only automatic multi-request read aggregate. It
+groups wire-compatible device types by first appearance, sorts each group by
+address, merges contiguous ranges up to request limits, keeps multiword values
+whole, owns one FIFO turn through final decode/staging, and returns no partial
+result. Public result order remains input order; wire order is optimized. Pure
+result materialization occurs after releasing the turn. A multi-frame named read is not PLC-atomic;
 coherent readers must use one request or a PLC-side snapshot/handshake.
 Named keys must be semantically unique by device family, numeric address,
 dtype, bit index, and scalar count. Spelling-only variants are rejected before
@@ -160,10 +169,12 @@ retry occurs.
 
 Dropping a Rust future is caller-observed cancellation and returns no
 `HostLinkError`. A waiting drop sends nothing. A drop after transmission may
-have started poisons and retires the transport, so the next operation returns
-`NotConnected` until an explicit `open`; the caller must treat a state-changing
-outcome as unknown. `HostLinkOutcomeUnknownReason` therefore has no cancellation
-variant, and a dropped future is distinct from a returned library `Timeout`.
+have started poisons the exchange and retires its socket. TCP then returns
+`NotConnected` until an explicit `open`; UDP creates a replacement socket from
+the resolved logical endpoint when the next operation begins. The caller must
+treat a state-changing outcome as unknown. `HostLinkOutcomeUnknownReason`
+therefore has no cancellation variant, and a dropped future is distinct from a
+returned library `Timeout`.
 
 The complete generated Rust API for a release is available through docs.rs.
 

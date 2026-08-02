@@ -13,6 +13,7 @@ pub(crate) enum ReadPlanValueKind {
     Unsigned32,
     Signed32,
     Float32,
+    Hex16,
     BitInWord,
     DirectBit,
 }
@@ -26,7 +27,6 @@ pub(crate) enum ReadPlanSegmentMode {
 #[derive(Debug, Clone)]
 pub(crate) struct ReadPlanRequest {
     pub(crate) index: usize,
-    pub(crate) address: String,
     pub(crate) base_address: KvDeviceAddress,
     pub(crate) kind: ReadPlanValueKind,
     pub(crate) bit_index: u8,
@@ -43,43 +43,99 @@ pub(crate) struct ReadPlanSegment {
 
 #[derive(Debug, Clone)]
 pub(crate) struct CompiledReadNamedPlan {
-    pub(crate) requests_in_input_order: Vec<ReadPlanRequest>,
-    pub(crate) segments: Vec<ReadPlanSegment>,
+    pub(crate) input_count: usize,
+    pub(crate) operations: Vec<ReadPlanOperation>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum ReadPlanOperation {
+    Segment(ReadPlanSegment),
+    Sequential { index: usize },
+}
+
+enum PendingReadPlanGroup {
+    Optimized {
+        device_type: String,
+        mode: ReadPlanSegmentMode,
+        requests: Vec<ReadPlanRequest>,
+    },
+    Sequential {
+        index: usize,
+    },
 }
 
 pub(crate) fn compile_read_named_plan(addresses: &[String]) -> Option<CompiledReadNamedPlan> {
-    let mut requests_in_input_order = Vec::new();
+    let mut groups = Vec::new();
     for (index, address) in addresses.iter().enumerate() {
-        let request = try_parse_optimizable_read_named_request(address, index)?;
-        requests_in_input_order.push(request);
+        if let Some(request) = try_parse_optimizable_read_named_request(address, index) {
+            let mode = segment_mode_for_kind(request.kind);
+            if let Some(requests) = groups.iter_mut().find_map(|group| match group {
+                PendingReadPlanGroup::Optimized {
+                    device_type,
+                    mode: group_mode,
+                    requests,
+                } if *device_type == request.base_address.device_type && *group_mode == mode => {
+                    Some(requests)
+                }
+                _ => None,
+            }) {
+                requests.push(request);
+            } else {
+                groups.push(PendingReadPlanGroup::Optimized {
+                    device_type: request.base_address.device_type.clone(),
+                    mode,
+                    requests: vec![request],
+                });
+            }
+        } else {
+            // Fully validated but non-batchable commands (for example COMMENT,
+            // native Dword, or direct-bit word views) remain single operations.
+            // They no longer disable optimization of unrelated compatible input.
+            groups.push(PendingReadPlanGroup::Sequential { index });
+        }
     }
 
-    let mut segments = Vec::new();
+    let mut operations = Vec::new();
+    for group in groups {
+        match group {
+            PendingReadPlanGroup::Optimized {
+                mode, mut requests, ..
+            } => {
+                requests.sort_by_key(read_plan_number);
+                let mut segments = Vec::new();
+                append_group_segments(&mut segments, requests, mode)?;
+                operations.extend(segments.into_iter().map(ReadPlanOperation::Segment));
+            }
+            PendingReadPlanGroup::Sequential { index } => {
+                operations.push(ReadPlanOperation::Sequential { index });
+            }
+        }
+    }
+
+    Some(CompiledReadNamedPlan {
+        input_count: addresses.len(),
+        operations,
+    })
+}
+
+fn append_group_segments(
+    segments: &mut Vec<ReadPlanSegment>,
+    requests: Vec<ReadPlanRequest>,
+    mode: ReadPlanSegmentMode,
+) -> Option<()> {
     let mut pending = Vec::new();
     let mut current_start: Option<KvDeviceAddress> = None;
     let mut current_start_number = 0u32;
     let mut current_end_exclusive = 0u32;
-    let mut current_mode: Option<ReadPlanSegmentMode> = None;
 
-    for request in requests_in_input_order.iter().cloned() {
+    for request in requests {
         let request_start = read_plan_number(&request);
         let request_end_exclusive =
             request_start.checked_add(get_word_width(request.kind) as u32)?;
-        let request_mode = segment_mode_for_kind(request.kind);
-        let segment_limit =
-            read_plan_segment_limit(&request.base_address.device_type, request_mode);
-        let same_device_type = current_start
-            .as_ref()
-            .is_some_and(|start| start.device_type == request.base_address.device_type);
-        let descends_before_segment_start =
-            current_start.is_some() && request_start < current_start_number;
+        let segment_limit = read_plan_segment_limit(&request.base_address.device_type, mode);
         let exceeds_segment_limit = current_start.is_some()
-            && !descends_before_segment_start
             && request_end_exclusive - current_start_number > segment_limit as u32;
         let can_append = current_start.is_some()
-            && same_device_type
-            && current_mode == Some(request_mode)
-            && !descends_before_segment_start
             && request_start <= current_end_exclusive
             && !exceeds_segment_limit;
 
@@ -89,7 +145,7 @@ pub(crate) fn compile_read_named_plan(addresses: &[String]) -> Option<CompiledRe
                     start_address,
                     start_number: current_start_number,
                     count: (current_end_exclusive - current_start_number) as usize,
-                    mode: current_mode.unwrap_or(ReadPlanSegmentMode::Words),
+                    mode,
                     requests: std::mem::take(&mut pending),
                 });
             }
@@ -100,7 +156,6 @@ pub(crate) fn compile_read_named_plan(addresses: &[String]) -> Option<CompiledRe
             });
             current_start_number = request_start;
             current_end_exclusive = request_end_exclusive;
-            current_mode = Some(request_mode);
         } else if request_end_exclusive > current_end_exclusive {
             current_end_exclusive = request_end_exclusive;
         }
@@ -112,15 +167,11 @@ pub(crate) fn compile_read_named_plan(addresses: &[String]) -> Option<CompiledRe
             start_address,
             start_number: current_start_number,
             count: (current_end_exclusive - current_start_number) as usize,
-            mode: current_mode.unwrap_or(ReadPlanSegmentMode::Words),
+            mode,
             requests: pending,
         });
     }
-
-    Some(CompiledReadNamedPlan {
-        requests_in_input_order,
-        segments,
-    })
+    Some(())
 }
 
 fn try_parse_optimizable_read_named_request(
@@ -161,7 +212,6 @@ fn try_parse_optimizable_read_named_request(
 
     Some(ReadPlanRequest {
         index,
-        address: address.to_owned(),
         base_address,
         kind,
         bit_index,
@@ -175,6 +225,7 @@ fn try_map_read_plan_value_kind(dtype: &str) -> Option<ReadPlanValueKind> {
         "D" => Some(ReadPlanValueKind::Unsigned32),
         "L" => Some(ReadPlanValueKind::Signed32),
         "F" => Some(ReadPlanValueKind::Float32),
+        "H" => Some(ReadPlanValueKind::Hex16),
         _ => None,
     }
 }
@@ -255,6 +306,7 @@ pub(crate) fn resolve_planned_value(
             let hi = next_word()? as u32;
             HostLinkValue::F32(f32::from_bits((word as u32) | (hi << 16)))
         }
+        ReadPlanValueKind::Hex16 => HostLinkValue::Text(format!("{word:04X}")),
         ReadPlanValueKind::BitInWord => HostLinkValue::Bool(((word >> bit_index) & 1) != 0),
         ReadPlanValueKind::DirectBit => {
             return Err(HostLinkError::protocol(
@@ -276,10 +328,22 @@ pub(crate) fn resolve_direct_bit_value(
 
 #[cfg(test)]
 mod tests {
-    use super::compile_read_named_plan;
+    use super::{
+        CompiledReadNamedPlan, ReadPlanOperation, ReadPlanSegment, compile_read_named_plan,
+    };
+
+    fn segments(plan: &CompiledReadNamedPlan) -> Vec<&ReadPlanSegment> {
+        plan.operations
+            .iter()
+            .filter_map(|operation| match operation {
+                ReadPlanOperation::Segment(segment) => Some(segment),
+                ReadPlanOperation::Sequential { .. } => None,
+            })
+            .collect()
+    }
 
     #[test]
-    fn compiled_segments_preserve_declared_input_wire_order() {
+    fn compiled_segments_sort_each_group_without_changing_public_input_order() {
         let addresses = ["DM10:U", "DM9:U", "DM11:U"]
             .into_iter()
             .map(str::to_owned)
@@ -287,12 +351,13 @@ mod tests {
         let plan = compile_read_named_plan(&addresses).unwrap();
 
         assert_eq!(
-            plan.segments
+            segments(&plan)
                 .iter()
                 .map(|segment| (segment.start_number, segment.count))
                 .collect::<Vec<_>>(),
-            vec![(10, 1), (9, 1), (11, 1)]
+            vec![(9, 3)]
         );
+        assert_eq!(plan.input_count, 3);
     }
 
     #[test]
@@ -304,16 +369,16 @@ mod tests {
         let plan = compile_read_named_plan(&addresses).unwrap();
 
         assert_eq!(
-            plan.segments
+            segments(&plan)
                 .iter()
                 .map(|segment| (segment.start_number, segment.count))
                 .collect::<Vec<_>>(),
-            vec![(100, 1), (0, 2)]
+            vec![(0, 2), (100, 1)]
         );
     }
 
     #[test]
-    fn repeated_descending_boundaries_each_start_an_independent_segment() {
+    fn repeated_descending_input_is_merged_after_address_sort() {
         let addresses = ["DM100:U", "DM0:U", "DM1:U", "DM50:U", "DM2:U", "DM3:U"]
             .into_iter()
             .map(str::to_owned)
@@ -321,12 +386,28 @@ mod tests {
         let plan = compile_read_named_plan(&addresses).unwrap();
 
         assert_eq!(
-            plan.segments
+            segments(&plan)
                 .iter()
                 .map(|segment| (segment.start_number, segment.count))
                 .collect::<Vec<_>>(),
-            vec![(100, 1), (0, 2), (50, 1), (2, 2)]
+            vec![(0, 4), (50, 1), (100, 1)]
         );
+    }
+
+    #[test]
+    fn alternating_device_types_use_first_group_appearance_and_minimum_segments() {
+        let addresses = ["DM10:U", "MR0:BIT", "DM11:S", "MR1:BIT"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let plan = compile_read_named_plan(&addresses).unwrap();
+
+        let segments = segments(&plan);
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].start_address.device_type, "DM");
+        assert_eq!((segments[0].start_number, segments[0].count), (10, 2));
+        assert_eq!(segments[1].start_address.device_type, "MR");
+        assert_eq!((segments[1].start_number, segments[1].count), (0, 2));
     }
 
     #[test]
@@ -337,16 +418,11 @@ mod tests {
         addresses.push("DM999:D".to_owned());
 
         let plan = compile_read_named_plan(&addresses).unwrap();
-        assert_eq!(plan.segments.len(), 2);
-        assert_eq!(
-            (plan.segments[0].start_number, plan.segments[0].count),
-            (0, 999)
-        );
-        assert_eq!(
-            (plan.segments[1].start_number, plan.segments[1].count),
-            (999, 2)
-        );
-        assert_eq!(plan.segments[1].requests.len(), 1);
-        assert_eq!(plan.segments[1].requests[0].address, "DM999:D");
+        let segments = segments(&plan);
+        assert_eq!(segments.len(), 2);
+        assert_eq!((segments[0].start_number, segments[0].count), (0, 999));
+        assert_eq!((segments[1].start_number, segments[1].count), (999, 2));
+        assert_eq!(segments[1].requests.len(), 1);
+        assert_eq!(segments[1].requests[0].index, 999);
     }
 }

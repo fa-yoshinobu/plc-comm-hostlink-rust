@@ -2,9 +2,18 @@ use crate::error::HostLinkError;
 use crate::model::HostLinkCommentEncoding;
 use encoding_rs::{SHIFT_JIS, UTF_8};
 
-pub(crate) const MAX_FRAME_BODY_BYTES: usize = 65_536;
+/// Maximum ASCII command-body size shared by TCP and UDP.
+///
+/// The terminating CR makes the complete request frame at most 65,507 bytes,
+/// which fits in one IPv4 UDP payload.
+pub(crate) const MAX_FRAME_BODY_BYTES: usize = 65_506;
 
 pub fn build_frame(body: &str) -> Result<Vec<u8>, HostLinkError> {
+    if body.is_empty() {
+        return Err(HostLinkError::protocol(
+            "Host Link command body must not be empty",
+        ));
+    }
     if !body.is_ascii() {
         return Err(HostLinkError::protocol(
             "Host Link command body must contain ASCII bytes only",
@@ -161,6 +170,7 @@ mod tests {
 
     #[test]
     fn frame_builder_rejects_injected_terminators_and_non_ascii() {
+        assert!(build_frame("").is_err());
         assert!(build_frame("RD DM0.U\rWR DM0.U 1").is_err());
         assert!(build_frame("RDC 日本語").is_err());
     }

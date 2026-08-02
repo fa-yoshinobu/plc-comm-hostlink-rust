@@ -7,8 +7,8 @@ use crate::client::{HostLinkClient, HostLinkPayloadValue};
 use crate::error::HostLinkError;
 use crate::model::HostLinkCommentEncoding;
 use crate::read_plan::{
-    CompiledReadNamedPlan, ReadPlanSegmentMode, compile_read_named_plan, read_plan_number,
-    resolve_direct_bit_value, resolve_planned_value,
+    CompiledReadNamedPlan, ReadPlanOperation, ReadPlanSegmentMode, compile_read_named_plan,
+    read_plan_number, resolve_direct_bit_value, resolve_planned_value,
 };
 use futures_core::Stream;
 use indexmap::IndexMap;
@@ -800,59 +800,63 @@ pub(crate) async fn read_named_compiled(
     compiled: Option<&CompiledReadNamedPlan>,
     comment_encoding: Option<HostLinkCommentEncoding>,
 ) -> Result<NamedReadResult, HostLinkError> {
-    let (_turn, direct) = client.begin_turn().await?;
-    if let Some(plan) = compiled {
-        execute_read_named_plan(&direct, plan).await
-    } else {
-        read_named_sequential(&direct, addresses, comment_encoding).await
-    }
+    let staged = {
+        let (_turn, direct) = client.begin_turn().await?;
+        if let Some(plan) = compiled {
+            execute_read_named_plan(&direct, addresses, plan, comment_encoding).await?
+        } else {
+            read_named_sequential(&direct, addresses, comment_encoding).await?
+        }
+    };
+    Ok(materialize_named_result(addresses, staged))
 }
 
 pub(crate) async fn read_named_sequential(
     client: &HostLinkClient,
     addresses: &[String],
     comment_encoding: Option<HostLinkCommentEncoding>,
-) -> Result<NamedReadResult, HostLinkError> {
-    let mut result = NamedReadResult::new();
+) -> Result<Vec<HostLinkValue>, HostLinkError> {
+    let mut staged = Vec::with_capacity(addresses.len());
     for address in addresses {
-        let (base_address, dtype, bit_index) = parse_named_address_parts(address)?;
-        if dtype == "BIT_IN_WORD" {
-            let bit_index = require_bit_in_word_index(address, bit_index)?;
-            let parsed = parse_device(&base_address)?;
-            let word = if is_direct_bit_device_type(&parsed.device_type) {
-                let tokens = client.read(&base_address, Some("U")).await?;
-                pack_direct_bit_tokens(&tokens, 16, &base_address)? as u16
-            } else {
-                read_single_parsed::<u16>(
-                    client,
-                    &base_address,
-                    Some("U"),
-                    "Invalid unsigned 16-bit response",
-                )
-                .await?
-            };
-            result.insert(
-                address.clone(),
-                HostLinkValue::Bool(((word >> bit_index) & 1) != 0),
-            );
-        } else if dtype == "COMMENT" {
-            let encoding = comment_encoding.ok_or_else(|| {
-                HostLinkError::protocol(
-                    "COMMENT entries require an explicit HostLinkCommentEncoding value.",
-                )
-            })?;
-            result.insert(
-                address.clone(),
-                HostLinkValue::Text(read_comments(client, &base_address, encoding).await?),
-            );
-        } else {
-            result.insert(
-                address.clone(),
-                read_typed_impl(client, &base_address, &dtype).await?,
-            );
-        }
+        staged.push(read_named_value(client, address, comment_encoding).await?);
     }
-    Ok(result)
+    Ok(staged)
+}
+
+async fn read_named_value(
+    client: &HostLinkClient,
+    address: &str,
+    comment_encoding: Option<HostLinkCommentEncoding>,
+) -> Result<HostLinkValue, HostLinkError> {
+    let (base_address, dtype, bit_index) = parse_named_address_parts(address)?;
+    if dtype == "BIT_IN_WORD" {
+        let bit_index = require_bit_in_word_index(address, bit_index)?;
+        let parsed = parse_device(&base_address)?;
+        let word = if is_direct_bit_device_type(&parsed.device_type) {
+            let tokens = client.read(&base_address, Some("U")).await?;
+            pack_direct_bit_tokens(&tokens, 16, &base_address)? as u16
+        } else {
+            read_single_parsed::<u16>(
+                client,
+                &base_address,
+                Some("U"),
+                "Invalid unsigned 16-bit response",
+            )
+            .await?
+        };
+        Ok(HostLinkValue::Bool(((word >> bit_index) & 1) != 0))
+    } else if dtype == "COMMENT" {
+        let encoding = comment_encoding.ok_or_else(|| {
+            HostLinkError::protocol(
+                "COMMENT entries require an explicit HostLinkCommentEncoding value.",
+            )
+        })?;
+        Ok(HostLinkValue::Text(
+            read_comments(client, &base_address, encoding).await?,
+        ))
+    } else {
+        read_typed_impl(client, &base_address, &dtype).await
+    }
 }
 
 fn require_bit_in_word_index(address: &str, bit_index: Option<u8>) -> Result<u8, HostLinkError> {
@@ -865,37 +869,47 @@ fn require_bit_in_word_index(address: &str, bit_index: Option<u8>) -> Result<u8,
 
 pub(crate) async fn execute_read_named_plan(
     client: &HostLinkClient,
+    addresses: &[String],
     plan: &CompiledReadNamedPlan,
-) -> Result<NamedReadResult, HostLinkError> {
-    let mut resolved = vec![HostLinkValue::U16(0); plan.requests_in_input_order.len()];
-    for segment in &plan.segments {
-        match segment.mode {
-            ReadPlanSegmentMode::Words => {
-                let words =
-                    read_words(client, &segment.start_address.to_text()?, segment.count).await?;
-                for request in &segment.requests {
-                    let offset = (read_plan_number(request) - segment.start_number) as usize;
-                    resolved[request.index] =
-                        resolve_planned_value(&words, offset, request.kind, request.bit_index)?;
+    comment_encoding: Option<HostLinkCommentEncoding>,
+) -> Result<Vec<HostLinkValue>, HostLinkError> {
+    let mut resolved = vec![HostLinkValue::U16(0); plan.input_count];
+    for operation in &plan.operations {
+        match operation {
+            ReadPlanOperation::Segment(segment) => match segment.mode {
+                ReadPlanSegmentMode::Words => {
+                    let words =
+                        read_words(client, &segment.start_address.to_text()?, segment.count)
+                            .await?;
+                    for request in &segment.requests {
+                        let offset = (read_plan_number(request) - segment.start_number) as usize;
+                        resolved[request.index] =
+                            resolve_planned_value(&words, offset, request.kind, request.bit_index)?;
+                    }
                 }
-            }
-            ReadPlanSegmentMode::DirectBits => {
-                let tokens = client
-                    .read_consecutive(&segment.start_address.to_text()?, segment.count, None)
-                    .await?;
-                for request in &segment.requests {
-                    let offset = (read_plan_number(request) - segment.start_number) as usize;
-                    resolved[request.index] = resolve_direct_bit_value(&tokens, offset)?;
+                ReadPlanSegmentMode::DirectBits => {
+                    let tokens = client
+                        .read_consecutive(&segment.start_address.to_text()?, segment.count, None)
+                        .await?;
+                    for request in &segment.requests {
+                        let offset = (read_plan_number(request) - segment.start_number) as usize;
+                        resolved[request.index] = resolve_direct_bit_value(&tokens, offset)?;
+                    }
                 }
+            },
+            ReadPlanOperation::Sequential { index } => {
+                resolved[*index] =
+                    read_named_value(client, &addresses[*index], comment_encoding).await?;
             }
         }
     }
 
-    let mut result = NamedReadResult::new();
-    for request in &plan.requests_in_input_order {
-        result.insert(request.address.clone(), resolved[request.index].clone());
-    }
-    Ok(result)
+    Ok(resolved)
+}
+
+fn materialize_named_result(addresses: &[String], staged: Vec<HostLinkValue>) -> NamedReadResult {
+    debug_assert_eq!(addresses.len(), staged.len());
+    addresses.iter().cloned().zip(staged).collect()
 }
 
 pub fn poll<'a, S: AsRef<str> + 'a>(
@@ -911,8 +925,8 @@ pub fn poll<'a, S: AsRef<str> + 'a>(
         if interval.is_zero() {
             Err(HostLinkError::protocol("poll interval must be greater than zero."))?;
         }
-        let compiled = compile_read_named_plan(&addr_list);
         validate_named_addresses(&addr_list)?;
+        let compiled = compile_read_named_plan(&addr_list);
         loop {
             let result = read_named_compiled(client, &addr_list, compiled.as_ref(), None).await?;
             yield result;

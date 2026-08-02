@@ -208,10 +208,10 @@ async fn all_semantic_hex_paths_return_four_uppercase_digits_while_raw_is_exact(
         "RD DM0.H" => b"0".to_vec(),
         "RDS DM1.H 4" => b"a ff FFFF 0000".to_vec(),
         "RD DM5.H" => b"a".to_vec(),
-        "RD DM6.H" => b"f".to_vec(),
+        "RDS DM6.U 1" => b"15".to_vec(),
         "MWS DM7.H" => b"OK".to_vec(),
         "MWR" => b"ff".to_vec(),
-        "RD DM8.H" => b"a".to_vec(),
+        "RDS DM8.U 1" => b"10".to_vec(),
         "RDE DM9.H 1" => b"f".to_vec(),
         "URD 01 10.H 1" => b"a".to_vec(),
         "RD R000.H" => b"0 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0".to_vec(),
@@ -310,10 +310,10 @@ async fn descending_named_read_boundary_keeps_compilation_and_poll_reuses_the_pl
     assert_eq!(
         commands.lock().unwrap().as_slice(),
         [
-            "RDS DM100.U 1",
             "RDS DM0.U 2",
             "RDS DM100.U 1",
-            "RDS DM0.U 2"
+            "RDS DM0.U 2",
+            "RDS DM100.U 1"
         ]
     );
 }
@@ -361,7 +361,7 @@ async fn every_plc_error_code_keeps_the_semantic_tcp_connection_open() {
 }
 
 #[tokio::test]
-async fn udp_successors_use_distinct_endpoints_and_ignore_predecessor_and_foreign_datagrams() {
+async fn normal_udp_requests_reuse_one_endpoint_and_ignore_foreign_datagrams() {
     let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let port = socket.local_addr().unwrap().port();
     let server = tokio::spawn(async move {
@@ -369,8 +369,7 @@ async fn udp_successors_use_distinct_endpoints_and_ignore_predecessor_and_foreig
         let (_, first_peer) = socket.recv_from(&mut buffer).await.unwrap();
         socket.send_to(b"1\r", first_peer).await.unwrap();
         let (_, second_peer) = socket.recv_from(&mut buffer).await.unwrap();
-        assert_ne!(first_peer, second_peer);
-        socket.send_to(b"1\r", first_peer).await.unwrap();
+        assert_eq!(first_peer, second_peer);
         let foreign = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         foreign.send_to(b"999\r", second_peer).await.unwrap();
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -385,12 +384,48 @@ async fn udp_successors_use_distinct_endpoints_and_ignore_predecessor_and_foreig
     assert_eq!(client.read("DM1", Some("U")).await.unwrap(), ["2"]);
     assert!(client.is_open().await);
     let (first, second) = server.await.unwrap();
-    assert_ne!(first, second);
+    assert_eq!(first, second);
     assert_eq!(client.traffic_stats().await.request_count, 2);
 }
 
 #[tokio::test]
-async fn udp_plc_error_keeps_logical_session_and_next_request_uses_a_successor() {
+async fn unowned_udp_datagram_before_send_retires_socket_without_sending() {
+    let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let port = socket.local_addr().unwrap().port();
+    let (inject_tx, inject_rx) = tokio::sync::oneshot::channel();
+    let (injected_tx, injected_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let mut buffer = [0u8; 256];
+        let (_, first_peer) = socket.recv_from(&mut buffer).await.unwrap();
+        socket.send_to(b"1\r", first_peer).await.unwrap();
+        inject_rx.await.unwrap();
+        socket.send_to(b"LATE\r", first_peer).await.unwrap();
+        injected_tx.send(()).unwrap();
+        let (_, replacement_peer) = socket.recv_from(&mut buffer).await.unwrap();
+        socket.send_to(b"2\r", replacement_peer).await.unwrap();
+        (first_peer, replacement_peer)
+    });
+    let client = HostLinkClient::connect(options(port, HostLinkTransportMode::Udp))
+        .await
+        .unwrap();
+
+    assert_eq!(client.send_raw("FIRST").await.unwrap(), b"1");
+    inject_tx.send(()).unwrap();
+    injected_rx.await.unwrap();
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(matches!(
+        client.send_raw("BLOCKED").await,
+        Err(HostLinkError::Protocol(_))
+    ));
+    assert_eq!(client.traffic_stats().await.request_count, 1);
+    assert!(client.is_open().await);
+    assert_eq!(client.send_raw("REPLACEMENT").await.unwrap(), b"2");
+    let (first_peer, replacement_peer) = server.await.unwrap();
+    assert_ne!(first_peer, replacement_peer);
+}
+
+#[tokio::test]
+async fn udp_plc_error_keeps_logical_session_and_reuses_the_valid_socket() {
     let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let port = socket.local_addr().unwrap().port();
     let server = tokio::spawn(async move {
@@ -412,7 +447,7 @@ async fn udp_plc_error_keeps_logical_session_and_next_request_uses_a_successor()
     assert!(client.is_open().await);
     assert_eq!(client.read("DM1", Some("U")).await.unwrap(), ["7"]);
     let (first, second) = server.await.unwrap();
-    assert_ne!(first, second);
+    assert_eq!(first, second);
 }
 
 #[tokio::test]

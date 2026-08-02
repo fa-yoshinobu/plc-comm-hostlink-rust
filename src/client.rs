@@ -9,7 +9,7 @@ use crate::error::{HostLinkError, HostLinkOutcomeUnknownReason};
 use crate::helpers;
 use crate::model::{
     HostLinkClock, HostLinkCommentEncoding, HostLinkConnectionOptions, HostLinkMonitorWord,
-    HostLinkTransportMode, KvModelInfo, KvPlcMode,
+    HostLinkTransportMode, KvModelInfo, KvPlcMode, validate_host_input,
 };
 use crate::protocol::{
     build_frame, comment_response_payload, decode_comment_payload, decode_response,
@@ -307,7 +307,7 @@ enum Transport {
 
 struct UdpTransport {
     endpoint: SocketAddr,
-    predecessor: Option<UdpSocket>,
+    socket: Option<UdpSocket>,
 }
 
 struct ClientInner {
@@ -529,7 +529,7 @@ impl HostLinkClient {
         };
         let may_have_been_sent = inner.last_request_may_have_been_sent;
         if result.is_err() {
-            inner.close();
+            inner.retire_failed_transport();
         }
         classify_operation_result(result, state_changing, may_have_been_sent)
     }
@@ -569,7 +569,7 @@ impl HostLinkClient {
         };
         let may_have_been_sent = inner.last_request_may_have_been_sent;
         if matches!(&result, Err(error) if !matches!(error, HostLinkError::Plc { .. })) {
-            inner.close();
+            inner.retire_failed_transport();
         }
         classify_operation_result(result, state_changing, may_have_been_sent)
     }
@@ -602,13 +602,13 @@ impl HostLinkClient {
         };
         let may_have_been_sent = inner.last_request_may_have_been_sent;
         if matches!(&result, Err(error) if !matches!(error, HostLinkError::Plc { .. })) {
-            inner.close();
+            inner.retire_failed_transport();
         }
         classify_operation_result(result, false, may_have_been_sent)
     }
 
     pub(crate) async fn retire_transport(&self) {
-        self.inner.lock().await.close();
+        self.inner.lock().await.retire_failed_transport();
     }
 
     pub async fn change_mode(&self, mode: KvPlcMode) -> Result<(), HostLinkError> {
@@ -1289,7 +1289,7 @@ impl HostLinkClient {
 impl ClientInner {
     async fn open(&mut self, timeout: Duration) -> Result<(), HostLinkError> {
         if self.exchange_incomplete {
-            self.close();
+            self.retire_failed_transport();
         }
         if self.transport.is_some() {
             return Ok(());
@@ -1314,10 +1314,14 @@ impl ClientInner {
                 stream.set_nodelay(true)?;
                 Transport::Tcp(stream)
             }
-            HostLinkTransportMode::Udp => Transport::Udp(UdpTransport {
-                endpoint: endpoints[0],
-                predecessor: None,
-            }),
+            HostLinkTransportMode::Udp => {
+                let endpoint = endpoints[0];
+                let socket = create_udp_socket(endpoint, connect_deadline).await?;
+                Transport::Udp(UdpTransport {
+                    endpoint,
+                    socket: Some(socket),
+                })
+            }
         };
 
         self.transport = Some(transport);
@@ -1336,6 +1340,21 @@ impl ClientInner {
         self.active_deadline = None;
         self.monitor_bit_count = None;
         self.monitor_word_formats = None;
+    }
+
+    fn retire_failed_transport(&mut self) {
+        match self.transport.as_mut() {
+            Some(Transport::Udp(transport)) => {
+                transport.socket = None;
+                self.rx_start = 0;
+                self.rx_count = 0;
+                self.exchange_incomplete = false;
+                self.active_deadline = None;
+                self.monitor_bit_count = None;
+                self.monitor_word_formats = None;
+            }
+            _ => self.close(),
+        }
     }
 
     async fn send_raw_bytes(
@@ -1405,7 +1424,7 @@ impl ClientInner {
     ) -> Result<Vec<u8>, HostLinkError> {
         let frame = build_frame(body)?;
         if self.exchange_incomplete {
-            self.close();
+            self.retire_failed_transport();
         }
         if self.transport.is_none() {
             return Err(HostLinkError::NotConnected);
@@ -1439,40 +1458,32 @@ impl ClientInner {
                 }
             }
             Some(Transport::Udp(transport)) => {
-                let predecessor_endpoint = transport
-                    .predecessor
-                    .as_ref()
-                    .map(UdpSocket::local_addr)
-                    .transpose()?;
-                let mut socket =
-                    create_udp_request_socket(transport.endpoint, predecessor_endpoint, deadline)
-                        .await?;
-                drop(transport.predecessor.take());
-                self.last_request_may_have_been_sent = true;
-                let result = match send_udp_with_timeout(&mut socket, &frame, deadline).await {
-                    Ok(()) => {
-                        self.traffic_stats.request_count += 1;
-                        self.traffic_stats.tx_bytes += frame.len() as u64;
-                        match recv_udp_with_timeout(&mut socket, &mut self.udp_read_buf, deadline)
-                            .await
-                        {
-                            Ok(()) if matches!(self.udp_read_buf.last(), Some(b'\r' | b'\n')) => {
-                                let raw = self.udp_read_buf.clone();
-                                let counted_len = raw.len();
-                                Ok((raw, counted_len))
-                            }
-                            Ok(()) => Err(HostLinkError::protocol(
-                                "UDP response is missing the required CR/LF terminator",
-                            )),
-                            Err(error) => Err(error),
-                        }
+                async {
+                    // Move ownership into the exchange future. Dropping/cancelling
+                    // that future drops the socket immediately instead of leaving
+                    // an indeterminate datagram queue in the logical session.
+                    let mut socket = match transport.socket.take() {
+                        Some(socket) => socket,
+                        None => create_udp_socket(transport.endpoint, deadline).await?,
+                    };
+                    reject_unowned_udp_response(&socket, &mut self.udp_read_buf)?;
+                    self.last_request_may_have_been_sent = true;
+                    send_udp_with_timeout(&mut socket, &frame, deadline).await?;
+                    self.traffic_stats.request_count += 1;
+                    self.traffic_stats.tx_bytes += frame.len() as u64;
+                    recv_udp_with_timeout(&mut socket, &mut self.udp_read_buf, deadline).await?;
+                    if !matches!(self.udp_read_buf.last(), Some(b'\r' | b'\n')) {
+                        return Err(HostLinkError::protocol(
+                            "UDP response is missing the required CR/LF terminator",
+                        ));
                     }
-                    Err(err) => Err(err),
-                };
-                if result.is_ok() {
-                    transport.predecessor = Some(socket);
+                    let raw = self.udp_read_buf.clone();
+                    let counted_len = raw.len();
+                    reject_unowned_udp_response(&socket, &mut self.udp_read_buf)?;
+                    transport.socket = Some(socket);
+                    Ok((raw, counted_len))
                 }
-                result
+                .await
             }
             None => Err(HostLinkError::connection("transport was not opened")),
         };
@@ -1481,7 +1492,7 @@ impl ClientInner {
             Ok((raw, counted_len)) => {
                 self.traffic_stats.rx_bytes += counted_len as u64;
                 if raw_response_body(&raw).len() > MAX_TCP_LINE_SIZE {
-                    self.close();
+                    self.retire_failed_transport();
                     return Err(HostLinkError::protocol(format!(
                         "Response line exceeds {MAX_TCP_LINE_SIZE} bytes"
                     )));
@@ -1490,7 +1501,7 @@ impl ClientInner {
                 Ok(raw)
             }
             Err(err) => {
-                self.close();
+                self.retire_failed_transport();
                 Err(err)
             }
         }
@@ -1501,7 +1512,7 @@ impl ClientInner {
             return Ok(());
         };
         if Instant::now() >= deadline {
-            self.close();
+            self.retire_failed_transport();
             return Err(HostLinkError::timeout(
                 "transaction deadline expired during response decoding",
             ));
@@ -1564,6 +1575,7 @@ async fn resolve_ipv4_endpoints(
     port: u16,
     deadline: Instant,
 ) -> Result<Vec<SocketAddr>, HostLinkError> {
+    validate_host_input(host)?;
     let literal_text = host
         .strip_prefix('[')
         .and_then(|value| value.strip_suffix(']'))
@@ -1645,41 +1657,33 @@ async fn send_udp_with_timeout(
     Ok(())
 }
 
-async fn create_udp_request_socket(
+async fn create_udp_socket(
     endpoint: SocketAddr,
-    predecessor_endpoint: Option<SocketAddr>,
     deadline: Instant,
 ) -> Result<UdpSocket, HostLinkError> {
-    create_udp_request_socket_bound(
-        "0.0.0.0:0".parse().expect("valid IPv4 wildcard endpoint"),
-        endpoint,
-        predecessor_endpoint,
-        deadline,
-    )
-    .await
+    let socket = timeout_at(deadline, UdpSocket::bind("0.0.0.0:0"))
+        .await
+        .map_err(|_| HostLinkError::timeout("udp bind"))??;
+    timeout_at(deadline, socket.connect(endpoint))
+        .await
+        .map_err(|_| HostLinkError::timeout("udp connect"))??;
+    Ok(socket)
 }
 
-async fn create_udp_request_socket_bound(
-    bind_endpoint: SocketAddr,
-    endpoint: SocketAddr,
-    predecessor_endpoint: Option<SocketAddr>,
-    deadline: Instant,
-) -> Result<UdpSocket, HostLinkError> {
-    for _ in 0..16 {
-        let socket = timeout_at(deadline, UdpSocket::bind(bind_endpoint))
-            .await
-            .map_err(|_| HostLinkError::timeout("udp bind"))??;
-        timeout_at(deadline, socket.connect(endpoint))
-            .await
-            .map_err(|_| HostLinkError::timeout("udp connect"))??;
-        let local_endpoint = socket.local_addr()?;
-        if predecessor_endpoint.is_none_or(|previous| local_endpoint != previous) {
-            return Ok(socket);
-        }
+fn reject_unowned_udp_response(
+    socket: &UdpSocket,
+    udp_read_buf: &mut Vec<u8>,
+) -> Result<(), HostLinkError> {
+    if udp_read_buf.len() != UDP_RECEIVE_BUFFER_SIZE {
+        udp_read_buf.resize(UDP_RECEIVE_BUFFER_SIZE, 0);
     }
-    Err(HostLinkError::connection(
-        "udp bind did not allocate a distinct local endpoint",
-    ))
+    match socket.try_recv(udp_read_buf.as_mut_slice()) {
+        Ok(_) => Err(HostLinkError::protocol(
+            "Received an unowned UDP response outside the active request",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn reject_unowned_tcp_response(
@@ -1880,30 +1884,30 @@ mod endpoint_tests {
 }
 
 #[cfg(test)]
-mod udp_generation_tests {
-    use super::create_udp_request_socket_bound;
-    use std::time::Duration;
+mod udp_reuse_tests {
+    use super::{UDP_RECEIVE_BUFFER_SIZE, reject_unowned_udp_response};
+    use crate::error::HostLinkError;
     use tokio::net::UdpSocket;
-    use tokio::time::Instant;
 
     #[tokio::test]
-    async fn successor_bind_failure_leaves_the_callers_predecessor_alive() {
-        let predecessor = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        predecessor.connect("127.0.0.1:9").await.unwrap();
-        let predecessor_endpoint = predecessor.local_addr().unwrap();
-        let blocker = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let blocked_endpoint = blocker.local_addr().unwrap();
+    async fn queued_extra_datagram_is_rejected_before_socket_reuse() {
+        let sender = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let receiver = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        receiver
+            .connect(sender.local_addr().unwrap())
+            .await
+            .unwrap();
+        sender
+            .send_to(b"EXTRA\r", receiver.local_addr().unwrap())
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let mut buffer = vec![0; UDP_RECEIVE_BUFFER_SIZE];
 
-        let result = create_udp_request_socket_bound(
-            blocked_endpoint,
-            "127.0.0.1:9".parse().unwrap(),
-            Some(predecessor_endpoint),
-            Instant::now() + Duration::from_secs(1),
-        )
-        .await;
-
-        assert!(result.is_err());
-        assert_eq!(predecessor.local_addr().unwrap(), predecessor_endpoint);
+        assert!(matches!(
+            reject_unowned_udp_response(&receiver, &mut buffer),
+            Err(HostLinkError::Protocol(_))
+        ));
     }
 }
 

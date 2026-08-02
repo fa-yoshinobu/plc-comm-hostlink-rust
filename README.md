@@ -8,6 +8,8 @@ Rust library for KEYENCE KV Host Link PLC communication.
 
 Host Link endpoints are IPv4-only. An IPv4 literal or a hostname that resolves
 to IPv4 is accepted; IPv6 literals and IPv6-only hostnames are rejected.
+Write IPv4 literals without URI-style brackets: `127.0.0.1` is valid, while
+`[127.0.0.1]` is rejected during option validation.
 
 ## PLC Comm Family
 

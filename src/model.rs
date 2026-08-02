@@ -2,6 +2,7 @@ use time::{Date, Month, OffsetDateTime, Time};
 
 use crate::error::HostLinkError;
 use crate::plc_profiles;
+use std::net::Ipv4Addr;
 
 /// Immutable lifetime traffic counters for one Host Link client.
 ///
@@ -201,6 +202,33 @@ mod tests {
         );
         assert!(
             HostLinkConnectionOptions::new(
+                "[127.0.0.1]",
+                8501,
+                super::HostLinkTransportMode::Tcp,
+                "keyence:kv-8000"
+            )
+            .is_err()
+        );
+        assert!(
+            HostLinkConnectionOptions::new(
+                "[192.168.250.100]",
+                8501,
+                super::HostLinkTransportMode::Udp,
+                "keyence:kv-8000"
+            )
+            .is_err()
+        );
+        assert!(
+            HostLinkConnectionOptions::new(
+                "127.0.0.1",
+                8501,
+                super::HostLinkTransportMode::Tcp,
+                "keyence:kv-8000"
+            )
+            .is_ok()
+        );
+        assert!(
+            HostLinkConnectionOptions::new(
                 "127.0.0.1",
                 8501,
                 super::HostLinkTransportMode::Tcp,
@@ -228,16 +256,15 @@ impl HostLinkConnectionOptions {
         plc_profile: impl AsRef<str>,
     ) -> Result<Self, HostLinkError> {
         let host = host.into();
-        if host.trim().is_empty() {
-            return Err(HostLinkError::protocol("Host must not be empty"));
-        }
+        let host = host.trim();
+        validate_host_input(host)?;
         if port == 0 {
             return Err(HostLinkError::protocol(
                 "Port must be in the range 1..=65535",
             ));
         }
         Ok(Self {
-            host: host.trim().to_owned(),
+            host: host.to_owned(),
             port,
             timeout: std::time::Duration::from_secs(3),
             transport,
@@ -253,6 +280,23 @@ impl HostLinkConnectionOptions {
         self.plc_profile = normalize_plc_profile(plc_profile)?;
         Ok(())
     }
+}
+
+pub(crate) fn validate_host_input(host: &str) -> Result<(), HostLinkError> {
+    let host = host.trim();
+    if host.is_empty() {
+        return Err(HostLinkError::protocol("Host must not be empty"));
+    }
+    if host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .is_some_and(|value| value.parse::<Ipv4Addr>().is_ok())
+    {
+        return Err(HostLinkError::protocol(
+            "IPv4 addresses must not be enclosed in brackets",
+        ));
+    }
+    Ok(())
 }
 
 fn normalize_plc_profile(plc_profile: impl AsRef<str>) -> Result<String, HostLinkError> {

@@ -102,9 +102,13 @@ did not invoke Claude.
 ## D-058 — Commands never connect implicitly
 
 - Scope: raw, semantic, queued, read, write, clock, mode, and comment paths.
-- Target: disconnected commands return typed `NotConnected`; failure closes transport; later commands do not reconnect or retry.
+- Target: disconnected commands return typed `NotConnected`; TCP failure closes
+  its connection and requires explicit reopen. The 2026-08-02 PERF-002 override
+  makes UDP failure discard only the affected socket; a later command replaces
+  it from the resolved logical endpoint without retrying the failed command.
 - Compatibility: callers must own initial connection and recovery.
-- Acceptance: disconnected/open/failure/explicit-reopen sequence tests for TCP and UDP.
+- Acceptance: disconnected/open/failure/explicit-reopen tests for TCP and
+  logical-open/failure/socket-replacement tests for UDP.
 
 ## D-059 — PLC time is required and validated
 
@@ -215,8 +219,8 @@ Acceptance criteria:
 1. Clock year 99 passes and 100 fails before send.
 2. ST/RS/STS/RSS/MBS/RDC and timer/counter helpers reject any suffix before
    transport.
-3. Unterminated UDP responses fail and close the connection generation; normal
-   terminated datagrams continue to pass.
+3. Unterminated UDP responses fail and discard that socket; the logical endpoint
+   remains available for a replacement. Normal terminated datagrams continue to pass.
 4. Non-composite `H` reads require exactly one 1..4-digit hex token, composite
    reads require exactly three tokens, and non-`U16` conversion fails.
 5. Tests prove the 3-second timeout default, zero rejection, TCP timeout state,
@@ -301,8 +305,11 @@ library never retries automatically.
 
 Rust cancellation is caller-observed future drop, not a returned error path.
 Dropping a waiting future sends nothing. Dropping an active future after a send
-may have started returns no `HostLinkError`, poisons and retires the transport,
-and causes the next operation to return `NotConnected` until explicit reopen.
+may have started returns no `HostLinkError`, poisons the exchange, and retires
+its socket. TCP causes the next operation to return `NotConnected` until
+explicit reopen. The PERF-002 UDP override retains the resolved logical
+endpoint and creates a replacement socket for the next operation without
+retrying the abandoned request.
 The caller must treat a possibly transmitted state-changing operation as
 unknown. `HostLinkOutcomeUnknownReason` therefore has no `Cancellation` variant,
 and caller-observed drop is distinct from the library's `Timeout` result.
@@ -345,7 +352,9 @@ Acceptance criteria:
 
 1. Connect resolution/socket work shares one absolute deadline.
 2. Write and every receive fragment use the same deadline through terminator and decode.
-3. Trickled TCP and delayed UDP cross the deadline once, retire transport, and are not reused.
+3. Trickled TCP and delayed UDP cross the deadline once; the affected TCP
+   connection or UDP socket is not reused. UDP may create a replacement socket
+   for a later command without retrying the timed-out request.
 4. Durations that cannot form a deadline fail before transport without panic.
 
 - [x] Implementation completed in this repository.
@@ -361,14 +370,19 @@ Acceptance criteria:
 Implementation scope: `read_named`, poll, plan compilation, value resolution,
 single-request helpers, and bit-in-word public surface.
 
-Target contract: all aggregate inputs are snapshotted and validated before the
-first send. Planned requests retain declared wire order, multiword values never
-split, the aggregate owns one FIFO turn, and any failure returns no partial
-result. Multiple read frames are explicitly non-atomic. Public results use
+Target contract: all aggregate inputs are snapshotted and validated before FIFO
+admission or the first send. The 2026-08-02 PERF-001 decision supersedes the
+earlier declared-wire-order rule: wire-compatible device types are grouped by
+first appearance, sorted by address, and merged to the minimum request count.
+Multiword values never split, the aggregate and each poll cycle own one FIFO
+turn through final decode/staging, and pure result materialization and poll
+intervals occur outside that turn. Any failure returns no partial result.
+Multiple read frames are explicitly non-atomic. Public results use
 `NamedReadResult`, not snapshot terminology; no `NamedSnapshot` compatibility
 alias remains. No client-side bit-in-word read-modify-write API remains.
 
-Compatibility impact: named-read request order can change to input order;
+Compatibility impact: wire request order is optimized rather than preserving
+input order, while public result order remains input order;
 `write_bit_in_word` is removed without an alias. `NamedSnapshot` is renamed to
 `NamedReadResult` without an alias, and the verification CLI poll response key
 changes from `snapshots` to `results`.
@@ -376,9 +390,11 @@ changes from `snapshots` to `results`.
 Acceptance criteria:
 
 1. An invalid later address causes zero sends.
-2. Descending/mixed input produces frames in declared order and complete values.
+2. Descending/mixed input produces the minimum grouped/sorted frames and complete input-ordered values.
 3. Segment-limit rollover moves a complete Dword/Float32 value to the next frame.
-4. An aggregate is all-or-error and holds one turn; docs state scan-time non-atomicity.
+4. An aggregate or poll cycle is all-or-error, holds one turn through staging,
+   and releases it before pure result materialization or interval waiting; docs
+   state scan-time non-atomicity.
 5. Public source/API/docs contain no bit-in-word write helper.
 6. Public source/API/docs/examples/CLI use `NamedReadResult` and result
    terminology; documentation directs coherent reads to one request or a
@@ -397,11 +413,14 @@ Acceptance criteria:
 Implementation scope: request construction, TCP/UDP response storage, semantic
 caller-owned results, point limits, direct-bit writes, and endpoint selection.
 
-Target contract: request and response bodies accept exactly 65,536 bytes and
-reject one byte over before state corruption; caller results are dynamically
-owned and have no public receive-capacity setting. Command point limits reject
-limit-plus-one without splitting. Direct-bit writes require `bool`. Endpoints
-remain IPv4-only.
+Historical target contract: request and response bodies accepted exactly
+65,536 bytes and rejected one byte over before state corruption; caller results
+were dynamically owned and had no public receive-capacity setting. Command
+point limits rejected limit-plus-one without splitting. Direct-bit writes
+required `bool`. Endpoints remained IPv4-only. RS-REAUDIT-008 supersedes only
+the request boundary: the current raw request body maximum is 65,506 bytes and
+the CR-terminated frame maximum is 65,507 bytes. The 65,536-byte response-body
+boundary is unchanged.
 
 Compatibility impact: oversized raw requests and numeric/text Boolean aliases
 are rejected; no IPv6 support is added.
@@ -550,7 +569,7 @@ non-optional Windows stable-Rust job runs only representative localhost
 contracts for fragmented receive accounting, one deadline across a trickled
 response, refused TCP connection classification, close retirement of
 active/queued work followed by reopen, and UDP late-response retirement before
-reconnect. The job has a ten-minute bound and does not run the complete test,
+socket replacement. The job has a ten-minute bound and does not run the complete test,
 feature, documentation, or package matrices.
 
 Compatibility impact: none; this adds CI evidence only.
@@ -562,7 +581,7 @@ Machine-verifiable acceptance criteria:
 2. The Windows job is required by workflow semantics: it has no conditional,
    failure suppression, or `continue-on-error` path.
 3. Its five explicit test filters cover fragmented receive, connection failure,
-   bounded timeout, close/waiter retirement, reopen, and delayed-response rejection.
+   bounded timeout, close/waiter retirement, reopen, and delayed-response rejection/replacement.
 4. The Windows job installs only the stable minimal toolchain, runs the bounded
    integration-test subset, and does not package, publish, or contact a PLC.
 
@@ -698,3 +717,101 @@ Machine-verifiable acceptance criteria:
   payload mutation, and pre-send request counters are deterministic local
   behavior, and no PLC/profile compatibility claim changed. No live PLC
   communication was performed.
+
+## RS-REAUDIT-004 — Reject bracketed IPv4 literals
+
+Implementation scope: public connection-option validation and endpoint
+resolution preflight.
+
+Target contract: an IPv4 literal is accepted only in unbracketed form. A value
+such as `[127.0.0.1]` fails as a protocol input error before DNS resolution,
+socket creation, connection, or protocol traffic. Existing hostname and IPv6
+behavior is unchanged.
+
+Compatibility impact: callers that supplied bracketed IPv4 literals must
+remove the brackets.
+
+Machine-verifiable acceptance criteria:
+
+1. `[127.0.0.1]` is rejected by `HostLinkConnectionOptions::new`.
+2. `127.0.0.1` remains valid.
+3. Rejection cannot reach DNS, socket creation, connection, or send.
+4. Documentation and the changelog state the unbracketed migration.
+
+- [x] Implementation completed in this repository.
+- [x] Tests added or updated for every acceptance criterion.
+- [x] Relevant static checks, unit tests, integration tests, examples, and package/build checks passed.
+- [x] Codex self-review completed against the approved contract and cross-language consistency requirements.
+- [x] Live PLC checks are not required because this is deterministic pre-transport validation.
+- [x] Documentation, migration notes, changelog, and generated API reference agree with the implementation.
+- [x] Final acceptance criteria verified and the item marked complete.
+
+## RS-REAUDIT-005 — Reject an empty raw command
+
+Implementation scope: frame construction and the maintainer raw-send preflight.
+
+Target contract: an empty raw command body is a protocol input error and must
+not enter FIFO admission, inspect lifecycle state, mutate client state, create
+a socket, connect, or send.
+
+Compatibility impact: a former CR-only raw frame is no longer constructible.
+
+Machine-verifiable acceptance criteria:
+
+1. `build_frame("")` returns `HostLinkError::Protocol`.
+2. `send_raw("")` returns the same category with unchanged traffic counters.
+3. Every non-empty otherwise-valid raw command retains one terminating CR.
+4. Documentation and the changelog state the empty-input rejection.
+
+- [x] Implementation completed in this repository.
+- [x] Tests added or updated for every acceptance criterion.
+- [x] Relevant static checks, unit tests, integration tests, examples, and package/build checks passed.
+- [x] Codex self-review completed against the approved contract and cross-language consistency requirements.
+- [x] Live PLC checks are not required because this is deterministic pre-transport validation.
+- [x] Documentation, migration notes, changelog, and generated API reference agree with the implementation.
+- [x] Final acceptance criteria verified and the item marked complete.
+
+## RS-REAUDIT-008 — Bound every raw request frame to 65,507 bytes
+
+Implementation scope: shared TCP/UDP raw frame construction and boundary tests.
+
+Target contract: a non-empty ASCII raw command body is at most 65,506 bytes;
+the appended CR makes the complete frame at most 65,507 bytes. A body of 65,507
+bytes or more fails before FIFO admission, lifecycle state, DNS, socket work,
+connection, traffic counters, or send. Smaller command-specific limits remain
+unchanged.
+
+Compatibility impact: the former 65,536-byte Rust raw body limit is reduced by
+30 bytes and applies identically to TCP and UDP.
+
+Machine-verifiable acceptance criteria:
+
+1. A 65,506-byte body constructs a 65,507-byte CR-terminated frame.
+2. A 65,507-byte body fails as `HostLinkError::Protocol`.
+3. Limit failure leaves traffic counters and transport activity unchanged.
+4. TCP and UDP use the same frame builder and therefore the same boundary.
+5. Documentation and the changelog use the body/frame units consistently.
+
+- [x] Implementation completed in this repository.
+- [x] Tests added or updated for every acceptance criterion.
+- [x] Relevant static checks, unit tests, integration tests, examples, and package/build checks passed.
+- [x] Codex self-review completed against the approved contract and cross-language consistency requirements.
+- [x] Live PLC checks are not required because this is deterministic frame validation.
+- [x] Documentation, migration notes, changelog, and generated API reference agree with the implementation.
+- [x] Final acceptance criteria verified and the item marked complete.
+
+### RS-REAUDIT verification evidence and self-review disposition (2026-08-02)
+
+- `run_ci.bat`: PASS. Formatting, Clippy with warnings denied, rustdoc with
+  warnings denied, 143 library/integration/documentation tests, all seven
+  examples, crate packaging, and the isolated generated-crate consumer passed.
+- Accepted findings corrected during self-review: the public options fields
+  required request-time bracketed-IPv4 validation in addition to constructor
+  validation; TCP and UDP needed an explicit shared pre-state limit test; and
+  the earlier RS-XOVER-005 65,536-byte request record needed an explicit
+  supersession note. Rejected findings: none. Duplicate findings: none.
+  Deferred findings: none.
+- Live PLC verification is not required for RS-REAUDIT-004, -005, or -008.
+  These changes reject input before DNS/socket/protocol traffic or define a
+  deterministic local frame boundary; no PLC/profile support result changed.
+  No live PLC communication was performed.
