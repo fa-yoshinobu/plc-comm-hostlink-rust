@@ -2,6 +2,12 @@
 
 Current active TODOs only.
 
+The historical statements below that prohibit a public bit-in-word
+read-modify-write helper were superseded on 2026-08-07 by GOAL-BIT-002 in
+`D:\APP\cross_library_bit_write_contract_goal_20260807.md`. The explicit
+Boolean-only `write_bit_in_word` operation is restored; named writes still do
+not invoke it implicitly.
+
 ## Current Status
 
 The approved implementation items and the six cross-library overhaul items are

@@ -203,11 +203,49 @@ list rejects the unused encoding before FIFO admission or communication.
 
 ## Bit-in-word access
 
-Bit-in-word notation (`DM120.0` through `DM120.F`) is read-only. The former
-client-side read-modify-write helper was removed because it could overwrite a
-concurrent PLC or external-client update. Use a PLC-native atomic bit operation
-when available, or make the application explicitly own any non-atomic whole-
-word read/write sequence.
+Bit-in-word notation uses hexadecimal indexes (`DM120.0` through `DM120.F`).
+Use the explicit operation only when a client-side read-modify-write is the
+intended policy:
+
+```rust
+client.write_bit_in_word("DM120", 10, true).await?;
+// Equivalent helper:
+plc_comm_kv_hostlink::write_bit_in_word(&client, "DM120", 10, true).await?;
+```
+
+The value is a Rust `bool`, the index is `0..=15`, and the target must be an
+ordinary 16-bit word device. The complete plan is rejected before FIFO
+admission if invalid. After activation, one absolute transaction deadline
+covers exactly one word read and one word write in the same client FIFO turn;
+queue wait is outside that deadline. The write is sent even when the bit is
+already in the requested state. There is no fallback, resend, success readback,
+or implicit named-write behavior.
+
+The operation is not PLC-atomic. PLC logic or another connection can update
+the word between requests and that update can be lost. Use PLC-side logic, a
+handshake, or exclusive complete-word ownership for stronger guarantees.
+Dropping before the write starts sends no write. A drop after write transmission
+may have started has unknown PLC outcome and retires the transport; reopen and
+reconcile instead of retrying automatically. A returned complete PLC error is
+definitive and does not by itself retire a healthy connection.
+
+Expansion-unit buffer memory uses its own route-specific operation:
+
+```rust
+client
+    .write_bit_in_expansion_unit_buffer(1, 100, 3, true)
+    .await?;
+// Equivalent helper:
+plc_comm_kv_hostlink::write_bit_in_expansion_unit_buffer(
+    &client, 1, 100, 3, true,
+)
+.await?;
+```
+
+The unit/address and one `.U` word remain immutable across exactly one `URD`
+point and one `UWR` point. Ordinary-device and expansion-unit routes never fall
+back to one another. The shared-deadline, future-drop/outcome reconciliation,
+no-readback, and non-PLC-atomic rules are otherwise identical.
 
 ## Word monitor registration
 

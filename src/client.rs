@@ -1,9 +1,10 @@
 use crate::address::{
-    force_consecutive_device_types, force_device_types, is_direct_bit_device_type,
-    mbs_device_types, model_name_for_code, mws_device_types, parse_device, rdc_device_types,
-    require_explicit_format, require_no_suffix, validate_device_count, validate_device_span,
-    validate_device_type, validate_expansion_buffer_count, validate_expansion_buffer_span,
-    wr_device_types, ws_device_types,
+    default_format_by_device_type, force_consecutive_device_types, force_device_types,
+    is_direct_bit_device_type, mbs_device_types, model_name_for_code, mws_device_types,
+    parse_device, rdc_device_types, require_explicit_format, require_no_suffix,
+    validate_device_count, validate_device_span, validate_device_type,
+    validate_expansion_buffer_count, validate_expansion_buffer_span, wr_device_types,
+    ws_device_types,
 };
 use crate::error::{HostLinkError, HostLinkOutcomeUnknownReason};
 use crate::helpers;
@@ -309,6 +310,7 @@ pub struct HostLinkClient {
     control: Arc<ClientControl>,
     admitted_generation: Option<u64>,
     admitted_timeout: Option<Duration>,
+    admitted_deadline: Option<Instant>,
 }
 
 pub struct HostLinkClientFactory;
@@ -390,6 +392,7 @@ impl HostLinkClient {
             }),
             admitted_generation: None,
             admitted_timeout: None,
+            admitted_deadline: None,
         }
     }
 
@@ -398,14 +401,25 @@ impl HostLinkClient {
             .unwrap_or_else(|| self.control.generation.load(Ordering::Acquire))
     }
 
-    fn direct_for_generation(&self, generation: u64, timeout: Duration) -> Self {
+    fn direct_for_generation(&self, generation: u64, timeout: Duration, deadline: Instant) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
             turn: Arc::clone(&self.turn),
             control: Arc::clone(&self.control),
             admitted_generation: Some(generation),
             admitted_timeout: Some(timeout),
+            admitted_deadline: Some(deadline),
         }
+    }
+
+    fn remaining_timeout(&self, fallback: Duration) -> Result<Duration, HostLinkError> {
+        let Some(deadline) = self.admitted_deadline else {
+            return Ok(self.admitted_timeout.unwrap_or(fallback));
+        };
+        deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| HostLinkError::timeout("transaction deadline expired"))
     }
 
     async fn acquire_turn(
@@ -445,7 +459,14 @@ impl HostLinkClient {
                 .expect("timeout snapshot lock poisoned")
         });
         let guard = self.acquire_turn(generation).await?;
-        Ok((guard, self.direct_for_generation(generation, timeout)))
+        let deadline = match self.admitted_deadline {
+            Some(deadline) => deadline,
+            None => checked_deadline(timeout)?,
+        };
+        Ok((
+            guard,
+            self.direct_for_generation(generation, timeout, deadline),
+        ))
     }
 
     pub async fn connect(options: HostLinkConnectionOptions) -> Result<Self, HostLinkError> {
@@ -524,7 +545,7 @@ impl HostLinkClient {
             return Err(HostLinkError::Closed);
         }
         let mut inner = self.inner.lock().await;
-        let timeout = self.admitted_timeout.unwrap_or(inner.options.timeout);
+        let timeout = self.remaining_timeout(inner.options.timeout)?;
         let result = tokio::select! {
             result = inner.open(timeout) => result,
             changed = close_rx.changed() => {
@@ -552,7 +573,7 @@ impl HostLinkClient {
         }
         let mut inner = self.inner.lock().await;
         inner.last_request_may_have_been_sent = false;
-        let timeout = self.admitted_timeout.unwrap_or(inner.options.timeout);
+        let timeout = self.remaining_timeout(inner.options.timeout)?;
         let result = tokio::select! {
             result = inner.send_raw_bytes(body, timeout) => result,
             changed = close_rx.changed() => {
@@ -592,7 +613,7 @@ impl HostLinkClient {
         }
         let mut inner = self.inner.lock().await;
         inner.last_request_may_have_been_sent = false;
-        let timeout = self.admitted_timeout.unwrap_or(inner.options.timeout);
+        let timeout = self.remaining_timeout(inner.options.timeout)?;
         let result = tokio::select! {
             result = inner.send_decoded_with(body, decoder, timeout) => result,
             changed = close_rx.changed() => {
@@ -625,7 +646,7 @@ impl HostLinkClient {
         }
         let mut inner = self.inner.lock().await;
         inner.last_request_may_have_been_sent = false;
-        let timeout = self.admitted_timeout.unwrap_or(inner.options.timeout);
+        let timeout = self.remaining_timeout(inner.options.timeout)?;
         let result = tokio::select! {
             result = inner.send_comment_with(body, decoder, timeout) => result,
             changed = close_rx.changed() => {
@@ -791,6 +812,61 @@ impl HostLinkClient {
         command.push(' ');
         append_strict_payload(&value, &suffix, &mut command)?;
         self.expect_ok(&command).await
+    }
+
+    /// Set or clear one bit through an explicit 16-bit read-modify-write.
+    ///
+    /// The complete target, index, and Boolean value are validated before FIFO
+    /// admission. After activation, one local FIFO turn and one absolute
+    /// transaction deadline cover exactly one read and one write, even when
+    /// the bit already has the requested value. There is no fallback, retry,
+    /// or success readback. The operation is not PLC-atomic: PLC logic or
+    /// another connection can update the word between requests and that update
+    /// can be lost. Use PLC-side coordination when the complete word is shared.
+    pub async fn write_bit_in_word(
+        &self,
+        device: &str,
+        bit_index: u8,
+        value: bool,
+    ) -> Result<(), HostLinkError> {
+        if bit_index > 15 {
+            return Err(HostLinkError::protocol("bit_index must be 0-15"));
+        }
+        let address = parse_device(device)?;
+        if !address.suffix.is_empty() || default_format_by_device_type(&address.device_type) != ".U"
+        {
+            return Err(HostLinkError::protocol(
+                "write_bit_in_word requires an ordinary 16-bit word device",
+            ));
+        }
+        validate_device_type("WR", &address.device_type, wr_device_types())?;
+        validate_device_span(&address.device_type, address.number, ".U", 1)?;
+        let normalized = address.to_text()?;
+
+        let (_turn, direct) = self.begin_turn().await?;
+        let tokens = direct.read(&normalized, Some("U")).await?;
+        if tokens.len() != 1 {
+            direct.retire_transport().await;
+            return Err(HostLinkError::protocol(
+                "Bit-in-word read did not return exactly one unsigned word",
+            ));
+        }
+        let current = match tokens[0].parse::<u16>() {
+            Ok(current) => current,
+            Err(_) => {
+                direct.retire_transport().await;
+                return Err(HostLinkError::protocol(
+                    "Bit-in-word read did not return one unsigned word",
+                ));
+            }
+        };
+        let mask = 1u16 << bit_index;
+        let updated = if value {
+            current | mask
+        } else {
+            current & !mask
+        };
+        direct.write(&normalized, updated, Some("U")).await
     }
 
     pub async fn write_consecutive<T: HostLinkPayloadValue>(
@@ -1187,6 +1263,65 @@ impl HostLinkClient {
             values.len()
         ))
         .await
+    }
+
+    /// Set or clear one expansion-unit buffer bit through explicit URD/UWR.
+    ///
+    /// The route remains fixed to `unit_no` and `address`, and the format is
+    /// exactly one unsigned 16-bit word. The complete plan is validated before
+    /// FIFO admission. One absolute deadline covers exactly one read and one
+    /// write after activation. The operation is not PLC-atomic and performs no
+    /// fallback, retry, or success readback.
+    pub async fn write_bit_in_expansion_unit_buffer(
+        &self,
+        unit_no: u8,
+        address: u32,
+        bit_index: u8,
+        value: bool,
+    ) -> Result<(), HostLinkError> {
+        if unit_no > 48 {
+            return Err(HostLinkError::protocol("unitNo must be 0-48."));
+        }
+        if address > 59_999 {
+            return Err(HostLinkError::protocol("address must be 0-59999."));
+        }
+        if bit_index > 15 {
+            return Err(HostLinkError::protocol("bit_index must be 0-15"));
+        }
+        validate_expansion_buffer_count(".U", 1)?;
+        validate_expansion_buffer_span(address, ".U", 1)?;
+        let read_command = format!("URD {unit_no:02} {address}.U 1");
+        let write_prefix = format!("UWR {unit_no:02} {address}.U 1 ");
+        build_frame(&read_command)?;
+        build_frame(&format!("{write_prefix}65535"))?;
+
+        let (_turn, direct) = self.begin_turn().await?;
+        let response = direct.send_decoded_direct(&read_command, false).await?;
+        let mut tokens = split_data_tokens(&response);
+        if let Err(error) = validate_response_token_count(&tokens, 1) {
+            direct.retire_transport().await;
+            return Err(error);
+        }
+        if let Err(error) = validate_and_normalize_response_tokens(&mut tokens, ".U") {
+            direct.retire_transport().await;
+            return Err(error);
+        }
+        let current = match tokens[0].parse::<u16>() {
+            Ok(value) => value,
+            Err(_) => {
+                direct.retire_transport().await;
+                return Err(HostLinkError::protocol(
+                    "Expansion-unit bit read did not return one unsigned word",
+                ));
+            }
+        };
+        let mask = 1u16 << bit_index;
+        let updated = if value {
+            current | mask
+        } else {
+            current & !mask
+        };
+        direct.expect_ok(&format!("{write_prefix}{updated}")).await
     }
 
     /// Return the exact `RDC` response payload bytes without text decoding.

@@ -403,6 +403,210 @@ async fn direct_bit_writes_accept_only_bool_values_before_transport() {
 }
 
 #[tokio::test]
+async fn write_bit_in_word_always_reads_then_writes_one_word() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RD DM100.U" => "8".to_owned(),
+        "WR DM100.U 8" => "OK".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    client.write_bit_in_word("DM100", 3, true).await.unwrap();
+
+    assert_eq!(
+        received.lock().unwrap().as_slice(),
+        ["RD DM100.U", "WR DM100.U 8"]
+    );
+}
+
+#[tokio::test]
+async fn write_bit_in_word_covers_every_existing_complete_word_route_without_fallback() {
+    let (port, received) = start_scripted_server(|command| {
+        if command.starts_with("RD ") {
+            "0".to_owned()
+        } else {
+            "OK".to_owned()
+        }
+    })
+    .await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+    let devices = [
+        "DM0", "EM0", "FM0", "ZF0", "W0", "TM0", "Z0", "CM0", "VM0", "D0", "E0", "F0",
+    ];
+
+    for device in devices {
+        client.write_bit_in_word(device, 0, false).await.unwrap();
+    }
+
+    let expected = devices
+        .iter()
+        .flat_map(|device| [format!("RD {device}.U"), format!("WR {device}.U 0")])
+        .collect::<Vec<_>>();
+    assert_eq!(*received.lock().unwrap(), expected);
+}
+
+#[tokio::test]
+async fn write_bit_in_word_rejects_non_word_and_invalid_bit_before_transport() {
+    let (port, received) = start_scripted_server(|_| "OK".to_owned()).await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    assert!(matches!(
+        client.write_bit_in_word("R0", 0, true).await,
+        Err(HostLinkError::Protocol(_))
+    ));
+    assert!(matches!(
+        client.write_bit_in_word("T0", 0, true).await,
+        Err(HostLinkError::Protocol(_))
+    ));
+    assert!(matches!(
+        client.write_bit_in_word("AT0", 0, true).await,
+        Err(HostLinkError::Protocol(_))
+    ));
+    assert!(matches!(
+        client.write_bit_in_word("DM100", 16, true).await,
+        Err(HostLinkError::Protocol(_))
+    ));
+    assert!(received.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn write_bit_in_expansion_unit_buffer_always_uses_one_immutable_urd_uwr_route() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "URD 01 100.U 1" => "8".to_owned(),
+        "UWR 01 100.U 1 8" => "OK".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    plc_comm_kv_hostlink::write_bit_in_expansion_unit_buffer(&client, 1, 100, 3, true)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        received.lock().unwrap().as_slice(),
+        ["URD 01 100.U 1", "UWR 01 100.U 1 8"]
+    );
+}
+
+#[tokio::test]
+async fn write_bit_in_expansion_unit_buffer_rejects_invalid_plan_before_transport() {
+    let (port, received) = start_scripted_server(|_| "OK".to_owned()).await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    for result in [
+        client
+            .write_bit_in_expansion_unit_buffer(49, 0, 0, true)
+            .await,
+        client
+            .write_bit_in_expansion_unit_buffer(0, 60_000, 0, true)
+            .await,
+        client
+            .write_bit_in_expansion_unit_buffer(0, 0, 16, true)
+            .await,
+    ] {
+        assert!(matches!(result, Err(HostLinkError::Protocol(_))));
+    }
+    assert!(received.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn write_bit_in_expansion_unit_buffer_malformed_read_sends_no_write_and_retires() {
+    let (port, received) = start_scripted_server(|_| "NOT_A_WORD".to_owned()).await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    assert!(matches!(
+        client
+            .write_bit_in_expansion_unit_buffer(1, 100, 3, true)
+            .await,
+        Err(HostLinkError::Protocol(_))
+    ));
+    assert_eq!(received.lock().unwrap().as_slice(), ["URD 01 100.U 1"]);
+    assert!(!client.is_open().await);
+}
+
+#[tokio::test]
+async fn write_bit_in_expansion_unit_buffer_plc_write_error_is_definitive_and_reusable() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "URD 01 100.U 1" => "0".to_owned(),
+        "UWR 01 100.U 1 1" => "E1".to_owned(),
+        "RD DM1.U" => "7".to_owned(),
+        _ => "E2".to_owned(),
+    })
+    .await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    assert!(matches!(
+        client
+            .write_bit_in_expansion_unit_buffer(1, 100, 0, true)
+            .await,
+        Err(HostLinkError::Plc { .. })
+    ));
+    assert_eq!(client.read("DM1", Some("U")).await.unwrap(), ["7"]);
+    assert_eq!(
+        received.lock().unwrap().as_slice(),
+        ["URD 01 100.U 1", "UWR 01 100.U 1 1", "RD DM1.U"]
+    );
+}
+
+#[tokio::test]
 async fn raw_request_accepts_exact_capacity_and_rejects_one_over_without_state_change() {
     let (port, received) = start_scripted_server(|_| "OK".to_owned()).await;
     let mut options = HostLinkConnectionOptions::new(

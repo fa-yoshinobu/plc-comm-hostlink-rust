@@ -724,6 +724,39 @@ pub async fn read_named<S: AsRef<str>>(
     read_named_compiled(client, &addr_list, compiled.as_ref(), None).await
 }
 
+/// Set or clear one bit through an explicit, non-PLC-atomic word read-modify-write.
+///
+/// The complete plan is validated before FIFO admission. One client turn and
+/// one absolute deadline then cover exactly one word read and one word write,
+/// even when the requested state is unchanged. There is no fallback, retry, or
+/// success readback.
+pub async fn write_bit_in_word(
+    client: &HostLinkClient,
+    device: &str,
+    bit_index: u8,
+    value: bool,
+) -> Result<(), HostLinkError> {
+    client.write_bit_in_word(device, bit_index, value).await
+}
+
+/// Set or clear one expansion-unit buffer bit through explicit URD/UWR.
+///
+/// The immutable unit/address route is validated before FIFO admission. One
+/// client turn and one absolute deadline cover exactly one unsigned-word read
+/// and one write. The operation is not PLC-atomic and performs no fallback,
+/// retry, or success readback.
+pub async fn write_bit_in_expansion_unit_buffer(
+    client: &HostLinkClient,
+    unit_no: u8,
+    address: u32,
+    bit_index: u8,
+    value: bool,
+) -> Result<(), HostLinkError> {
+    client
+        .write_bit_in_expansion_unit_buffer(unit_no, address, bit_index, value)
+        .await
+}
+
 /// Read a named aggregate with an explicit encoding for at least one comment entry.
 ///
 /// A list without `:COMMENT` rejects the unused encoding before transport.

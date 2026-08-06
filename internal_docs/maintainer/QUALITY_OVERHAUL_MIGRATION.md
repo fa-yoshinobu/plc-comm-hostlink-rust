@@ -4,6 +4,22 @@ This record maps the approved workspace decisions to the Rust implementation.
 Breaking compatibility is intentional where it conflicts with an explicit,
 single-request, profile-safe contract.
 
+## Superseding decision: explicit word-bit write (2026-08-07)
+
+Earlier removal decisions below remain historical evidence but no longer
+describe the target surface. The client method and free `write_bit_in_word`
+helper are restored for every Host Link device family whose canonical default
+representation and `WR` command both provide one complete 16-bit `.U` word.
+The device text is immutable across the read and write; there is no alternate
+route, fallback, resend, or readback. GOAL-BIT-002 in
+`D:\APP\cross_library_bit_write_contract_goal_20260807.md` is authoritative.
+
+GOAL-HOSTLINK-EXPANSION-RMW-001 extends that contract to the existing URD/UWR
+route through the client method and free
+`write_bit_in_expansion_unit_buffer` helper. Unit, address, and `.U` format are
+immutable across both requests; ordinary and expansion routes never fall back
+to one another.
+
 ## 2026-08-01 target-state migration
 
 - Float32 writes to direct-bit devices now fail before transport. Use a word

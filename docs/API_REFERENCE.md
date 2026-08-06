@@ -39,11 +39,13 @@ no caller-controlled receive capacity; public results own their dynamic storage.
 | --- | --- |
 | Low-level single read/write | `read`, `write` |
 | Low-level consecutive read/write | `read_consecutive`, `write_consecutive` |
+| Explicit bit-in-word write | `HostLinkClient::write_bit_in_word` |
 | Legacy command variants | `read_consecutive_legacy`, `write_consecutive_legacy` |
 | Timer/counter set value | `write_set_value`, `write_set_value_consecutive` |
 | Monitor registration | `register_monitor_bits`, `register_monitor_words`, `HostLinkMonitorWord` |
 | Monitor read | `read_monitor_bits`, `read_monitor_words` |
 | Expansion-unit buffer | `read_expansion_unit_buffer`, `write_expansion_unit_buffer` |
+| Expansion-buffer bit write | `HostLinkClient::write_bit_in_expansion_unit_buffer` |
 | Comment encoding | `HostLinkCommentEncoding::{Utf8, Cp932}` |
 | Comment text | `read_comments(device, encoding)` |
 | Comment bytes | `read_comment_bytes` |
@@ -112,6 +114,8 @@ without an alias.
 | Dword reads | `read_dwords`, `read_dwords_single_request` |
 | Word writes | `write_words_single_request` |
 | Dword writes | `write_dwords_single_request` |
+| Explicit bit-in-word write | `write_bit_in_word` |
+| Expansion-buffer bit write | `write_bit_in_expansion_unit_buffer` |
 
 All word/Dword helpers are single-request operations. There are no chunked
 exports. `read_named` is the only automatic multi-request read aggregate. It
@@ -125,6 +129,18 @@ Named keys must be semantically unique by device family, numeric address,
 dtype, bit index, and scalar count. Spelling-only variants are rejected before
 FIFO admission, while distinct dtype views, bit indices, and overlapping spans
 remain valid. Result keys preserve the original input strings.
+
+`write_bit_in_word` is the one explicit two-request write helper. It accepts a
+Boolean value and bit index `0..=15`, validates an ordinary complete 16-bit word
+target before FIFO admission, and keeps the immutable device route for its one
+read and one write. One absolute deadline covers both after activation. It
+always sends the write after a successful read, performs no fallback, retry, or
+success readback, and is not PLC-atomic against PLC logic or another connection.
+
+`write_bit_in_expansion_unit_buffer` applies the same contract to one `.U`
+word on the existing URD/UWR unit/address route. The selected unit and address
+remain immutable across both requests and never fall back to an ordinary device
+route.
 
 Numeric semantic `.H` values validate 1..4 hexadecimal digits and return
 exactly four uppercase digits (`0000` through `FFFF`); raw reads and write

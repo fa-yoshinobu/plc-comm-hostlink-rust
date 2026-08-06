@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-08-07
+
+- Release: Bumped the crate metadata to `4.0.0` for the approved breaking-contract release.
+- Library: Restored the explicit Boolean-only client and helper `write_bit_in_word` operation for ordinary 16-bit word devices. It validates the complete plan before FIFO admission, always performs one word read followed by one word write in one client turn, and uses one absolute deadline for both requests after activation. The operation is intentionally not PLC-atomic and performs no write fallback, retry, or success readback.
+- Library: Added client and helper `write_bit_in_expansion_unit_buffer` operations for the existing URD/UWR route. They fix the route to one unit/address and `.U` word, use the same Boolean-only preflight, FIFO, absolute-deadline, non-PLC-atomic, and outcome-unknown contract, and never fall back to another route.
+- Docs: Documented the bit-in-word write concurrency, cancellation, timeout, and outcome-unknown contract and the required migration from manual read/write sequences.
+
 - Breaking: Replace `HostLinkMonitorWord::DirectBit` and `direct_bit` entirely with `PackedDirectBitsU16` and `packed_direct_bits_u16`; no alias remains. The new name exposes the PLC contract: registration sends the exact bare direct-bit `MWS` token, while the corresponding `MWR` field is exactly 1-5 ASCII decimal digits whose value is `0..=65535`; optional leading zeros are preserved, but signs, whitespace, nondecimal text, six or more digits, and overflow are rejected. It is not an individual bit. Use `register_monitor_bits`/`read_monitor_bits` for strict `0`/`1`/`ON`/`OFF` bit monitoring.
 - Breaking: Low-level formatted `T`/`C` reads now preserve the PLC's structural status token as exact `0` or `1` instead of incorrectly applying `.H` and returning `0000` or `0001`. The selected `.U`, `.S`, `.H`, `.D`, or `.L` format applies only to current and preset values. Public signatures and high-level return types are unchanged; callers comparing the first low-level token must compare against `0` or `1`.
 - Library: Correct formatted single reads of direct-bit devices to accept the PLC's one packed scalar response token instead of expecting 16 or 32 separate bit tokens. Signed `.S` and `.L` responses accept the PLC's explicit leading `+`; bare bit reads remain strict `0`/`1`/`ON`/`OFF` reads. Public signatures are unchanged.
