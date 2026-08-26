@@ -24,12 +24,15 @@ pub use device_ranges::{
     KvDeviceRangeSegment, device_range_catalog_for_plc_profile,
 };
 pub use error::{HostLinkError, HostLinkOutcomeUnknownReason};
+#[allow(deprecated)]
+pub use helpers::read_words;
 pub use helpers::{
     HostLinkValue, NamedReadResult, TimerCounterValue, poll, poll_with_comment_encoding,
-    read_comment_bytes, read_comments, read_counter, read_dwords, read_dwords_single_request,
-    read_named, read_named_with_comment_encoding, read_timer, read_timer_counter, read_typed,
-    read_words, read_words_single_request, write_bit_in_expansion_unit_buffer, write_bit_in_word,
-    write_dwords_single_request, write_typed, write_words_single_request,
+    read_bits_single_request, read_comment_bytes, read_comments, read_counter, read_dwords,
+    read_dwords_single_request, read_named, read_named_with_comment_encoding, read_timer,
+    read_timer_counter, read_typed, read_words_single_request, write_bit_in_expansion_unit_buffer,
+    write_bit_in_word, write_bits_single_request, write_dwords_single_request, write_typed,
+    write_words_single_request,
 };
 pub use model::{
     HostLinkClock, HostLinkCommentEncoding, HostLinkConnectionOptions, HostLinkMonitorWord,

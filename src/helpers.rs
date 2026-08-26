@@ -1,7 +1,7 @@
 use crate::address::{
-    KvDeviceAddress, parse_device, parse_named_address_parts, rdc_device_types,
-    require_explicit_format, require_float32_eligible_device_type, require_no_suffix,
-    validate_device_count, validate_device_span, validate_device_type,
+    KvDeviceAddress, is_direct_bit_device_type, parse_device, parse_named_address_parts,
+    rdc_device_types, require_explicit_format, require_float32_eligible_device_type,
+    require_no_suffix, validate_device_count, validate_device_span, validate_device_type,
 };
 use crate::client::{HostLinkClient, HostLinkPayloadValue};
 use crate::error::HostLinkError;
@@ -243,7 +243,7 @@ async fn read_typed_impl(
 
     match dtype.as_str() {
         "F" => {
-            let words = read_words(client, &device, 2).await?;
+            let words = read_words_single_request(client, &device, 2).await?;
             let bits = (words[0] as u32) | ((words[1] as u32) << 16);
             Ok(HostLinkValue::F32(f32::from_bits(bits)))
         }
@@ -863,9 +863,12 @@ pub(crate) async fn execute_read_named_plan(
         match operation {
             ReadPlanOperation::Segment(segment) => match segment.mode {
                 ReadPlanSegmentMode::Words => {
-                    let words =
-                        read_words(client, &segment.start_address.to_text()?, segment.count)
-                            .await?;
+                    let words = read_words_single_request(
+                        client,
+                        &segment.start_address.to_text()?,
+                        segment.count,
+                    )
+                    .await?;
                     for request in &segment.requests {
                         let offset = (read_plan_number(request) - segment.start_number) as usize;
                         resolved[request.index] =
@@ -953,6 +956,9 @@ pub fn poll_with_comment_encoding<'a, S: AsRef<str> + 'a>(
     }
 }
 
+#[deprecated(
+    note = "use read_words_single_request; this compatibility alias will be removed in the next breaking release"
+)]
 pub async fn read_words(
     client: &HostLinkClient,
     device: &str,
@@ -967,6 +973,41 @@ pub async fn read_dwords(
     count: usize,
 ) -> Result<Vec<u32>, HostLinkError> {
     read_dwords_single_request(client, device, count).await
+}
+
+pub async fn read_bits_single_request(
+    client: &HostLinkClient,
+    device: &str,
+    count: usize,
+) -> Result<Vec<bool>, HostLinkError> {
+    let address = parse_device(device)?;
+    require_no_suffix(&address, "read_bits_single_request")?;
+    if !is_direct_bit_device_type(&address.device_type) {
+        return Err(HostLinkError::protocol(
+            "read_bits_single_request requires a direct bit device",
+        ));
+    }
+    validate_device_count(&address.device_type, "", count)?;
+    validate_device_span(&address.device_type, address.number, "", count)?;
+    let values = client.read_consecutive(device, count, None).await?;
+    values.iter().map(|value| parse_bool_token(value)).collect()
+}
+
+pub async fn write_bits_single_request(
+    client: &HostLinkClient,
+    device: &str,
+    values: &[bool],
+) -> Result<(), HostLinkError> {
+    let address = parse_device(device)?;
+    require_no_suffix(&address, "write_bits_single_request")?;
+    if !is_direct_bit_device_type(&address.device_type) {
+        return Err(HostLinkError::protocol(
+            "write_bits_single_request requires a direct bit device",
+        ));
+    }
+    validate_device_count(&address.device_type, "", values.len())?;
+    validate_device_span(&address.device_type, address.number, "", values.len())?;
+    client.write_consecutive(device, values, None).await
 }
 
 pub async fn read_words_single_request(

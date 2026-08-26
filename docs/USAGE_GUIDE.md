@@ -149,11 +149,15 @@ numeric and textual Boolean aliases are rejected before transport.
 
 ## Single-request block helpers
 
-`read_words`, `read_dwords`, `write_words_single_request`, and
-`write_dwords_single_request` each send at most one Host Link command.
-Unsigned Dword helpers use native `.D` commands. Word requests accept at most
-1,000 values and Dword requests at most 500 values, subject to stricter
-device-family limits.
+`read_bits_single_request`, `write_bits_single_request`,
+`read_words_single_request`, `read_dwords_single_request`,
+`write_words_single_request`, and `write_dwords_single_request` each send
+exactly one Host Link command or reject before send. Bit helpers accept only
+direct bit families and Boolean values. Bit and Word requests accept 1 through
+1,000 points, and Dword requests accept 1 through 500 points, subject to
+stricter device-family limits. Unsigned Dword helpers use native `.D` commands.
+The deprecated `read_words` compatibility alias delegates to
+`read_words_single_request` for one release.
 
 The library has no general chunked helper. A low-level read or write is never
 divided automatically. If an application intentionally uses several requests,

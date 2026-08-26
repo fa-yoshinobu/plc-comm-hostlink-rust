@@ -1464,8 +1464,19 @@ impl HostLinkClient {
         helpers::poll_with_comment_encoding(self, addresses, interval, comment_encoding)
     }
 
+    pub async fn read_words_single_request(
+        &self,
+        device: &str,
+        count: usize,
+    ) -> Result<Vec<u16>, HostLinkError> {
+        helpers::read_words_single_request(self, device, count).await
+    }
+
+    #[deprecated(
+        note = "use read_words_single_request; this compatibility alias will be removed in the next breaking release"
+    )]
     pub async fn read_words(&self, device: &str, count: usize) -> Result<Vec<u16>, HostLinkError> {
-        helpers::read_words(self, device, count).await
+        self.read_words_single_request(device, count).await
     }
 
     pub async fn read_dwords(&self, device: &str, count: usize) -> Result<Vec<u32>, HostLinkError> {

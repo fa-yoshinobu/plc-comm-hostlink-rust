@@ -110,15 +110,17 @@ without an alias.
 | Named read result | `NamedReadResult`, `read_named`, `read_named_with_comment_encoding` |
 | Polling | `poll`, `poll_with_comment_encoding` |
 | Timer/counter composite | `TimerCounterValue`, `read_timer_counter`, `read_timer`, `read_counter` |
-| Word reads | `read_words`, `read_words_single_request` |
+| Direct-bit blocks | `read_bits_single_request`, `write_bits_single_request` |
+| Word reads | `read_words_single_request` (`read_words` is deprecated) |
 | Dword reads | `read_dwords`, `read_dwords_single_request` |
 | Word writes | `write_words_single_request` |
 | Dword writes | `write_dwords_single_request` |
 | Explicit bit-in-word write | `write_bit_in_word` |
 | Expansion-buffer bit write | `write_bit_in_expansion_unit_buffer` |
 
-All word/Dword helpers are single-request operations. There are no chunked
-exports. `read_named` is the only automatic multi-request read aggregate. It
+All bit/word/Dword helpers named `single_request` issue exactly one request or
+reject before send. There are no chunked exports. `read_named` is the only
+automatic multi-request read aggregate. It
 groups wire-compatible device types by first appearance, sorts each group by
 address, merges contiguous ranges up to request limits, keeps multiword values
 whole, owns one FIFO turn through final decode/staging, and returns no partial

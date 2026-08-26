@@ -5,7 +5,7 @@ use plc_comm_kv_hostlink::{
     KvDeviceRangeEntry, KvDeviceRangeSegment, KvPlcMode, TimerCounterValue,
     device_range_catalog_for_plc_profile, poll, poll_with_comment_encoding, read_comment_bytes,
     read_comments, read_counter, read_dwords, read_named, read_named_with_comment_encoding,
-    read_timer, read_timer_counter, read_words,
+    read_timer, read_timer_counter, read_words_single_request,
 };
 use serde_json::{Value, json};
 
@@ -399,7 +399,8 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             if extra.is_empty() {
                 json!({"status": "error", "message": "read-words requires count"})
             } else {
-                let values = read_words(&client, &address, extra[0].parse()?).await?;
+                let values =
+                    read_words_single_request(&client, &address, extra[0].parse()?).await?;
                 json!({"status": "success", "values": values.into_iter().map(|value| value.to_string()).collect::<Vec<_>>()})
             }
         }

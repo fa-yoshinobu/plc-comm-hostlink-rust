@@ -4,8 +4,9 @@ use plc_comm_kv_hostlink::{
     HostLinkAddress, HostLinkClient, HostLinkCommentEncoding, HostLinkConnectionOptions,
     HostLinkError, HostLinkMonitorWord, HostLinkOutcomeUnknownReason, HostLinkPayloadValue,
     HostLinkTransportMode, HostLinkValue, KvDeviceAddress, KvLogicalAddress, open_and_connect,
-    read_comment_bytes, read_comments, read_dwords, read_typed, read_words,
-    write_dwords_single_request,
+    read_bits_single_request, read_comment_bytes, read_comments, read_dwords, read_typed,
+    read_words_single_request, write_bits_single_request, write_dwords_single_request,
+    write_words_single_request,
 };
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -1444,10 +1445,87 @@ async fn dword_helpers_use_one_native_dword_request_and_enforce_the_limit() {
         .await
         .unwrap();
     assert!(read_dwords(&client, "DM0", 501).await.is_err());
-    assert!(read_words(&client, "DM0", 1001).await.is_err());
+    assert!(
+        read_words_single_request(&client, "DM0", 1001)
+            .await
+            .is_err()
+    );
     assert_eq!(
         received.lock().unwrap().drain(..).collect::<Vec<_>>(),
         vec!["RDS DM100.D 2", "WRS DM200.D 2 1 4294967295"]
+    );
+}
+
+#[tokio::test]
+#[allow(deprecated)]
+async fn bit_and_word_single_request_helpers_send_once_or_reject_before_send() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "RDS R5000 3" => "0 1 1".to_owned(),
+        "WRS R5000 3 0 1 1" => "OK".to_owned(),
+        "RDS DM0.U 2" => "1 2".to_owned(),
+        "WRS DM0.U 2 1 2" => "OK".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    assert_eq!(
+        read_bits_single_request(&client, "R5000", 3).await.unwrap(),
+        vec![false, true, true]
+    );
+    write_bits_single_request(&client, "R5000", &[false, true, true])
+        .await
+        .unwrap();
+    assert_eq!(
+        read_words_single_request(&client, "DM0", 2).await.unwrap(),
+        vec![1, 2]
+    );
+    write_words_single_request(&client, "DM0", &[1, 2])
+        .await
+        .unwrap();
+    assert_eq!(
+        plc_comm_kv_hostlink::read_words(&client, "DM0", 2)
+            .await
+            .unwrap(),
+        vec![1, 2]
+    );
+    assert_eq!(client.read_words("DM0", 2).await.unwrap(), vec![1, 2]);
+    assert!(read_bits_single_request(&client, "DM0", 1).await.is_err());
+    assert!(
+        read_bits_single_request(&client, "R5000", 1001)
+            .await
+            .is_err()
+    );
+    assert!(
+        write_bits_single_request(&client, "DM0", &[true])
+            .await
+            .is_err()
+    );
+    let too_many_bits = vec![false; 1001];
+    assert!(
+        write_bits_single_request(&client, "R5000", &too_many_bits)
+            .await
+            .is_err()
+    );
+
+    assert_eq!(
+        received.lock().unwrap().drain(..).collect::<Vec<_>>(),
+        vec![
+            "RDS R5000 3",
+            "WRS R5000 3 0 1 1",
+            "RDS DM0.U 2",
+            "WRS DM0.U 2 1 2",
+            "RDS DM0.U 2",
+            "RDS DM0.U 2",
+        ]
     );
 }
 
