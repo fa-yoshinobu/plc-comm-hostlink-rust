@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-08-27
+
+- Release: Bumped the crate metadata to `4.1.0` for the additive canonical single-request APIs.
 - Library: Added canonical `read_bits_single_request` and `write_bits_single_request` high-level helpers for direct bit families. They accept 1 through 1,000 Boolean points and either issue exactly one RDS/WRS request or reject the complete operation before send.
 - Library: Deprecated the high-level `read_words` free function and client-method compatibility aliases in favor of `read_words_single_request`; both delegate directly and remain available for one compatibility release.
 - Docs: Documented the canonical bit/word single-request names and migration from `read_words`.
