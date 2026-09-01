@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Tests: Included the device-range JSON fixture required by library unit tests in the distributed crate.
+- CI: Made the extracted-crate package check run the library unit tests so a missing packaged fixture fails before release.
+
 ## [4.1.0] - 2026-08-27
 
 - Release: Bumped the crate metadata to `4.1.0` for the additive canonical single-request APIs.

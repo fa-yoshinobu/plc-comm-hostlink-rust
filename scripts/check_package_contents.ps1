@@ -61,9 +61,13 @@ try {
         "tests/",
         "tools/"
     )
+    $allowedRepositoryFiles = @("tests/fixtures/kv_device_ranges.json")
     $forbiddenNames = @("AGENTS.md", "TODO.md", "release_check.bat", "run_ci.bat")
     $forbidden = @(
         foreach ($path in $packageFiles) {
+            if ($path -in $allowedRepositoryFiles) {
+                continue
+            }
             if ($path -in $forbiddenNames) {
                 $path
                 continue
@@ -80,7 +84,13 @@ try {
         throw "Registry package contains repository-only files: $($forbidden -join ', ')"
     }
 
-    $required = @("Cargo.toml", "LICENSE", "README.md", "src/lib.rs")
+    $required = @(
+        "Cargo.toml",
+        "LICENSE",
+        "README.md",
+        "src/lib.rs",
+        "tests/fixtures/kv_device_ranges.json"
+    )
     $missing = @($required | Where-Object { $_ -notin $packageFiles })
     if ($missing.Count -ne 0) {
         throw "Registry package is missing required files: $($missing -join ', ')"
@@ -103,6 +113,11 @@ try {
     & cargo check --manifest-path $packagedManifest --all-features --lib --bins --examples
     if ($LASTEXITCODE -ne 0) {
         throw "Generated-crate library/binary/example check failed."
+    }
+
+    & cargo test --manifest-path $packagedManifest --all-features --lib
+    if ($LASTEXITCODE -ne 0) {
+        throw "Generated-crate library unit tests failed."
     }
 
     $env:RUSTDOCFLAGS = "-D warnings"

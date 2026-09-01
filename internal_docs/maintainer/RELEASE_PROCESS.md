@@ -10,9 +10,11 @@ This checklist governs crates.io and GitHub publication for this repository.
 4. Run `scripts/check_source_archive.ps1` and require the extracted GitHub
    source archive to pass format, check, Clippy, rustdoc, and all-target tests.
 5. Run `scripts/check_package_contents.ps1`. It generates and extracts the
-   `.crate`, confirms repository tests and maintainer tooling are absent,
-   checks packaged examples and rustdoc, and builds an isolated consumer using
-   only that extracted package before the immutable annotated tag is created.
+   `.crate`, confirms repository test source and maintainer tooling are absent
+   except for the required device-range unit-test fixture, runs the extracted
+   library unit tests, checks packaged examples and rustdoc, and builds an
+   isolated consumer using only that extracted package before the immutable
+   annotated tag is created.
 
 ## Publication Integrity Gate
 

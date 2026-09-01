@@ -87,7 +87,8 @@ For a zero-code connectivity check, see [PLC Scope](https://github.com/fa-yoshin
 
 GitHub source archives include the test suite and its fixtures so a source
 checkout/archive can run the standard Cargo gates. The crates.io package is a
-separate minimal distribution and does not include repository tests or
+separate minimal distribution. It includes the device-range JSON fixture needed
+by its library unit tests, but does not include repository test source or
 maintainer tooling.
 
 ## Commercial support

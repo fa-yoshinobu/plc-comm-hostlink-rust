@@ -18,6 +18,7 @@ include = [
     "README.md",
     "src/**",
     "examples/**",
+    "tests/fixtures/kv_device_ranges.json",
 ]
 
 [lib]

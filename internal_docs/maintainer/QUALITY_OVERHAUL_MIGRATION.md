@@ -556,6 +556,10 @@ Acceptance criteria:
   repository fixtures. Consumer validation now compiles the packaged library,
   binary, and examples without enabling `cfg(test)`, while separately proving
   that the repository test tree is absent.
+  This historical disposition was superseded by `HL-REQ-002`: the distributed
+  crate now includes exactly `tests/fixtures/kv_device_ranges.json`, and the
+  extracted-crate gate runs the library unit tests while repository test source
+  remains excluded.
 - Accepted finding `RS-XOVER-F-007`: the renamed public result and uncertain-
   outcome reason types needed source-level rustdoc, not only hand-written API
   pages. Their rustdoc now states the non-atomic aggregate and future-drop
