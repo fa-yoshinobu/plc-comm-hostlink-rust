@@ -1,11 +1,12 @@
 use encoding_rs::SHIFT_JIS;
 use futures_util::{StreamExt, pin_mut};
+use indexmap::IndexMap;
 use plc_comm_kv_hostlink::{
     HostLinkAddress, HostLinkClient, HostLinkCommentEncoding, HostLinkConnectionOptions,
     HostLinkError, HostLinkMonitorWord, HostLinkOutcomeUnknownReason, HostLinkPayloadValue,
     HostLinkTransportMode, HostLinkValue, KvDeviceAddress, KvLogicalAddress, open_and_connect,
-    read_bits_single_request, read_comment_bytes, read_comments, read_dwords, read_typed,
-    read_words_single_request, write_bits_single_request, write_dwords_single_request,
+    read_bits_single_request, read_comment, read_comment_bytes, read_dwords_single_request,
+    read_typed, read_words_single_request, write_bits_single_request, write_dwords_single_request,
     write_words_single_request,
 };
 use std::sync::{Arc, Mutex};
@@ -13,6 +14,273 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::Notify;
+
+#[tokio::test]
+async fn write_named_uses_exactly_one_existing_write_request() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "WRS DM100.U 2 123 456"
+        | "WRS DM200.U 4 1 0 2 0"
+        | "WRS DM300.U 4 0 16416 0 16480"
+        | "WRS Z1.D 2 70000 80000"
+        | "WSS T10.D 2 111 222"
+        | "WRS R115 2 1 0"
+        | "WR R115.U 321" => "OK".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    client
+        .write_named(&IndexMap::from([
+            ("DM100:U".to_owned(), HostLinkValue::U16(123)),
+            ("DM101:U".to_owned(), HostLinkValue::U16(456)),
+        ]))
+        .await
+        .unwrap();
+    client
+        .write_named(&IndexMap::from([
+            ("DM200:D".to_owned(), HostLinkValue::U32(1)),
+            ("DM202:D".to_owned(), HostLinkValue::U32(2)),
+        ]))
+        .await
+        .unwrap();
+    client
+        .write_named(&IndexMap::from([
+            ("T10:D".to_owned(), HostLinkValue::U32(111)),
+            ("T11:D".to_owned(), HostLinkValue::U32(222)),
+        ]))
+        .await
+        .unwrap();
+    client
+        .write_named(&IndexMap::from([
+            ("DM300:F".to_owned(), HostLinkValue::F32(2.5)),
+            ("DM302:F".to_owned(), HostLinkValue::F32(3.5)),
+        ]))
+        .await
+        .unwrap();
+    client
+        .write_named(&IndexMap::from([
+            ("Z1:D".to_owned(), HostLinkValue::U32(70_000)),
+            ("Z2:D".to_owned(), HostLinkValue::U32(80_000)),
+        ]))
+        .await
+        .unwrap();
+    client
+        .write_named(&IndexMap::from([
+            ("R115:BIT".to_owned(), HostLinkValue::Bool(true)),
+            ("R200:BIT".to_owned(), HostLinkValue::Bool(false)),
+        ]))
+        .await
+        .unwrap();
+    client
+        .write_named(&IndexMap::from([(
+            "R115:U".to_owned(),
+            HostLinkValue::U16(321),
+        )]))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        received.lock().unwrap().as_slice(),
+        [
+            "WRS DM100.U 2 123 456",
+            "WRS DM200.U 4 1 0 2 0",
+            "WSS T10.D 2 111 222",
+            "WRS DM300.U 4 0 16416 0 16480",
+            "WRS Z1.D 2 70000 80000",
+            "WRS R115 2 1 0",
+            "WR R115.U 321",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn write_named_preflights_complete_update_set_without_partial_send() {
+    let (port, received) = start_scripted_server(|_| "OK".to_owned()).await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let rejected = [
+        IndexMap::new(),
+        IndexMap::from([
+            ("DM0:U".to_owned(), HostLinkValue::U16(1)),
+            ("DM2:U".to_owned(), HostLinkValue::U16(2)),
+        ]),
+        IndexMap::from([
+            ("DM1:U".to_owned(), HostLinkValue::U16(1)),
+            ("DM0:U".to_owned(), HostLinkValue::U16(2)),
+        ]),
+        IndexMap::from([
+            ("DM0:U".to_owned(), HostLinkValue::U16(1)),
+            ("DM1:S".to_owned(), HostLinkValue::I16(2)),
+        ]),
+        IndexMap::from([
+            ("DM0:U".to_owned(), HostLinkValue::U16(1)),
+            ("dm0000:u".to_owned(), HostLinkValue::U16(2)),
+        ]),
+        IndexMap::from([("DM0.0".to_owned(), HostLinkValue::Bool(true))]),
+        IndexMap::from([("AT0:D".to_owned(), HostLinkValue::U32(1))]),
+        IndexMap::from([
+            ("DM0:U".to_owned(), HostLinkValue::U16(1)),
+            ("DM1:U".to_owned(), HostLinkValue::Text("2".to_owned())),
+        ]),
+    ];
+    for updates in rejected {
+        assert!(client.write_named(&updates).await.is_err());
+    }
+
+    assert!(received.lock().unwrap().is_empty());
+    assert_eq!(client.traffic_stats().await.request_count, 0);
+}
+
+#[tokio::test]
+async fn write_named_enforces_complete_request_point_limits_before_send() {
+    let (port, received) = start_scripted_server(|_| "OK".to_owned()).await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    let words = (0..1001)
+        .map(|index| (format!("DM{index}:U"), HostLinkValue::U16(index as u16)))
+        .collect::<IndexMap<_, _>>();
+    let dwords = (0..501)
+        .map(|index| (format!("DM{}:D", index * 2), HostLinkValue::U32(index)))
+        .collect::<IndexMap<_, _>>();
+    let presets = (0..121)
+        .map(|index| (format!("T{index}:D"), HostLinkValue::U32(index)))
+        .collect::<IndexMap<_, _>>();
+
+    for updates in [&words, &dwords, &presets] {
+        assert!(client.write_named(updates).await.is_err());
+    }
+    assert!(received.lock().unwrap().is_empty());
+    assert_eq!(client.traffic_stats().await.request_count, 0);
+}
+
+#[allow(deprecated)]
+#[tokio::test]
+async fn renamed_canonical_apis_and_deprecated_aliases_share_wire_and_results() {
+    let (port, received) = start_scripted_server(|command| match command.as_str() {
+        "?E" => "42".to_owned(),
+        "RDC DM10" => "COMMENT".to_owned(),
+        "RDS DM100.D 1" => "123".to_owned(),
+        "WS T0.D 11" | "WSS T1.D 2 12 13" => "OK".to_owned(),
+        _ => "E1".to_owned(),
+    })
+    .await;
+    let mut options = HostLinkConnectionOptions::new(
+        "127.0.0.1",
+        8501,
+        HostLinkTransportMode::Tcp,
+        "keyence:kv-8000",
+    )
+    .unwrap();
+    options.port = port;
+    let client = HostLinkClient::connect(options).await.unwrap();
+
+    assert_eq!(client.read_error_number().await.unwrap(), "42");
+    assert_eq!(client.check_error_no().await.unwrap(), "42");
+    assert_eq!(
+        client
+            .read_comment("DM10", HostLinkCommentEncoding::Utf8)
+            .await
+            .unwrap(),
+        "COMMENT"
+    );
+    assert_eq!(
+        client
+            .read_comments("DM10", HostLinkCommentEncoding::Utf8)
+            .await
+            .unwrap(),
+        "COMMENT"
+    );
+    assert_eq!(
+        read_comment(&client, "DM10", HostLinkCommentEncoding::Utf8)
+            .await
+            .unwrap(),
+        "COMMENT"
+    );
+    assert_eq!(
+        plc_comm_kv_hostlink::read_comments(&client, "DM10", HostLinkCommentEncoding::Utf8,)
+            .await
+            .unwrap(),
+        "COMMENT"
+    );
+    assert_eq!(
+        client.read_dwords_single_request("DM100", 1).await.unwrap(),
+        [123]
+    );
+    assert_eq!(client.read_dwords("DM100", 1).await.unwrap(), [123]);
+    assert_eq!(
+        read_dwords_single_request(&client, "DM100", 1)
+            .await
+            .unwrap(),
+        [123]
+    );
+    assert_eq!(
+        plc_comm_kv_hostlink::read_dwords(&client, "DM100", 1)
+            .await
+            .unwrap(),
+        [123]
+    );
+    client
+        .write_timer_counter_preset("T0", 11_u32, Some("D"))
+        .await
+        .unwrap();
+    client
+        .write_set_value("T0", 11_u32, Some("D"))
+        .await
+        .unwrap();
+    client
+        .write_timer_counter_preset_consecutive("T1", &[12_u32, 13], Some("D"))
+        .await
+        .unwrap();
+    client
+        .write_set_value_consecutive("T1", &[12_u32, 13], Some("D"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        received.lock().unwrap().as_slice(),
+        [
+            "?E",
+            "?E",
+            "RDC DM10",
+            "RDC DM10",
+            "RDC DM10",
+            "RDC DM10",
+            "RDS DM100.D 1",
+            "RDS DM100.D 1",
+            "RDS DM100.D 1",
+            "RDS DM100.D 1",
+            "WS T0.D 11",
+            "WS T0.D 11",
+            "WSS T1.D 2 12 13",
+            "WSS T1.D 2 12 13",
+        ]
+    );
+}
 
 #[tokio::test]
 async fn refused_tcp_connection_is_transport_failure_and_not_adopted() {
@@ -1060,7 +1328,7 @@ async fn suffixes_are_rejected_by_non_format_commands_before_transport() {
     );
     assert!(
         client
-            .read_comments("DM0.U", HostLinkCommentEncoding::Utf8)
+            .read_comment("DM0.U", HostLinkCommentEncoding::Utf8)
             .await
             .unwrap_err()
             .to_string()
@@ -1438,13 +1706,19 @@ async fn dword_helpers_use_one_native_dword_request_and_enforce_the_limit() {
     let client = HostLinkClient::connect(options).await.unwrap();
 
     assert_eq!(
-        read_dwords(&client, "DM100", 2).await.unwrap(),
+        read_dwords_single_request(&client, "DM100", 2)
+            .await
+            .unwrap(),
         vec![1, u32::MAX]
     );
     write_dwords_single_request(&client, "DM200", &[1, u32::MAX])
         .await
         .unwrap();
-    assert!(read_dwords(&client, "DM0", 501).await.is_err());
+    assert!(
+        read_dwords_single_request(&client, "DM0", 501)
+            .await
+            .is_err()
+    );
     assert!(
         read_words_single_request(&client, "DM0", 1001)
             .await
@@ -2325,7 +2599,7 @@ async fn read_comments_helper_and_named_read_support_comment_values() {
     options.port = port;
     let client = HostLinkClient::connect(options).await.unwrap();
 
-    let comment = read_comments(&client, "DM150", HostLinkCommentEncoding::Utf8)
+    let comment = read_comment(&client, "DM150", HostLinkCommentEncoding::Utf8)
         .await
         .unwrap();
     assert_eq!(comment, "MAIN COMMENT");
@@ -2409,7 +2683,7 @@ async fn read_comments_decodes_cp932_payloads_only_when_selected() {
     options.port = port;
     let client = HostLinkClient::connect(options).await.unwrap();
 
-    let comment = read_comments(&client, "DM20", HostLinkCommentEncoding::Cp932)
+    let comment = read_comment(&client, "DM20", HostLinkCommentEncoding::Cp932)
         .await
         .unwrap();
 
@@ -2442,28 +2716,28 @@ async fn read_comments_remove_only_trailing_ascii_space_padding() {
 
     assert_eq!(
         client
-            .read_comments("DM20", HostLinkCommentEncoding::Utf8)
+            .read_comment("DM20", HostLinkCommentEncoding::Utf8)
             .await
             .unwrap(),
         "A B"
     );
     assert_eq!(
         client
-            .read_comments("DM21", HostLinkCommentEncoding::Utf8)
+            .read_comment("DM21", HostLinkCommentEncoding::Utf8)
             .await
             .unwrap(),
         "TEXT \t"
     );
     assert_eq!(
         client
-            .read_comments("DM22", HostLinkCommentEncoding::Utf8)
+            .read_comment("DM22", HostLinkCommentEncoding::Utf8)
             .await
             .unwrap(),
         "FULLWIDTH\u{3000}"
     );
     assert_eq!(
         client
-            .read_comments("DM23", HostLinkCommentEncoding::Utf8)
+            .read_comment("DM23", HostLinkCommentEncoding::Utf8)
             .await
             .unwrap(),
         ""
@@ -2511,7 +2785,7 @@ async fn read_comment_bytes_preserves_padding_and_text_decode_is_strict() {
     invalid_options.port = invalid_port;
     let invalid_client = HostLinkClient::connect(invalid_options).await.unwrap();
     let error = invalid_client
-        .read_comments("DM21", HostLinkCommentEncoding::Cp932)
+        .read_comment("DM21", HostLinkCommentEncoding::Cp932)
         .await
         .unwrap_err();
     assert!(matches!(error, HostLinkError::Protocol(_)));
@@ -2576,7 +2850,7 @@ async fn plc_comment_errors_keep_connection_for_raw_and_text_reads() {
     text_options.port = text_port;
     let text_client = HostLinkClient::connect(text_options).await.unwrap();
     let error = text_client
-        .read_comments("DM24", HostLinkCommentEncoding::Utf8)
+        .read_comment("DM24", HostLinkCommentEncoding::Utf8)
         .await
         .unwrap_err();
     assert!(matches!(
@@ -2586,7 +2860,7 @@ async fn plc_comment_errors_keep_connection_for_raw_and_text_reads() {
     assert!(text_client.is_open().await);
     assert_eq!(
         text_client
-            .read_comments("DM25", HostLinkCommentEncoding::Utf8)
+            .read_comment("DM25", HostLinkCommentEncoding::Utf8)
             .await
             .unwrap(),
         "TEXT OK"
@@ -2663,7 +2937,7 @@ async fn ordinary_client_supports_read_comments() {
     options.port = port;
     let client = open_and_connect(options).await.unwrap();
     let comment = client
-        .read_comments("DM10", HostLinkCommentEncoding::Utf8)
+        .read_comment("DM10", HostLinkCommentEncoding::Utf8)
         .await
         .unwrap();
 
@@ -2693,11 +2967,11 @@ async fn read_comments_accepts_xym_alias_device_types() {
     options.port = port;
     let client = HostLinkClient::connect(options).await.unwrap();
     let data_memory_comment = client
-        .read_comments("D10", HostLinkCommentEncoding::Utf8)
+        .read_comment("D10", HostLinkCommentEncoding::Utf8)
         .await
         .unwrap();
     let auxiliary_relay_comment = client
-        .read_comments("M20", HostLinkCommentEncoding::Utf8)
+        .read_comment("M20", HostLinkCommentEncoding::Utf8)
         .await
         .unwrap();
 
@@ -2785,7 +3059,7 @@ async fn wss_timer_counter_count_limit_is_enforced_before_send() {
 
     assert!(
         client
-            .write_set_value_consecutive("T0", &values, None)
+            .write_timer_counter_preset_consecutive("T0", &values, None)
             .await
             .is_err()
     );
@@ -3072,13 +3346,13 @@ async fn invalid_builtin_formatting_fails_all_normal_write_shapes_before_transpo
     );
     assert!(
         client
-            .write_set_value("T0", 32_768_i32, Some("S"))
+            .write_timer_counter_preset("T0", 32_768_i32, Some("S"))
             .await
             .is_err()
     );
     assert!(
         client
-            .write_set_value_consecutive("T0", &[0_i64, 4_294_967_296_i64], Some("D"))
+            .write_timer_counter_preset_consecutive("T0", &[0_i64, 4_294_967_296_i64], Some("D"),)
             .await
             .is_err()
     );

@@ -156,8 +156,8 @@ exactly one Host Link command or reject before send. Bit helpers accept only
 direct bit families and Boolean values. Bit and Word requests accept 1 through
 1,000 points, and Dword requests accept 1 through 500 points, subject to
 stricter device-family limits. Unsigned Dword helpers use native `.D` commands.
-The deprecated `read_words` compatibility alias delegates to
-`read_words_single_request` for one release.
+The deprecated `read_words` and `read_dwords` compatibility aliases delegate
+to their `*_single_request` replacements for one release.
 
 The library has no general chunked helper. A low-level read or write is never
 divided automatically. If an application intentionally uses several requests,
@@ -204,6 +204,32 @@ contains comments, use `read_named_with_comment_encoding` or
 `poll_with_comment_encoding` and pass one explicit `HostLinkCommentEncoding`.
 Those explicit variants require at least one `:COMMENT` entry; a non-comment-only
 list rejects the unused encoding before FIFO admission or communication.
+
+## Named writes
+
+```rust
+use plc_comm_kv_hostlink::HostLinkValue;
+
+let updates = [
+    ("DM100:U".to_owned(), HostLinkValue::U16(123)),
+    ("DM101:U".to_owned(), HostLinkValue::U16(456)),
+]
+.into_iter()
+.collect();
+client.write_named(&updates).await?;
+```
+
+`write_named` clones and validates the complete insertion-ordered map before
+transport. It accepts only a plan that compiles to exactly one existing `WR`,
+`WRS`, or `WSS` request. Entries are not sorted: their declared order, device
+family, dtype, and address progression must already describe one compatible
+request. Mixed, non-consecutive, reverse, duplicate, range-invalid, and
+point-limit-exceeding plans fail before send. There is no automatic split,
+retry, partial-success path, or implicit bit-in-word read-modify-write.
+
+Direct `BIT` entries in the decimal bit-bank families `R`, `MR`, `LR`, and
+`CR` use logical sixteen-bit bank order. Therefore `R115:BIT` followed by
+`R200:BIT` is one consecutive request whose displayed start remains `R115`.
 
 ## Bit-in-word access
 
@@ -321,15 +347,19 @@ reconcile its values manually before continuing.
 use plc_comm_kv_hostlink::HostLinkCommentEncoding;
 
 let utf8_comment = client
-    .read_comments("DM20", HostLinkCommentEncoding::Utf8)
+    .read_comment("DM20", HostLinkCommentEncoding::Utf8)
     .await?;
 let cp932_comment = client
-    .read_comments("DM21", HostLinkCommentEncoding::Cp932)
+    .read_comment("DM21", HostLinkCommentEncoding::Cp932)
     .await?;
 let exact_payload = client.read_comment_bytes("DM22").await?;
 ```
 
 There is no automatic, default, or profile-selected comment encoding.
+The KEYENCE Host Link manual does not specify the `RDC` character encoding, and
+there is no PLC-project encoding setting. The caller supplies the codec; do not
+infer it from a profile or model name. Use `read_comment_bytes` when the exact
+payload must be inspected before choosing how to decode it.
 `HostLinkCommentEncoding::Cp932` means CP932/Windows-31J and is the selection
 for KEYENCE documentation that describes the compatible encoding as
 `Shift_JIS`; Rust does not expose a second strict-Shift-JIS variant.

@@ -1,7 +1,9 @@
 use crate::address::{
-    KvDeviceAddress, is_direct_bit_device_type, parse_device, parse_named_address_parts,
+    KvDeviceAddress, bit_bank_logical_number, is_direct_bit_device_type,
+    is_native_32bit_device_type, parse_device, parse_logical_address, parse_named_address_parts,
     rdc_device_types, require_explicit_format, require_float32_eligible_device_type,
     require_no_suffix, validate_device_count, validate_device_span, validate_device_type,
+    wr_device_types,
 };
 use crate::client::{HostLinkClient, HostLinkPayloadValue};
 use crate::error::HostLinkError;
@@ -121,12 +123,23 @@ pub async fn read_comment_bytes(
     client.read_comment_bytes(device).await
 }
 
+pub async fn read_comment(
+    client: &HostLinkClient,
+    device: &str,
+    encoding: HostLinkCommentEncoding,
+) -> Result<String, HostLinkError> {
+    client.read_comment(device, encoding).await
+}
+
+#[deprecated(
+    note = "use read_comment; this compatibility alias will be removed in the next major release"
+)]
 pub async fn read_comments(
     client: &HostLinkClient,
     device: &str,
     encoding: HostLinkCommentEncoding,
 ) -> Result<String, HostLinkError> {
-    client.read_comments(device, encoding).await
+    read_comment(client, device, encoding).await
 }
 
 fn validate_read_typed_request(device: &str, dtype: &str) -> Result<(), HostLinkError> {
@@ -469,18 +482,7 @@ pub async fn write_typed<T: HostLinkPayloadValue>(
     }
     match dtype.as_str() {
         "F" => {
-            let single = if let Some(value) = value.as_float() {
-                value as f32
-            } else if let Some(text) = value.as_text() {
-                text.trim()
-                    .parse::<f32>()
-                    .map_err(|_| HostLinkError::protocol("Invalid float32 input"))?
-            } else {
-                return Err(HostLinkError::protocol("Invalid float32 input"));
-            };
-            if !single.is_finite() {
-                return Err(HostLinkError::protocol("Float32 input must be finite"));
-            }
+            let single = normalize_float32_input(value)?;
             let bits = single.to_bits();
             let words = [(bits & 0xFFFF) as u16, (bits >> 16) as u16];
             client.write_consecutive(device, &words, Some("U")).await
@@ -492,22 +494,46 @@ pub async fn write_typed<T: HostLinkPayloadValue>(
             client.write(device, parsed, None).await
         }
         "H" => {
-            let parsed = if let Some(integer) = value.as_integer() {
-                u16::try_from(integer)
-                    .map_err(|_| HostLinkError::protocol("Invalid hexadecimal 16-bit input"))?
-            } else {
-                let token = value
-                    .as_text()
-                    .ok_or_else(|| HostLinkError::protocol("Invalid hexadecimal 16-bit input"))?;
-                u16::from_str_radix(token.trim(), 16)
-                    .map_err(|_| HostLinkError::protocol("Invalid hexadecimal 16-bit input"))?
-            };
+            let parsed = normalize_hex16_input(value)?;
             client.write(device, parsed, Some("H")).await
         }
         "S" | "D" | "L" | "U" => client.write(device, value, Some(dtype.as_str())).await,
         other => Err(HostLinkError::protocol(format!(
             "Unsupported logical data type '{other}'."
         ))),
+    }
+}
+
+fn normalize_float32_input<T: HostLinkPayloadValue + ?Sized>(
+    value: &T,
+) -> Result<f32, HostLinkError> {
+    let single = if let Some(value) = value.as_float() {
+        value as f32
+    } else if let Some(text) = value.as_text() {
+        text.trim()
+            .parse::<f32>()
+            .map_err(|_| HostLinkError::protocol("Invalid float32 input"))?
+    } else {
+        return Err(HostLinkError::protocol("Invalid float32 input"));
+    };
+    if !single.is_finite() {
+        return Err(HostLinkError::protocol("Float32 input must be finite"));
+    }
+    Ok(single)
+}
+
+fn normalize_hex16_input<T: HostLinkPayloadValue + ?Sized>(
+    value: &T,
+) -> Result<u16, HostLinkError> {
+    if let Some(integer) = value.as_integer() {
+        u16::try_from(integer)
+            .map_err(|_| HostLinkError::protocol("Invalid hexadecimal 16-bit input"))
+    } else {
+        let token = value
+            .as_text()
+            .ok_or_else(|| HostLinkError::protocol("Invalid hexadecimal 16-bit input"))?;
+        u16::from_str_radix(token.trim(), 16)
+            .map_err(|_| HostLinkError::protocol("Invalid hexadecimal 16-bit input"))
     }
 }
 
@@ -724,6 +750,360 @@ pub async fn read_named<S: AsRef<str>>(
     read_named_compiled(client, &addr_list, compiled.as_ref(), None).await
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NamedWriteBatchKind {
+    DirectBits,
+    Scalar,
+    PackedWords,
+    TimerCounterPreset,
+}
+
+#[derive(Debug)]
+struct NamedWriteBatch {
+    kind: NamedWriteBatchKind,
+    device_type: String,
+    dtype: String,
+    base: String,
+    base_number: u32,
+    next_number: u32,
+    data_format: String,
+    values: Vec<HostLinkValue>,
+}
+
+#[derive(Debug)]
+enum PreparedNamedWrite {
+    Single {
+        device: String,
+        dtype: String,
+        value: HostLinkValue,
+    },
+    Batch(NamedWriteBatch),
+}
+
+#[derive(Debug)]
+struct NamedWriteEntry {
+    device: String,
+    device_type: String,
+    number: u32,
+    dtype: String,
+    value: HostLinkValue,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NamedWriteBatchSpec {
+    kind: NamedWriteBatchKind,
+    step: u32,
+    data_format: &'static str,
+}
+
+/// Write one ordered named update set as exactly one Host Link request.
+///
+/// The complete map is cloned and validated before transport. Only a plan that
+/// compiles to one `WR`, `WRS`, or `WSS` request is accepted. The helper never
+/// sorts, splits, retries, or selects a read-modify-write operation.
+pub async fn write_named(
+    client: &HostLinkClient,
+    updates: &IndexMap<String, HostLinkValue>,
+) -> Result<(), HostLinkError> {
+    let snapshot = updates.clone();
+    let prepared = prepare_named_write(&snapshot)?;
+    match prepared {
+        PreparedNamedWrite::Single {
+            device,
+            dtype,
+            value,
+        } => write_typed(client, &device, &dtype, &value).await,
+        PreparedNamedWrite::Batch(batch) => match batch.kind {
+            NamedWriteBatchKind::TimerCounterPreset => {
+                client
+                    .write_timer_counter_preset_consecutive(
+                        &batch.base,
+                        &batch.values,
+                        Some(&batch.data_format),
+                    )
+                    .await
+            }
+            NamedWriteBatchKind::DirectBits => {
+                client
+                    .write_consecutive(&batch.base, &batch.values, None)
+                    .await
+            }
+            NamedWriteBatchKind::Scalar | NamedWriteBatchKind::PackedWords => {
+                client
+                    .write_consecutive(&batch.base, &batch.values, Some(&batch.data_format))
+                    .await
+            }
+        },
+    }
+}
+
+fn prepare_named_write(
+    updates: &IndexMap<String, HostLinkValue>,
+) -> Result<PreparedNamedWrite, HostLinkError> {
+    if updates.is_empty() {
+        return Err(HostLinkError::protocol(
+            "write_named updates must not be empty.",
+        ));
+    }
+
+    let mut operations = Vec::new();
+    let mut batch: Option<NamedWriteBatch> = None;
+    for (address, value) in updates {
+        let entry = prepare_named_write_entry(address, value)?;
+        let spec = named_write_batch_spec(&entry)?;
+        match spec {
+            None => {
+                flush_named_write_batch(&mut batch, &mut operations)?;
+                operations.push(PreparedNamedWrite::Single {
+                    device: entry.device,
+                    dtype: entry.dtype,
+                    value: entry.value,
+                });
+            }
+            Some(spec) => {
+                let entry_number = named_write_batch_number(&entry, spec);
+                let can_append = batch.as_ref().is_some_and(|current| {
+                    current.kind == spec.kind
+                        && current.device_type == entry.device_type
+                        && current.dtype == entry.dtype
+                        && current.next_number == entry_number
+                });
+                if !can_append {
+                    flush_named_write_batch(&mut batch, &mut operations)?;
+                    batch = Some(NamedWriteBatch {
+                        kind: spec.kind,
+                        device_type: entry.device_type.clone(),
+                        dtype: entry.dtype.clone(),
+                        base: entry.device.clone(),
+                        base_number: entry.number,
+                        next_number: entry_number,
+                        data_format: spec.data_format.to_owned(),
+                        values: Vec::new(),
+                    });
+                }
+                append_named_write_value(batch.as_mut().expect("batch was created"), &entry, spec)?;
+            }
+        }
+    }
+    flush_named_write_batch(&mut batch, &mut operations)?;
+
+    if operations.len() != 1 {
+        return Err(HostLinkError::protocol(
+            "write_named must fit one Host Link request; issue separate explicit writes for multi-request updates.",
+        ));
+    }
+    operations
+        .pop()
+        .ok_or_else(|| HostLinkError::protocol("write_named updates must not be empty."))
+}
+
+fn prepare_named_write_entry(
+    address: &str,
+    value: &HostLinkValue,
+) -> Result<NamedWriteEntry, HostLinkError> {
+    let logical = parse_logical_address(address)?;
+    let device_type = logical.base_address.device_type.clone();
+    let number = logical.base_address.number;
+    let device = logical.base_address.to_text()?;
+    let dtype = logical.data_type;
+
+    if dtype == "COMMENT" {
+        return Err(HostLinkError::protocol(format!(
+            "Named write address '{address}' is read-only."
+        )));
+    }
+    if dtype == "BIT_IN_WORD" {
+        return Err(HostLinkError::protocol(format!(
+            "Named write address '{address}' requires a read-modify-write sequence; write_named accepts exactly one state-changing request."
+        )));
+    }
+    validate_device_type("WR", &device_type, wr_device_types())?;
+    if dtype == "BIT" && !is_direct_bit_device_type(&device_type) {
+        return Err(HostLinkError::protocol(format!(
+            "Named write address '{address}' uses BIT, which is valid only for direct bit device families."
+        )));
+    }
+    if dtype == "F" {
+        require_float32_eligible_device_type(&device_type)?;
+    }
+
+    let effective_format = match dtype.as_str() {
+        "BIT" => "",
+        "F" => ".U",
+        "U" => ".U",
+        "S" => ".S",
+        "D" => ".D",
+        "L" => ".L",
+        "H" => ".H",
+        _ => {
+            return Err(HostLinkError::protocol(format!(
+                "Unsupported logical data type '{dtype}'."
+            )));
+        }
+    };
+    let protocol_count = usize::from(dtype == "F") + 1;
+    validate_device_count(&device_type, effective_format, protocol_count)?;
+    validate_device_span(&device_type, number, effective_format, protocol_count)?;
+    validate_named_write_value(value, &dtype)?;
+
+    Ok(NamedWriteEntry {
+        device,
+        device_type,
+        number,
+        dtype,
+        value: value.clone(),
+    })
+}
+
+fn named_write_batch_spec(
+    entry: &NamedWriteEntry,
+) -> Result<Option<NamedWriteBatchSpec>, HostLinkError> {
+    if matches!(entry.device_type.as_str(), "T" | "C") {
+        return Ok(Some(NamedWriteBatchSpec {
+            kind: NamedWriteBatchKind::TimerCounterPreset,
+            step: 1,
+            data_format: named_write_data_format(&entry.dtype)?,
+        }));
+    }
+    if is_direct_bit_device_type(&entry.device_type) && entry.dtype != "BIT" {
+        return Ok(None);
+    }
+    if entry.dtype == "BIT" {
+        return Ok(Some(NamedWriteBatchSpec {
+            kind: NamedWriteBatchKind::DirectBits,
+            step: 1,
+            data_format: "",
+        }));
+    }
+    if matches!(entry.dtype.as_str(), "U" | "S" | "H")
+        || (is_native_32bit_device_type(&entry.device_type)
+            && matches!(entry.dtype.as_str(), "D" | "L"))
+    {
+        return Ok(Some(NamedWriteBatchSpec {
+            kind: NamedWriteBatchKind::Scalar,
+            step: 1,
+            data_format: named_write_data_format(&entry.dtype)?,
+        }));
+    }
+    if matches!(entry.dtype.as_str(), "D" | "L" | "F") {
+        return Ok(Some(NamedWriteBatchSpec {
+            kind: NamedWriteBatchKind::PackedWords,
+            step: 2,
+            data_format: ".U",
+        }));
+    }
+    Ok(None)
+}
+
+fn named_write_data_format(dtype: &str) -> Result<&'static str, HostLinkError> {
+    match dtype {
+        "U" => Ok(".U"),
+        "S" => Ok(".S"),
+        "D" => Ok(".D"),
+        "L" => Ok(".L"),
+        "H" => Ok(".H"),
+        _ => Err(HostLinkError::protocol(format!(
+            "Unsupported named-write data type '{dtype}'."
+        ))),
+    }
+}
+
+fn named_write_batch_number(entry: &NamedWriteEntry, spec: NamedWriteBatchSpec) -> u32 {
+    if spec.kind == NamedWriteBatchKind::DirectBits
+        && matches!(entry.device_type.as_str(), "R" | "MR" | "LR" | "CR")
+    {
+        bit_bank_logical_number(entry.number)
+    } else {
+        entry.number
+    }
+}
+
+fn append_named_write_value(
+    batch: &mut NamedWriteBatch,
+    entry: &NamedWriteEntry,
+    spec: NamedWriteBatchSpec,
+) -> Result<(), HostLinkError> {
+    if spec.kind == NamedWriteBatchKind::PackedWords {
+        batch
+            .values
+            .extend(encode_named_write_words(&entry.value, &entry.dtype)?);
+    } else if entry.dtype == "H" {
+        batch
+            .values
+            .push(HostLinkValue::U16(normalize_hex16_input(&entry.value)?));
+    } else {
+        batch.values.push(entry.value.clone());
+    }
+    batch.next_number = named_write_batch_number(entry, spec)
+        .checked_add(spec.step)
+        .ok_or_else(|| HostLinkError::protocol("Named write device span overflow"))?;
+    Ok(())
+}
+
+fn validate_named_write_value(value: &HostLinkValue, dtype: &str) -> Result<(), HostLinkError> {
+    match dtype {
+        "BIT" => value
+            .as_bool()
+            .ok_or_else(|| HostLinkError::protocol("BIT writes require a bool value"))
+            .map(|_| ()),
+        "F" => normalize_float32_input(value).map(|_| ()),
+        "H" => normalize_hex16_input(value).map(|_| ()),
+        "U" | "S" | "D" | "L" => value
+            .format_for_suffix(named_write_data_format(dtype)?)
+            .map(|_| ()),
+        _ => Err(HostLinkError::protocol(format!(
+            "Unsupported logical data type '{dtype}'."
+        ))),
+    }
+}
+
+fn encode_named_write_words(
+    value: &HostLinkValue,
+    dtype: &str,
+) -> Result<[HostLinkValue; 2], HostLinkError> {
+    let bits = match dtype {
+        "D" => value
+            .as_integer()
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| HostLinkError::protocol("Invalid unsigned 32-bit input"))?,
+        "L" => {
+            let integer = value
+                .as_integer()
+                .and_then(|value| i32::try_from(value).ok())
+                .ok_or_else(|| HostLinkError::protocol("Invalid signed 32-bit input"))?;
+            integer as u32
+        }
+        "F" => normalize_float32_input(value)?.to_bits(),
+        _ => {
+            return Err(HostLinkError::protocol(format!(
+                "Unsupported packed named-write data type '{dtype}'."
+            )));
+        }
+    };
+    Ok([
+        HostLinkValue::U16((bits & 0xFFFF) as u16),
+        HostLinkValue::U16((bits >> 16) as u16),
+    ])
+}
+
+fn flush_named_write_batch(
+    batch: &mut Option<NamedWriteBatch>,
+    operations: &mut Vec<PreparedNamedWrite>,
+) -> Result<(), HostLinkError> {
+    let Some(batch) = batch.take() else {
+        return Ok(());
+    };
+    validate_device_count(&batch.device_type, &batch.data_format, batch.values.len())?;
+    validate_device_span(
+        &batch.device_type,
+        batch.base_number,
+        &batch.data_format,
+        batch.values.len(),
+    )?;
+    operations.push(PreparedNamedWrite::Batch(batch));
+    Ok(())
+}
+
 /// Set or clear one bit through an explicit, non-PLC-atomic word read-modify-write.
 ///
 /// The complete plan is validated before FIFO admission. One client turn and
@@ -837,7 +1217,7 @@ async fn read_named_value(
             )
         })?;
         Ok(HostLinkValue::Text(
-            read_comments(client, &base_address, encoding).await?,
+            read_comment(client, &base_address, encoding).await?,
         ))
     } else {
         read_typed_impl(client, &base_address, &dtype).await
@@ -967,6 +1347,9 @@ pub async fn read_words(
     read_words_single_request(client, device, count).await
 }
 
+#[deprecated(
+    note = "use read_dwords_single_request; this compatibility alias will be removed in the next major release"
+)]
 pub async fn read_dwords(
     client: &HostLinkClient,
     device: &str,

@@ -23,6 +23,8 @@ pub enum HostLinkTransportMode {
 
 /// Explicit character encoding for an `RDC` device-comment payload.
 ///
+/// The KEYENCE Host Link manual does not specify the `RDC` character encoding,
+/// and there is no PLC-project setting that supplies it to this library.
 /// The library never selects an encoding from the PLC profile and never tries
 /// another encoding after a decode failure. [`Self::Cp932`] is the
 /// CP932/Windows-31J mapping used for KEYENCE documentation that describes the

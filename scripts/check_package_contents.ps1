@@ -139,7 +139,8 @@ plc-comm-kv-hostlink = { path = "$dependencyPath" }
 "@
     $consumerSource = @"
 use plc_comm_kv_hostlink::{
-    HostLinkCommentEncoding, HostLinkOutcomeUnknownReason, HostLinkValue, NamedReadResult,
+    HostLinkClient, HostLinkCommentEncoding, HostLinkOutcomeUnknownReason, HostLinkValue,
+    NamedReadResult, read_comment, read_dwords_single_request, write_named,
 };
 
 fn main() {
@@ -158,6 +159,12 @@ fn main() {
     assert_eq!(values.len(), 1);
     assert_eq!(reasons.len(), 4);
     assert_eq!(comment_encodings.len(), 2);
+    let _ = HostLinkClient::read_error_number;
+    let _ = HostLinkClient::write_timer_counter_preset::<u16>;
+    let _ = HostLinkClient::write_timer_counter_preset_consecutive::<u16>;
+    let _ = read_comment;
+    let _ = read_dwords_single_request;
+    let _ = write_named;
 }
 "@
     [System.IO.File]::WriteAllText(

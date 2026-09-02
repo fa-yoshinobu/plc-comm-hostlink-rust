@@ -3,9 +3,9 @@ use plc_comm_kv_hostlink::{
     HostLinkClient, HostLinkCommentEncoding, HostLinkConnectionOptions, HostLinkError,
     HostLinkMonitorWord, HostLinkTransportMode, HostLinkValue, KvDeviceRangeCatalog,
     KvDeviceRangeEntry, KvDeviceRangeSegment, KvPlcMode, TimerCounterValue,
-    device_range_catalog_for_plc_profile, poll, poll_with_comment_encoding, read_comment_bytes,
-    read_comments, read_counter, read_dwords, read_named, read_named_with_comment_encoding,
-    read_timer, read_timer_counter, read_words_single_request,
+    device_range_catalog_for_plc_profile, poll, poll_with_comment_encoding, read_comment,
+    read_comment_bytes, read_counter, read_dwords_single_request, read_named,
+    read_named_with_comment_encoding, read_timer, read_timer_counter, read_words_single_request,
 };
 use serde_json::{Value, json};
 
@@ -108,7 +108,7 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             json!({"status": "success", "mode": (mode as u8).to_string()})
         }
         "check-error" => {
-            let value = client.check_error_no().await?;
+            let value = client.read_error_number().await?;
             json!({"status": "success", "value": value})
         }
         "clear-error" => {
@@ -273,7 +273,7 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                 json!({"status": "error", "message": "write-set-value requires --dtype and one value"})
             } else {
                 client
-                    .write_set_value(&address, extra[0].parse::<i64>()?, Some(&dtype))
+                    .write_timer_counter_preset(&address, extra[0].parse::<i64>()?, Some(&dtype))
                     .await?;
                 json!({"status": "success"})
             }
@@ -287,7 +287,7 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                     .map(|item| item.parse::<i64>())
                     .collect::<Result<Vec<_>, _>>()?;
                 client
-                    .write_set_value_consecutive(&address, &values, Some(&dtype))
+                    .write_timer_counter_preset_consecutive(&address, &values, Some(&dtype))
                     .await?;
                 json!({"status": "success"})
             }
@@ -316,7 +316,7 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             if comment_encoding.is_empty() {
                 json!({"status": "error", "message": "read-comments requires --comment-encoding utf-8 or cp932"})
             } else {
-                let value = read_comments(
+                let value = read_comment(
                     &client,
                     &address,
                     parse_comment_encoding(&comment_encoding)?,
@@ -408,7 +408,8 @@ async fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             if extra.is_empty() {
                 json!({"status": "error", "message": "read-dwords requires count"})
             } else {
-                let values = read_dwords(&client, &address, extra[0].parse()?).await?;
+                let values =
+                    read_dwords_single_request(&client, &address, extra[0].parse()?).await?;
                 json!({"status": "success", "values": values.into_iter().map(|value| value.to_string()).collect::<Vec<_>>()})
             }
         }

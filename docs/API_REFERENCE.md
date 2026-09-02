@@ -27,7 +27,7 @@ no caller-controlled receive capacity; public results own their dynamic storage.
 | Purpose | API |
 | --- | --- |
 | PLC mode | `change_mode`, `confirm_operating_mode`, `KvPlcMode` |
-| Error operation | `clear_error`, `check_error_no` |
+| Error operation | `clear_error`, `read_error_number` |
 | PLC model | `query_model`, `KvModelInfo` |
 | PLC clock | `set_time`, `HostLinkClock` |
 | Forced bit control | `forced_set`, `forced_reset`, `forced_set_consecutive`, `forced_reset_consecutive` |
@@ -41,13 +41,13 @@ no caller-controlled receive capacity; public results own their dynamic storage.
 | Low-level consecutive read/write | `read_consecutive`, `write_consecutive` |
 | Explicit bit-in-word write | `HostLinkClient::write_bit_in_word` |
 | Legacy command variants | `read_consecutive_legacy`, `write_consecutive_legacy` |
-| Timer/counter set value | `write_set_value`, `write_set_value_consecutive` |
+| Timer/counter preset | `write_timer_counter_preset`, `write_timer_counter_preset_consecutive` |
 | Monitor registration | `register_monitor_bits`, `register_monitor_words`, `HostLinkMonitorWord` |
 | Monitor read | `read_monitor_bits`, `read_monitor_words` |
 | Expansion-unit buffer | `read_expansion_unit_buffer`, `write_expansion_unit_buffer` |
 | Expansion-buffer bit write | `HostLinkClient::write_bit_in_expansion_unit_buffer` |
 | Comment encoding | `HostLinkCommentEncoding::{Utf8, Cp932}` |
-| Comment text | `read_comments(device, encoding)` |
+| Comment text | `read_comment(device, encoding)` |
 | Comment bytes | `read_comment_bytes` |
 
 Numeric low-level methods require a base device plus an explicit format.
@@ -107,12 +107,12 @@ without an alias.
 | Purpose | API |
 | --- | --- |
 | Typed value | `HostLinkValue`, `read_typed`, `write_typed` |
-| Named read result | `NamedReadResult`, `read_named`, `read_named_with_comment_encoding` |
+| Named access | `NamedReadResult`, `read_named`, `read_named_with_comment_encoding`, `write_named` |
 | Polling | `poll`, `poll_with_comment_encoding` |
 | Timer/counter composite | `TimerCounterValue`, `read_timer_counter`, `read_timer`, `read_counter` |
 | Direct-bit blocks | `read_bits_single_request`, `write_bits_single_request` |
 | Word reads | `read_words_single_request` (`read_words` is deprecated) |
-| Dword reads | `read_dwords`, `read_dwords_single_request` |
+| Dword reads | `read_dwords_single_request` |
 | Word writes | `write_words_single_request` |
 | Dword writes | `write_dwords_single_request` |
 | Explicit bit-in-word write | `write_bit_in_word` |
@@ -131,6 +131,21 @@ Named keys must be semantically unique by device family, numeric address,
 dtype, bit index, and scalar count. Spelling-only variants are rejected before
 FIFO admission, while distinct dtype views, bit indices, and overlapping spans
 remain valid. Result keys preserve the original input strings.
+
+`write_named` accepts an insertion-ordered `IndexMap<String, HostLinkValue>`.
+It clones and validates the complete map before transport and accepts only a
+plan that fits exactly one existing `WR`, `WRS`, or `WSS` request. Entries must
+be consecutive in declared order and share one compatible device family and
+dtype. It never sorts, splits, retries, or selects bit-in-word
+read-modify-write. Mixed, non-consecutive, reverse, duplicate, range-invalid,
+or over-limit plans fail without a partial send. Direct `BIT` addresses in
+`R`, `MR`, `LR`, and `CR` use logical sixteen-bit bank order, so `R115:BIT`
+followed by `R200:BIT` is consecutive while the request retains `R115` as its
+displayed start address.
+
+The deprecated names `read_dwords`, `read_comments`, `check_error_no`,
+`write_set_value`, and `write_set_value_consecutive` directly forward to their
+canonical replacements and remain available for one compatibility release.
 
 `write_bit_in_word` is the one explicit two-request write helper. It accepts a
 Boolean value and bit index `0..=15`, validates an ordinary complete 16-bit word
@@ -165,7 +180,10 @@ Every comment text read requires `HostLinkCommentEncoding::Utf8` or
 `HostLinkCommentEncoding::Cp932`. `Cp932` is CP932/Windows-31J and is the
 selection for KEYENCE documentation that calls the compatible encoding
 `Shift_JIS`; there is no separate strict-Shift-JIS, automatic, default, or
-profile-selected mode. Decoding is strict and never retries another codec or
+profile-selected mode. The KEYENCE Host Link manual does not specify the `RDC`
+character encoding, and there is no PLC-project encoding setting. The caller
+supplies the codec; do not infer it from a profile or model name. Decoding is
+strict and never retries another codec or
 inserts replacement characters. The shared CP932 subset preserves ASCII
 controls, rejects standalone `80`/`A0`/`FD`/`FE`/`FF`, and accepts defined NEC,
 IBM, and duplicate extension mappings. `read_comment_bytes` returns the exact

@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-09-02
+
+- Release: Bumped the crate metadata to `4.2.0` for the approved additive API unification release.
+- Library: Added canonical `read_comment`, `read_error_number`, `write_timer_counter_preset`, and `write_timer_counter_preset_consecutive` APIs. The former `read_comments`, `check_error_no`, `write_set_value`, and `write_set_value_consecutive` names are deprecated direct forwarding aliases for one compatibility release; `read_dwords` is likewise deprecated in favor of the existing `read_dwords_single_request` canonical API.
+- Library: Added `write_named` for an insertion-ordered `IndexMap<String, HostLinkValue>`. It snapshots and validates the complete update set and accepts only a plan represented by exactly one existing `WR`, `WRS`, or `WSS` request; multi-request plans, implicit read-modify-write, auto-splitting, retries, and partial sends are rejected before transport.
+- Tests: Added exact-wire and result parity checks for canonical/deprecated names plus named-write single-request, complete-preflight, bit-bank-boundary, and point-limit coverage.
 - Tests: Included the device-range JSON fixture required by library unit tests in the distributed crate.
 - CI: Made the extracted-crate package check run the library unit tests so a missing packaged fixture fails before release.
 

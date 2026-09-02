@@ -673,8 +673,15 @@ impl HostLinkClient {
         self.expect_ok("ER").await
     }
 
-    pub async fn check_error_no(&self) -> Result<String, HostLinkError> {
+    pub async fn read_error_number(&self) -> Result<String, HostLinkError> {
         self.send_decoded("?E").await
+    }
+
+    #[deprecated(
+        note = "use read_error_number; this compatibility alias will be removed in the next major release"
+    )]
+    pub async fn check_error_no(&self) -> Result<String, HostLinkError> {
+        self.read_error_number().await
     }
 
     pub async fn query_model(&self) -> Result<KvModelInfo, HostLinkError> {
@@ -1150,7 +1157,7 @@ impl HostLinkClient {
         .await
     }
 
-    pub async fn write_set_value<T: HostLinkPayloadValue>(
+    pub async fn write_timer_counter_preset<T: HostLinkPayloadValue>(
         &self,
         device: &str,
         value: T,
@@ -1169,7 +1176,20 @@ impl HostLinkClient {
         self.expect_ok(&command).await
     }
 
-    pub async fn write_set_value_consecutive<T: HostLinkPayloadValue>(
+    #[deprecated(
+        note = "use write_timer_counter_preset; this compatibility alias will be removed in the next major release"
+    )]
+    pub async fn write_set_value<T: HostLinkPayloadValue>(
+        &self,
+        device: &str,
+        value: T,
+        data_format: Option<&str>,
+    ) -> Result<(), HostLinkError> {
+        self.write_timer_counter_preset(device, value, data_format)
+            .await
+    }
+
+    pub async fn write_timer_counter_preset_consecutive<T: HostLinkPayloadValue>(
         &self,
         device: &str,
         values: &[T],
@@ -1192,6 +1212,19 @@ impl HostLinkClient {
             payload
         ))
         .await
+    }
+
+    #[deprecated(
+        note = "use write_timer_counter_preset_consecutive; this compatibility alias will be removed in the next major release"
+    )]
+    pub async fn write_set_value_consecutive<T: HostLinkPayloadValue>(
+        &self,
+        device: &str,
+        values: &[T],
+        data_format: Option<&str>,
+    ) -> Result<(), HostLinkError> {
+        self.write_timer_counter_preset_consecutive(device, values, data_format)
+            .await
     }
 
     pub async fn switch_bank(&self, bank_no: u8) -> Result<(), HostLinkError> {
@@ -1343,11 +1376,14 @@ impl HostLinkClient {
 
     /// Read and strictly decode one `RDC` device comment with the selected encoding.
     ///
+    /// The KEYENCE Host Link manual does not specify the `RDC` character
+    /// encoding, and there is no PLC-project encoding setting. The caller must
+    /// supply the codec; the PLC profile or model name is not encoding evidence.
     /// The library never retries another codec and never replaces malformed
     /// input. Use [`Self::read_comment_bytes`] when the stored encoding is not
     /// known by the application. A syntactically valid PLC error response is
     /// returned as [`HostLinkError::Plc`] without retiring the connection.
-    pub async fn read_comments(
+    pub async fn read_comment(
         &self,
         device: &str,
         encoding: HostLinkCommentEncoding,
@@ -1362,6 +1398,17 @@ impl HostLinkClient {
                 decode_comment_payload(payload, encoding)
             })
             .await
+    }
+
+    #[deprecated(
+        note = "use read_comment; this compatibility alias will be removed in the next major release"
+    )]
+    pub async fn read_comments(
+        &self,
+        device: &str,
+        encoding: HostLinkCommentEncoding,
+    ) -> Result<String, HostLinkError> {
+        self.read_comment(device, encoding).await
     }
 
     pub async fn read_typed(
@@ -1415,8 +1462,17 @@ impl HostLinkClient {
         helpers::read_named(self, addresses).await
     }
 
+    pub async fn write_named(
+        &self,
+        updates: &indexmap::IndexMap<String, helpers::HostLinkValue>,
+    ) -> Result<(), HostLinkError> {
+        helpers::write_named(self, updates).await
+    }
+
     /// Read a named aggregate that intentionally contains comments.
     ///
+    /// The KEYENCE Host Link manual does not specify the `RDC` character
+    /// encoding. It is supplied by the caller and never inferred from the profile.
     /// At least one address must use `:COMMENT`; otherwise the unused encoding
     /// is rejected before FIFO admission or transport.
     pub async fn read_named_with_comment_encoding<S: AsRef<str>>(
@@ -1452,6 +1508,8 @@ impl HostLinkClient {
 
     /// Poll a named aggregate that intentionally contains comments.
     ///
+    /// The KEYENCE Host Link manual does not specify the `RDC` character
+    /// encoding. It is supplied by the caller and never inferred from the profile.
     /// At least one address must use `:COMMENT`; otherwise the unused encoding
     /// is rejected before FIFO admission or transport when the stream starts.
     pub fn poll_with_comment_encoding<'a, S: AsRef<str> + 'a>(
@@ -1479,8 +1537,19 @@ impl HostLinkClient {
         self.read_words_single_request(device, count).await
     }
 
+    pub async fn read_dwords_single_request(
+        &self,
+        device: &str,
+        count: usize,
+    ) -> Result<Vec<u32>, HostLinkError> {
+        helpers::read_dwords_single_request(self, device, count).await
+    }
+
+    #[deprecated(
+        note = "use read_dwords_single_request; this compatibility alias will be removed in the next major release"
+    )]
     pub async fn read_dwords(&self, device: &str, count: usize) -> Result<Vec<u32>, HostLinkError> {
-        helpers::read_dwords(self, device, count).await
+        self.read_dwords_single_request(device, count).await
     }
 
     async fn expect_ok(&self, body: &str) -> Result<(), HostLinkError> {

@@ -1143,3 +1143,62 @@ communication.
 
 - [x] `HL-001` deterministic non-live disposition reverified on the final source state.
 - [x] `HL-003` deterministic non-live disposition reverified on the final source state.
+
+## HL-RS-API-UNIFICATION-20260902 — canonical names and one-request named writes
+
+Implementation scope: Rust public client methods and free helpers for the
+approved `HL-NAME-001` through `HL-NAME-004`, `HL-COMPAT-001`, and
+`HL-ADD-001` decisions. Expansion-buffer helper duplication, legacy
+`RDE`/`WRE`, and any unapproved command or fallback behavior are outside scope.
+
+Target contract:
+
+1. `read_dwords_single_request`, `read_comment`, `read_error_number`,
+   `write_timer_counter_preset`, and
+   `write_timer_counter_preset_consecutive` are the canonical Rust names.
+2. `read_dwords`, `read_comments`, `check_error_no`, `write_set_value`, and
+   `write_set_value_consecutive` are deprecated direct forwarding aliases for
+   one compatibility release and contain no second implementation.
+3. `write_named` clones and validates the complete insertion-ordered
+   `IndexMap<String, HostLinkValue>` before transport.
+4. An accepted named-write plan sends exactly one existing `WR`, `WRS`, or
+   `WSS` request. Mixed, non-consecutive, reverse, duplicate, range-invalid,
+   over-limit, multi-request, and implicit read-modify-write plans fail before
+   send. The helper does not sort, split, retry, or return partial success.
+5. Existing parser, dtype conversion, device-family/span limits, payload
+   formatting, client serialization, error classification, and outcome-unknown
+   handling remain authoritative.
+
+Compatibility impact: the canonical names and `write_named` are additive in
+this release. Existing names remain source-compatible but emit Rust deprecation
+warnings. Their planned removal in the next major release is a separate future
+change. Accepted named writes expose no new wire command and do not change any
+existing API behavior.
+
+Machine-verifiable acceptance criteria:
+
+1. Canonical and deprecated names produce identical results, errors, and exact
+   Host Link request bodies.
+2. Valid word, packed Dword, timer/counter preset, bit-bank-boundary, and
+   direct-bit typed single named writes each send one expected request.
+3. Every rejected complete update set leaves request counters and observed
+   transport empty.
+4. Word, packed Dword, and timer/counter request limits reject before send.
+5. Public exports, API reference, usage guide, changelog, and migration record
+   name the same canonical contract and migration window.
+
+- [x] Implementation completed in this repository.
+- [x] Focused exact-wire, alias-parity, atomic-preflight, and point-limit tests added and passed.
+- [x] Relevant static checks, full tests, examples, documentation, and package checks passed.
+- [x] Codex self-review completed against the approved contract and cross-language consistency requirements.
+- [ ] Required live-PLC checks passed, or an explicit release disposition is recorded.
+- [x] API reference, usage guide, changelog, TODO, and migration note agree with the implementation.
+- [ ] Final acceptance criteria verified and the item marked complete.
+
+Self-review disposition: accepted findings corrected the deprecation text from
+the generic “next breaking release” to the approved “next major release” and
+added exact Float32 packed-word and native-32-bit `Z` wire coverage. No second
+implementation exists behind a compatibility alias. Rejected findings: none.
+Duplicate findings: none. Deferred findings: live-PLC execution remains under
+the shared Host Link verification batch and is not claimed by this source-only
+implementation pass.
