@@ -92,4 +92,4 @@ before continuing.
 | IPv6 endpoint is rejected | Configure the PLC's IPv4 address or a hostname with an IPv4 result. |
 
 Shared setup and troubleshooting material is published on the
-[PLC communication documentation site](https://fa-yoshinobu.github.io/plc-comm-docs-site/).
+[PLC communication documentation site](https://plc-comm-docs-site.fa-labo.com/).
